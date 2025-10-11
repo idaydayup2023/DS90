@@ -1,0 +1,16 @@
+{
+  "host": "192.168.1.100",
+  "port": 5000,
+  "username": "your_username",
+  "password": "your_password",
+  "use_https": false,
+  "default_destination": "/downloads/magnets",
+  "scan_directories": [
+    "./test_input",
+    "./magnet_files"
+  ],
+  "auto_scan_interval": 300,
+  "max_concurrent_downloads": 5,
+  "retry_failed_tasks": true,
+  "cleanup_completed_files": false
+}
