@@ -1,0 +1,40 @@
+# SubTrans 2.0 依赖项
+# 更新日期: 2025-08-15
+
+# 构建工具
+setuptools>=65.0.0
+wheel>=0.37.0
+
+# 核心依赖
+requests>=2.28.0
+urllib3>=1.26.0
+chardet>=5.0.0
+tqdm>=4.64.0
+
+# 字幕处理
+pysubs2>=1.6.0
+srt>=3.5.0
+
+# 音频处理
+openai-whisper>=20231117
+ffmpeg-python>=0.2.0
+
+# 机器学习
+torch>=2.8.0
+torchvision>=0.23.0
+torchaudio>=2.8.0
+numpy>=1.21.0
+
+# 语言检测
+langdetect>=1.0.9
+
+# 网络和文件处理
+# ftplib>=1.0.0  # 移除这行 - ftplib 是标准库
+paramiko>=3.0.0
+
+# 数据处理
+json5>=0.9.0
+pyyaml>=6.0
+
+# 日志和调试
+coloredlogs>=15.0

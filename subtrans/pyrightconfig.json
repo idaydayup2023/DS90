@@ -1,0 +1,25 @@
+{
+    "include": [
+        "core",
+        "utils",
+        "main.py"
+    ],
+    "exclude": [
+        "**/node_modules",
+        "**/__pycache__",
+        "build",
+        "dist"
+    ],
+    "venvPath": ".",
+    "venv": "venv",
+    "pythonVersion": "3.13",
+    "pythonPlatform": "Darwin",
+    "extraPaths": [
+        "./core",
+        "./utils"
+    ],
+    "typeCheckingMode": "basic",
+    "useLibraryCodeForTypes": true,
+    "autoImportCompletions": true,
+    "autoSearchPaths": true
+}
