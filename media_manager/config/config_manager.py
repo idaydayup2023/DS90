@@ -8,8 +8,9 @@
 import os
 import yaml
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from pathlib import Path
+import re
 
 class ConfigManager:
     """配置管理器"""
@@ -39,6 +40,9 @@ class ConfigManager:
         
         # 验证配置
         self._validate_config()
+        
+        # 目录管理器（延迟初始化，避免循环导入）
+        self._directory_manager = None
     
     def _load_config(self) -> Dict[str, Any]:
         """
@@ -309,6 +313,228 @@ class ConfigManager:
     def is_duplicate_detection_enabled(self) -> bool:
         """检查重复检测是否启用"""
         return self.get('duplicate_detection.enabled', True)
+    
+    def _get_directory_manager(self):
+        """获取目录管理器实例（延迟加载）"""
+        if self._directory_manager is None:
+            try:
+                from ..utils.directory_manager import get_directory_manager
+                self._directory_manager = get_directory_manager()
+            except ImportError as e:
+                self.logger.warning(f"无法导入目录管理器: {e}")
+                self._directory_manager = None
+        return self._directory_manager
+    
+    def get_all_scan_paths(self) -> List[Dict[str, Any]]:
+        """获取所有扫描路径（包括数据库中的多卷路径）"""
+        paths = []
+        
+        # 获取传统配置中的媒体目录
+        traditional_dirs = self.get_media_directories()
+        for directory in traditional_dirs:
+            paths.append({
+                'path': directory,
+                'type': 'traditional',
+                'source': 'config',
+                'enabled': True,
+                'recursive': True
+            })
+        
+        # 获取数据库中的扫描路径
+        dm = self._get_directory_manager()
+        if dm:
+            try:
+                scan_paths = dm.get_scan_paths()
+                for scan_path in scan_paths:
+                    paths.append({
+                        'path': scan_path.full_path,
+                        'type': scan_path.path_type,
+                        'source': 'database',
+                        'enabled': scan_path.is_enabled,
+                        'recursive': scan_path.scan_recursive,
+                        'volume_id': scan_path.volume_id,
+                        'relative_path': scan_path.relative_path,
+                        'exclude_patterns': scan_path.exclude_patterns,
+                        'priority': scan_path.priority
+                    })
+            except Exception as e:
+                self.logger.warning(f"获取数据库扫描路径失败: {e}")
+        
+        return paths
+    
+    def get_active_scan_paths(self, path_type: Optional[str] = None) -> List[str]:
+        """获取活跃的扫描路径列表"""
+        all_paths = self.get_all_scan_paths()
+        
+        # 过滤启用的路径
+        active_paths = [p for p in all_paths if p.get('enabled', True)]
+        
+        # 按类型过滤
+        if path_type:
+            active_paths = [p for p in active_paths if p.get('type') == path_type]
+        
+        # 按优先级排序
+        active_paths.sort(key=lambda x: x.get('priority', 0), reverse=True)
+        
+        return [p['path'] for p in active_paths]
+    
+    def validate_scan_paths(self) -> Dict[str, Any]:
+        """验证所有扫描路径的状态"""
+        result = {
+            'valid_paths': [],
+            'invalid_paths': [],
+            'warnings': [],
+            'total_paths': 0
+        }
+        
+        dm = self._get_directory_manager()
+        all_paths = self.get_all_scan_paths()
+        result['total_paths'] = len(all_paths)
+        
+        for path_info in all_paths:
+            path = path_info['path']
+            
+            if dm:
+                # 使用目录管理器验证
+                validation = dm.validate_directory(path)
+                if validation['exists'] and validation['readable']:
+                    result['valid_paths'].append({
+                        'path': path,
+                        'type': path_info.get('type', 'unknown'),
+                        'source': path_info.get('source', 'unknown'),
+                        'volume_info': validation.get('volume_info'),
+                        'space_info': validation.get('space_info')
+                    })
+                else:
+                    result['invalid_paths'].append({
+                        'path': path,
+                        'type': path_info.get('type', 'unknown'),
+                        'source': path_info.get('source', 'unknown'),
+                        'error': validation.get('error', '路径不存在或不可读')
+                    })
+                    
+                # 检查写权限警告
+                if validation['exists'] and validation['readable'] and not validation['writable']:
+                    result['warnings'].append(f"路径只读: {path}")
+            else:
+                # 简单验证
+                if os.path.exists(path) and os.access(path, os.R_OK):
+                    result['valid_paths'].append({
+                        'path': path,
+                        'type': path_info.get('type', 'unknown'),
+                        'source': path_info.get('source', 'unknown')
+                    })
+                else:
+                    result['invalid_paths'].append({
+                        'path': path,
+                        'type': path_info.get('type', 'unknown'),
+                        'source': path_info.get('source', 'unknown'),
+                        'error': '路径不存在或不可读'
+                    })
+        
+        return result
+    
+    def add_scan_path_to_database(self, volume_name: str, path_type: str, 
+                                  relative_path: str, **kwargs) -> bool:
+        """向数据库添加新的扫描路径"""
+        dm = self._get_directory_manager()
+        if not dm:
+            self.logger.error("目录管理器不可用")
+            return False
+        
+        try:
+            # 查找卷ID
+            volumes = dm.get_volumes()
+            volume_id = None
+            for volume in volumes:
+                if volume.volume_name == volume_name:
+                    volume_id = volume.id
+                    break
+            
+            if volume_id is None:
+                self.logger.error(f"未找到存储卷: {volume_name}")
+                return False
+            
+            # 添加扫描路径
+            scan_path_id = dm.add_scan_path(
+                volume_id=volume_id,
+                path_type=path_type,
+                relative_path=relative_path,
+                scan_recursive=kwargs.get('scan_recursive', True),
+                exclude_patterns=kwargs.get('exclude_patterns', []),
+                priority=kwargs.get('priority', 0)
+            )
+            
+            if scan_path_id:
+                self.logger.info(f"成功添加扫描路径: {volume_name}/{relative_path}")
+                return True
+            else:
+                self.logger.error("添加扫描路径失败")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"添加扫描路径失败: {e}")
+            return False
+    
+    def get_volume_statistics(self) -> Dict[str, Any]:
+        """获取存储卷统计信息"""
+        dm = self._get_directory_manager()
+        if not dm:
+            return {'error': '目录管理器不可用'}
+        
+        try:
+            return dm.get_directory_stats()
+        except Exception as e:
+            self.logger.error(f"获取卷统计信息失败: {e}")
+            return {'error': str(e)}
+    
+    def normalize_path(self, path: str) -> str:
+        """标准化路径格式"""
+        # 转换为绝对路径
+        path = os.path.abspath(path)
+        
+        # 标准化路径分隔符
+        path = path.replace('\\', '/')
+        
+        # 移除末尾的斜杠（除非是根目录）
+        if len(path) > 1 and path.endswith('/'):
+            path = path.rstrip('/')
+        
+        return path
+    
+    def is_path_excluded(self, file_path: str, exclude_patterns: Optional[List[str]] = None) -> bool:
+        """检查路径是否被排除模式匹配"""
+        if not exclude_patterns:
+            exclude_patterns = self.get('scanner.exclude_patterns', [])
+        
+        if not exclude_patterns:  # 确保不为空
+            return False
+            
+        file_name = os.path.basename(file_path)
+        
+        for pattern in exclude_patterns:
+            try:
+                # 支持通配符和正则表达式
+                if '*' in pattern or '?' in pattern:
+                    # 通配符模式
+                    import fnmatch
+                    if fnmatch.fnmatch(file_name, pattern) or fnmatch.fnmatch(file_path, pattern):
+                        return True
+                else:
+                    # 精确匹配或正则表达式
+                    if pattern == file_name or pattern in file_path:
+                        return True
+                    
+                    # 尝试正则表达式匹配
+                    if re.search(pattern, file_path):
+                        return True
+                        
+            except re.error:
+                # 正则表达式错误，使用字符串匹配
+                if pattern in file_path:
+                    return True
+        
+        return False
 
 
 # 全局配置管理器实例

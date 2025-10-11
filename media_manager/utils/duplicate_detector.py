@@ -6,6 +6,7 @@
 """
 
 import os
+import json
 import hashlib
 import logging
 from typing import Dict, List, Set, Tuple, Optional, Any
@@ -14,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from ..database.db_manager import get_db_manager
+from .directory_manager import get_directory_manager
 
 @dataclass
 class DuplicateGroup:
@@ -30,6 +32,7 @@ class DuplicateDetector:
     def __init__(self):
         """初始化重复文件检测器"""
         self.db = get_db_manager()
+        self.directory_manager = get_directory_manager()
         self.logger = logging.getLogger(__name__)
         
         # 检测配置
@@ -40,24 +43,38 @@ class DuplicateDetector:
         self.name_similarity_threshold = 0.8
         self.size_difference_threshold = 0.05  # 5%
     
-    def detect_duplicates_by_hash(self) -> List[DuplicateGroup]:
+    def detect_duplicates_by_hash(self, volume_ids: Optional[List[int]] = None) -> List[DuplicateGroup]:
         """
         基于文件哈希检测重复文件
         
+        Args:
+            volume_ids: 指定要检测的卷ID列表，None表示检测所有卷
+            
         Returns:
             重复文件组列表
         """
         self.logger.info("开始基于哈希值检测重复文件...")
         
         try:
+            # 构建查询条件
+            where_conditions = ["mf.file_size >= ?"]
+            params = [self.min_file_size]
+            
+            if volume_ids:
+                placeholders = ','.join(['?'] * len(volume_ids))
+                where_conditions.append(f"mf.volume_id IN ({placeholders})")
+                params.extend(volume_ids)
+            
             # 获取所有媒体文件
-            files = self.db.execute_query("""
+            query = f"""
                 SELECT mf.*, mi.title, mi.year, mi.type
                 FROM media_files mf
                 LEFT JOIN media_items mi ON mf.media_id = mi.id
-                WHERE mf.file_size >= ?
+                WHERE {' AND '.join(where_conditions)}
                 ORDER BY mf.file_hash
-            """, (self.min_file_size,))
+            """
+            
+            files = self.db.execute_query(query, tuple(params))
             
             # 按哈希值分组
             hash_groups = defaultdict(list)
@@ -228,6 +245,41 @@ class DuplicateDetector:
         lcs_length = dp[m][n]
         return (2.0 * lcs_length) / (m + n)
     
+    def _analyze_volume_distribution(self, files: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        分析文件的卷分布
+        
+        Args:
+            files: 文件列表
+            
+        Returns:
+            卷分布信息
+        """
+        volume_counts = {}
+        volume_sizes = {}
+        
+        for file_info in files:
+            try:
+                path_info = self.directory_manager.parse_file_path(file_info['file_path'])
+                volume_name = path_info.get('volume_name', 'unknown')
+                file_size = file_info.get('file_size', 0) or 0
+                
+                volume_counts[volume_name] = volume_counts.get(volume_name, 0) + 1
+                volume_sizes[volume_name] = volume_sizes.get(volume_name, 0) + file_size
+                
+            except Exception:
+                volume_name = 'unknown'
+                file_size = file_info.get('file_size', 0) or 0
+                volume_counts[volume_name] = volume_counts.get(volume_name, 0) + 1
+                volume_sizes[volume_name] = volume_sizes.get(volume_name, 0) + file_size
+        
+        return {
+            'volume_counts': volume_counts,
+            'volume_sizes': volume_sizes,
+            'cross_volume': len(volume_counts) > 1,
+            'total_volumes': len(volume_counts)
+        }
+    
     def _create_duplicate_group(self, files: List[Dict[str, Any]], detection_type: str) -> DuplicateGroup:
         """
         创建重复文件组
@@ -245,6 +297,22 @@ class DuplicateDetector:
         
         # 计算总大小
         total_size = sum(f['file_size'] or 0 for f in files)
+        
+        # 分析卷分布
+        volume_distribution = self._analyze_volume_distribution(files)
+        
+        # 为每个文件添加卷信息
+        for file_info in files:
+            try:
+                path_info = self.directory_manager.parse_file_path(file_info['file_path'])
+                file_info['volume_id'] = path_info.get('volume_id')
+                file_info['volume_name'] = path_info.get('volume_name')
+                file_info['relative_path'] = path_info.get('relative_path')
+            except Exception as e:
+                self.logger.warning(f"解析文件路径失败 {file_info['file_path']}: {e}")
+                file_info['volume_id'] = None
+                file_info['volume_name'] = 'unknown'
+                file_info['relative_path'] = file_info['file_path']
         
         return DuplicateGroup(
             group_id=group_id,
@@ -277,19 +345,51 @@ class DuplicateDetector:
                 if existing:
                     continue
                 
+                # 分析卷分布
+                volume_distribution = self._analyze_volume_distribution(group.files)
+                
                 # 插入重复文件组
                 group_db_id = self.db.execute_insert("""
-                    INSERT INTO duplicate_files (group_id, file_count, total_size, created_at)
-                    VALUES (?, ?, ?, ?)
-                """, (group.group_id, group.file_count, group.total_size, group.created_at))
+                    INSERT INTO duplicate_files (
+                        group_id, file_count, total_size, detection_type,
+                        cross_volume, volume_distribution, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    group.group_id, group.file_count, group.total_size, 'hash',
+                    volume_distribution['cross_volume'], json.dumps(volume_distribution),
+                    group.created_at
+                ))
                 
                 if group_db_id:
+                    # 选择最佳文件作为主文件
+                    best_file = self._select_best_file(group.files)
+                    
                     # 插入组内文件关联
                     for file_info in group.files:
+                        is_primary = file_info['id'] == best_file.get('id', 0)
+                        
+                        # 计算删除此文件可节省的空间
+                        space_savings = 0 if is_primary else (file_info.get('file_size', 0) or 0)
+                        
+                        # 获取删除原因
+                        remove_reason = '' if is_primary else self._get_remove_reason(file_info, best_file)
+                        
                         self.db.execute_insert("""
-                            INSERT INTO duplicate_file_items (duplicate_group_id, media_file_id)
-                            VALUES (?, ?)
-                        """, (group_db_id, file_info['id']))
+                            INSERT INTO duplicate_file_items (
+                                duplicate_group_id, media_file_id, is_primary,
+                                action_recommended, remove_reason, space_savings
+                            ) VALUES (?, ?, ?, ?, ?, ?)
+                        """, (
+                            group_db_id, file_info['id'], is_primary,
+                            'keep' if is_primary else 'delete',
+                            remove_reason, space_savings
+                        ))
+                    
+                    # 更新主文件ID
+                    if best_file:
+                        self.db.execute_update("""
+                            UPDATE duplicate_files SET primary_file_id = ? WHERE id = ?
+                        """, (best_file['id'], group_db_id))
                     
                     saved_count += 1
             
@@ -320,8 +420,11 @@ class DuplicateDetector:
                 LIMIT ?
             """, (limit,))
             
-            # 获取每组的文件详情
+            # 转换为字典列表并获取每组的文件详情
+            result_groups = []
             for group in groups:
+                group_dict = dict(group)
+                
                 files = self.db.execute_query("""
                     SELECT mf.*, mi.title, mi.year, mi.type
                     FROM duplicate_file_items dfi
@@ -329,36 +432,63 @@ class DuplicateDetector:
                     LEFT JOIN media_items mi ON mf.media_id = mi.id
                     WHERE dfi.duplicate_group_id = ?
                     ORDER BY mf.file_size DESC
-                """, (group['id'],))
+                """, (group_dict['id'],))
                 
                 # 转换为字典列表
-                group['files'] = [dict(file) for file in files]
+                group_dict['files'] = [dict(file) for file in files]
+                result_groups.append(group_dict)
             
-            return groups
+            return result_groups
             
         except Exception as e:
             self.logger.error(f"获取重复文件组失败: {e}")
             return []
     
-    def analyze_duplicate_space(self) -> Dict[str, Any]:
+    def analyze_duplicate_space(self, volume_ids: Optional[List[int]] = None) -> Dict[str, Any]:
         """
         分析重复文件占用的空间
         
+        Args:
+            volume_ids: 指定要分析的卷ID列表，None表示分析所有卷
+            
         Returns:
             空间分析结果
         """
         try:
+            # 构建查询条件
+            where_conditions = []
+            params = []
+            
+            if volume_ids:
+                # 查询涉及指定卷的重复文件组
+                placeholders = ','.join(['?'] * len(volume_ids))
+                where_conditions.append(f"""
+                    df.id IN (
+                        SELECT DISTINCT dfi.duplicate_group_id 
+                        FROM duplicate_file_items dfi
+                        JOIN media_files mf ON dfi.media_file_id = mf.id
+                        WHERE mf.volume_id IN ({placeholders})
+                    )
+                """)
+                params.extend(volume_ids)
+            
+            where_clause = f"WHERE {' AND '.join(where_conditions)}" if where_conditions else ""
+            
             # 总体统计
-            stats = self.db.execute_query("""
+            stats_query = f"""
                 SELECT 
                     COUNT(DISTINCT df.id) as group_count,
                     SUM(df.total_size) as total_duplicate_size,
-                    SUM(df.file_count) as total_duplicate_files
+                    SUM(df.file_count) as total_duplicate_files,
+                    COUNT(CASE WHEN df.cross_volume = 1 THEN 1 END) as cross_volume_groups
                 FROM duplicate_files df
-            """)[0]
+                {where_clause}
+            """
+            
+            stats = self.db.execute_query(stats_query, tuple(params) if params else None)[0]
             
             # 可节省空间（保留每组中最大的文件）
-            potential_savings = self.db.execute_query("""
+            potential_savings_query = f"""
                 SELECT SUM(
                     df.total_size - (
                         SELECT MAX(mf.file_size)
@@ -368,10 +498,13 @@ class DuplicateDetector:
                     )
                 ) as potential_savings
                 FROM duplicate_files df
-            """)[0]
+                {where_clause}
+            """
+            
+            potential_savings = self.db.execute_query(potential_savings_query, tuple(params) if params else None)[0]
             
             # 按类型分组统计
-            type_stats = self.db.execute_query("""
+            type_stats_query = f"""
                 SELECT 
                     mi.type,
                     COUNT(DISTINCT df.id) as group_count,
@@ -380,20 +513,265 @@ class DuplicateDetector:
                 JOIN duplicate_file_items dfi ON df.id = dfi.duplicate_group_id
                 JOIN media_files mf ON dfi.media_file_id = mf.id
                 JOIN media_items mi ON mf.media_id = mi.id
+                {where_clause}
                 GROUP BY mi.type
-            """)
+            """
+            
+            type_stats = self.db.execute_query(type_stats_query, tuple(params) if params else None)
+            
+            # 卷分布统计
+            volume_distribution = {}
+            if volume_ids:
+                volume_stats = self.db.execute_query("""
+                    SELECT 
+                        JSON_EXTRACT(df.volume_distribution, '$.volume_counts') as volume_counts,
+                        JSON_EXTRACT(df.volume_distribution, '$.volume_sizes') as volume_sizes
+                    FROM duplicate_files df
+                    WHERE df.id IN (
+                        SELECT DISTINCT dfi.duplicate_group_id 
+                        FROM duplicate_file_items dfi
+                        JOIN media_files mf ON dfi.media_file_id = mf.id
+                        WHERE mf.volume_id IN ({})
+                    )
+                """.format(','.join(['?'] * len(volume_ids))), tuple(volume_ids))
+                
+                for row in volume_stats:
+                    if row['volume_counts']:
+                        try:
+                            counts = json.loads(row['volume_counts'])
+                            sizes = json.loads(row['volume_sizes'])
+                            
+                            for volume, count in counts.items():
+                                if volume not in volume_distribution:
+                                    volume_distribution[volume] = {'count': 0, 'size': 0}
+                                volume_distribution[volume]['count'] += count
+                                volume_distribution[volume]['size'] += sizes.get(volume, 0)
+                        except (json.JSONDecodeError, TypeError):
+                            continue
             
             return {
                 'total_groups': stats['group_count'] or 0,
                 'total_duplicate_size': stats['total_duplicate_size'] or 0,
                 'total_duplicate_files': stats['total_duplicate_files'] or 0,
                 'potential_savings': potential_savings['potential_savings'] or 0,
-                'type_breakdown': type_stats
+                'cross_volume_groups': stats['cross_volume_groups'] or 0,
+                'type_breakdown': type_stats,
+                'volume_distribution': volume_distribution
             }
             
         except Exception as e:
             self.logger.error(f"分析重复空间失败: {e}")
             return {}
+    
+    def analyze_cross_volume_duplicates(self) -> Dict[str, Any]:
+        """
+        分析跨卷重复文件
+        
+        Returns:
+            跨卷重复文件分析结果
+        """
+        try:
+            # 获取跨卷重复文件组
+            cross_volume_groups = self.db.execute_query("""
+                SELECT 
+                    df.group_id,
+                    df.file_count,
+                    df.total_size,
+                    df.volume_distribution,
+                    df.created_at
+                FROM duplicate_files df
+                WHERE df.cross_volume = 1
+                ORDER BY df.total_size DESC
+            """)
+            
+            analysis_results = []
+            total_cross_volume_size = 0
+            total_cross_volume_savings = 0
+            
+            for group in cross_volume_groups:
+                # 解析卷分布
+                try:
+                    volume_dist = json.loads(group['volume_distribution'])
+                    volume_counts = volume_dist.get('volume_counts', {})
+                    volume_sizes = volume_dist.get('volume_sizes', {})
+                except (json.JSONDecodeError, TypeError):
+                    volume_counts = {}
+                    volume_sizes = {}
+                
+                # 计算潜在节省空间（保留最大文件）
+                max_file_size = max(volume_sizes.values()) if volume_sizes else 0
+                potential_savings = group['total_size'] - max_file_size
+                
+                total_cross_volume_size += group['total_size']
+                total_cross_volume_savings += potential_savings
+                
+                # 生成建议
+                recommendations = self._generate_cross_volume_recommendations(
+                    group['group_id'], volume_counts, volume_sizes
+                )
+                
+                analysis_results.append({
+                    'group_id': group['group_id'],
+                    'file_count': group['file_count'],
+                    'total_size': group['total_size'],
+                    'potential_savings': potential_savings,
+                    'volume_distribution': {
+                        'counts': volume_counts,
+                        'sizes': volume_sizes
+                    },
+                    'recommendations': recommendations,
+                    'created_at': group['created_at']
+                })
+            
+            return {
+                'cross_volume_groups': analysis_results,
+                'summary': {
+                    'total_groups': len(cross_volume_groups),
+                    'total_size': total_cross_volume_size,
+                    'potential_savings': total_cross_volume_savings,
+                    'savings_percentage': (total_cross_volume_savings / total_cross_volume_size * 100) 
+                                        if total_cross_volume_size > 0 else 0.0
+                }
+            }
+            
+        except Exception as e:
+            self.logger.error(f"分析跨卷重复文件失败: {e}")
+            return {
+                'cross_volume_groups': [],
+                'summary': {
+                    'total_groups': 0,
+                    'total_size': 0,
+                    'potential_savings': 0,
+                    'savings_percentage': 0.0
+                }
+            }
+    
+    def _generate_cross_volume_recommendations(self, group_id: str, volume_counts: Dict[str, int], 
+                                             volume_sizes: Dict[str, int]) -> List[Dict[str, Any]]:
+        """
+        为跨卷重复文件组生成建议
+        
+        Args:
+            group_id: 重复文件组ID
+            volume_counts: 各卷文件数量
+            volume_sizes: 各卷文件大小
+            
+        Returns:
+            建议列表
+        """
+        recommendations = []
+        
+        try:
+            # 找出最大文件所在的卷
+            if volume_sizes:
+                best_volume = max(volume_sizes.items(), key=lambda x: x[1])[0]
+                
+                # 为每个卷生成建议
+                for volume, count in volume_counts.items():
+                    if volume != best_volume:
+                        size = volume_sizes.get(volume, 0)
+                        recommendations.append({
+                            'volume': volume,
+                            'action': 'delete',
+                            'reason': f'保留{best_volume}卷中的最大文件',
+                            'file_count': count,
+                            'space_savings': size,
+                            'priority': 'high' if size > 100 * 1024 * 1024 else 'medium'  # 100MB
+                        })
+                
+                # 为最佳卷添加保留建议
+                recommendations.append({
+                    'volume': best_volume,
+                    'action': 'keep',
+                    'reason': '包含最大文件',
+                    'file_count': volume_counts.get(best_volume, 0),
+                    'space_savings': 0,
+                    'priority': 'keep'
+                })
+            
+        except Exception as e:
+            self.logger.error(f"生成跨卷建议失败: {e}")
+        
+        return recommendations
+    
+    def get_volume_duplicate_summary(self, volume_id: int) -> Dict[str, Any]:
+        """
+        获取指定卷的重复文件摘要
+        
+        Args:
+            volume_id: 卷ID
+            
+        Returns:
+            卷重复文件摘要
+        """
+        try:
+            # 获取该卷涉及的重复文件组
+            groups = self.db.execute_query("""
+                SELECT DISTINCT 
+                    df.group_id,
+                    df.file_count,
+                    df.total_size,
+                    df.cross_volume,
+                    df.volume_distribution
+                FROM duplicate_files df
+                JOIN duplicate_file_items dfi ON df.id = dfi.duplicate_group_id
+                JOIN media_files mf ON dfi.media_file_id = mf.id
+                WHERE mf.volume_id = ?
+            """, (volume_id,))
+            
+            total_groups = len(groups)
+            cross_volume_groups = sum(1 for g in groups if g['cross_volume'])
+            local_groups = total_groups - cross_volume_groups
+            
+            total_size = sum(g['total_size'] for g in groups)
+            
+            # 计算该卷可节省的空间
+            potential_savings = 0
+            for group in groups:
+                try:
+                    volume_dist = json.loads(group['volume_distribution'])
+                    volume_sizes = volume_dist.get('volume_sizes', {})
+                    
+                    # 获取卷名 - 从卷分布中获取
+                    volume_name = None
+                    for vol_name in volume_sizes.keys():
+                        if vol_name != 'unknown':
+                            volume_name = vol_name
+                            break
+                    
+                    if not volume_name:
+                        volume_name = str(volume_id)
+                    
+                    # 如果这个卷不是最大文件所在的卷，则可以删除
+                    if volume_sizes:
+                        max_volume = max(volume_sizes.items(), key=lambda x: x[1])[0]
+                        if volume_name != max_volume:
+                            potential_savings += volume_sizes.get(volume_name, 0)
+                            
+                except (json.JSONDecodeError, TypeError, KeyError):
+                    continue
+            
+            return {
+                'volume_id': volume_id,
+                'total_groups': total_groups,
+                'local_groups': local_groups,
+                'cross_volume_groups': cross_volume_groups,
+                'total_size': total_size,
+                'potential_savings': potential_savings,
+                'savings_percentage': (potential_savings / total_size * 100) if total_size > 0 else 0.0
+            }
+            
+        except Exception as e:
+            self.logger.error(f"获取卷{volume_id}重复文件摘要失败: {e}")
+            return {
+                'volume_id': volume_id,
+                'total_groups': 0,
+                'local_groups': 0,
+                'cross_volume_groups': 0,
+                'total_size': 0,
+                'potential_savings': 0,
+                'savings_percentage': 0.0
+            }
     
     def suggest_files_to_remove(self, group_id: int) -> List[Dict[str, Any]]:
         """

@@ -18,6 +18,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
 from ..database.db_manager import get_db_manager
+from ..config.config_manager import get_config_manager
+from ..utils.directory_manager import get_directory_manager
+from ..utils.subtitle_detector import SubtitleDetector
 
 class MediaFileScanner:
     """媒体文件扫描器"""
@@ -30,6 +33,9 @@ class MediaFileScanner:
             max_workers: 最大并发扫描线程数
         """
         self.db = get_db_manager()
+        self.config = get_config_manager()
+        self.directory_manager = get_directory_manager()
+        self.subtitle_detector = SubtitleDetector()
         self.max_workers = max_workers
         self.logger = logging.getLogger(__name__)
         
@@ -231,10 +237,16 @@ class MediaFileScanner:
             
             # 保存到数据库
             if existing_file:
-                self._update_media_file(existing_file[0]['id'], media_info)
+                file_id = existing_file[0]['id']
+                self._update_media_file(file_id, media_info)
+                # 检测和更新字幕信息
+                self._process_subtitles(file_id, file_path)
                 return {'action': 'updated'}
             else:
-                self._insert_media_file(media_info)
+                file_id = self._insert_media_file(media_info)
+                if file_id:
+                    # 检测和保存字幕信息
+                    self._process_subtitles(file_id, file_path)
                 return {'action': 'added'}
                 
         except Exception as e:
@@ -530,6 +542,46 @@ class MediaFileScanner:
         
         return None
     
+    def _process_subtitles(self, media_file_id: int, video_path: str) -> None:
+        """
+        处理视频文件的字幕检测和保存
+        
+        Args:
+            media_file_id: 媒体文件ID
+            video_path: 视频文件路径
+        """
+        try:
+            # 检测字幕文件
+            subtitles = self.subtitle_detector.detect_subtitles_for_video(video_path)
+            
+            if not subtitles:
+                self.logger.info(f"未找到字幕文件: {video_path}")
+                return
+            
+            # 删除旧的字幕记录（如果存在）
+            self.db.execute_update(
+                "DELETE FROM subtitle_files WHERE media_file_id = ?",
+                (media_file_id,)
+            )
+            
+            # 保存新的字幕信息
+            saved_count = 0
+            for subtitle_info in subtitles:
+                subtitle_id = self.subtitle_detector.save_subtitle_info(media_file_id, subtitle_info)
+                if subtitle_id:
+                    saved_count += 1
+                    self.logger.debug(f"保存字幕: {subtitle_info['subtitle_name']} -> ID: {subtitle_id}")
+            
+            self.logger.info(f"为视频 {video_path} 保存了 {saved_count} 个字幕文件")
+            
+            # 检查是否缺少AI字幕
+            ai_subtitles = [s for s in subtitles if s['is_ai_generated']]
+            if not ai_subtitles and self.subtitle_detector.ai_subtitle_required:
+                self.logger.warning(f"视频文件缺少必需的AI字幕: {video_path}")
+                
+        except Exception as e:
+            self.logger.error(f"处理字幕失败 {video_path}: {e}")
+    
     def _insert_media_file(self, media_info: Dict[str, Any]) -> Optional[int]:
         """插入新的媒体文件记录"""
         try:
@@ -543,14 +595,18 @@ class MediaFileScanner:
             if media_info['type'] == 'tv_show':
                 episode_id = self._get_or_create_episode(media_id, media_info)
             
+            # 解析文件路径信息（多卷支持）
+            path_info = self.directory_manager.parse_file_path(media_info['file_path'])
+            
             # 插入文件记录
             file_id = self.db.execute_insert("""
                 INSERT INTO media_files (
                     media_id, episode_id, file_path, file_name, file_size, file_hash,
                     duration, width, height, resolution, video_codec, audio_codec,
                     audio_channels, container, bitrate, frame_rate, release_group,
-                    source_type, subtitle_tracks, audio_tracks, scan_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_type, subtitle_tracks, audio_tracks, scan_status,
+                    volume_id, relative_path, directory_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 media_id, episode_id, media_info['file_path'], media_info['file_name'],
                 media_info['file_size'], media_info['file_hash'], media_info.get('duration'),
@@ -560,7 +616,8 @@ class MediaFileScanner:
                 media_info.get('bitrate'), media_info.get('frame_rate'),
                 media_info.get('release_group'), media_info.get('source_type'),
                 media_info.get('subtitle_tracks'), media_info.get('audio_tracks'),
-                'completed'
+                'completed', path_info['volume_id'], path_info['relative_path'],
+                path_info['directory_path']
             ))
             
             return file_id
@@ -572,13 +629,17 @@ class MediaFileScanner:
     def _update_media_file(self, file_id: int, media_info: Dict[str, Any]) -> bool:
         """更新现有媒体文件记录"""
         try:
+            # 解析文件路径信息（多卷支持）
+            path_info = self.directory_manager.parse_file_path(media_info['file_path'])
+            
             self.db.execute_update("""
                 UPDATE media_files SET
                     file_size = ?, file_hash = ?, duration = ?, width = ?, height = ?,
                     resolution = ?, video_codec = ?, audio_codec = ?, audio_channels = ?,
                     container = ?, bitrate = ?, frame_rate = ?, release_group = ?,
                     source_type = ?, subtitle_tracks = ?, audio_tracks = ?,
-                    scan_status = ?, updated_at = CURRENT_TIMESTAMP
+                    scan_status = ?, volume_id = ?, relative_path = ?, directory_path = ?,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             """, (
                 media_info['file_size'], media_info['file_hash'], media_info.get('duration'),
@@ -588,7 +649,8 @@ class MediaFileScanner:
                 media_info.get('bitrate'), media_info.get('frame_rate'),
                 media_info.get('release_group'), media_info.get('source_type'),
                 media_info.get('subtitle_tracks'), media_info.get('audio_tracks'),
-                'completed', file_id
+                'completed', path_info['volume_id'], path_info['relative_path'],
+                path_info['directory_path'], file_id
             ))
             
             return True
@@ -703,6 +765,208 @@ class MediaFileScanner:
             ))
         except Exception as e:
             self.logger.error(f"更新扫描记录失败: {e}")
+
+
+    def scan_all_volumes(self, path_type: Optional[str] = None, 
+                        max_volume_workers: int = 2) -> Dict[str, Any]:
+        """
+        扫描所有存储卷的指定类型路径
+        
+        Args:
+            path_type: 路径类型过滤（如 'movies', 'tv_shows'）
+            max_volume_workers: 最大卷并发数
+            
+        Returns:
+            扫描结果统计
+        """
+        self.logger.info(f"开始多卷扫描，路径类型: {path_type or '全部'}")
+        
+        # 获取所有活跃的扫描路径
+        scan_paths = self.config.get_active_scan_paths(path_type)
+        
+        if not scan_paths:
+            self.logger.warning("没有找到可扫描的路径")
+            return {
+                'total_volumes': 0,
+                'total_paths': 0,
+                'files_scanned': 0,
+                'files_added': 0,
+                'files_updated': 0,
+                'files_skipped': 0,
+                'errors': 0,
+                'scan_time': 0,
+                'volume_results': []
+            }
+        
+        start_time = datetime.now()
+        
+        # 按卷分组扫描路径
+        volume_paths = self._group_paths_by_volume(scan_paths)
+        
+        # 重置统计信息
+        self.stats = {
+            'files_scanned': 0,
+            'files_added': 0,
+            'files_updated': 0,
+            'files_skipped': 0,
+            'errors': 0
+        }
+        
+        volume_results = []
+        
+        # 并发扫描各个卷
+        with ThreadPoolExecutor(max_workers=max_volume_workers) as executor:
+            future_to_volume = {}
+            
+            for volume_info, paths in volume_paths.items():
+                future = executor.submit(self._scan_volume_paths, volume_info, paths)
+                future_to_volume[future] = volume_info
+            
+            for future in as_completed(future_to_volume):
+                volume_info = future_to_volume[future]
+                try:
+                    volume_result = future.result()
+                    volume_results.append(volume_result)
+                    
+                    # 累计统计信息
+                    for key in self.stats:
+                        self.stats[key] += volume_result.get(key, 0)
+                        
+                except Exception as e:
+                    self.logger.error(f"扫描卷失败 {volume_info}: {e}")
+                    self.stats['errors'] += 1
+                    volume_results.append({
+                        'volume_info': volume_info,
+                        'error': str(e),
+                        'files_scanned': 0,
+                        'files_added': 0,
+                        'files_updated': 0,
+                        'files_skipped': 0,
+                        'errors': 1
+                    })
+        
+        scan_time = (datetime.now() - start_time).total_seconds()
+        
+        result = {
+            'total_volumes': len(volume_paths),
+            'total_paths': len(scan_paths),
+            'scan_time': scan_time,
+            'volume_results': volume_results,
+            **self.stats
+        }
+        
+        self.logger.info(f"多卷扫描完成: {result}")
+        return result
+    
+    def _group_paths_by_volume(self, scan_paths: List[str]) -> Dict[str, List[str]]:
+        """按存储卷分组扫描路径"""
+        volume_paths = {}
+        
+        for path in scan_paths:
+            # 标准化路径
+            normalized_path = self.config.normalize_path(path)
+            
+            # 获取路径对应的卷信息
+            volume = self.directory_manager.get_volume_by_path(normalized_path)
+            
+            if volume:
+                volume_key = f"{volume.volume_name}({volume.mount_path})"
+                if volume_key not in volume_paths:
+                    volume_paths[volume_key] = []
+                volume_paths[volume_key].append(normalized_path)
+            else:
+                # 未知卷，使用路径本身作为键
+                volume_key = f"unknown({os.path.dirname(normalized_path)})"
+                if volume_key not in volume_paths:
+                    volume_paths[volume_key] = []
+                volume_paths[volume_key].append(normalized_path)
+        
+        return volume_paths
+    
+    def _scan_volume_paths(self, volume_info: str, paths: List[str]) -> Dict[str, Any]:
+        """扫描单个卷的所有路径"""
+        self.logger.info(f"开始扫描卷: {volume_info}, 路径数: {len(paths)}")
+        
+        volume_stats = {
+            'volume_info': volume_info,
+            'paths_scanned': len(paths),
+            'files_scanned': 0,
+            'files_added': 0,
+            'files_updated': 0,
+            'files_skipped': 0,
+            'errors': 0,
+            'path_results': []
+        }
+        
+        for path in paths:
+            try:
+                # 验证路径
+                validation = self.directory_manager.validate_directory(path)
+                if not validation['exists'] or not validation['readable']:
+                    self.logger.warning(f"跳过无效路径: {path} - {validation.get('error', '不可访问')}")
+                    volume_stats['errors'] += 1
+                    continue
+                
+                # 扫描路径
+                path_result = self.scan_directory(path, recursive=True)
+                volume_stats['path_results'].append({
+                    'path': path,
+                    'result': path_result
+                })
+                
+                # 累计统计
+                for key in ['files_scanned', 'files_added', 'files_updated', 'files_skipped', 'errors']:
+                    volume_stats[key] += path_result.get(key, 0)
+                    
+            except Exception as e:
+                self.logger.error(f"扫描路径失败 {path}: {e}")
+                volume_stats['errors'] += 1
+        
+        self.logger.info(f"卷扫描完成: {volume_info}, 统计: {volume_stats}")
+        return volume_stats
+    
+    def get_missing_ai_subtitles_report(self) -> Dict[str, Any]:
+        """
+        获取缺失AI字幕的报告
+        
+        Returns:
+            包含缺失AI字幕统计信息的字典
+        """
+        try:
+            missing_files = self.subtitle_detector.check_missing_ai_subtitles()
+            
+            # 按类型分组统计
+            stats_by_type = {}
+            for file_info in missing_files:
+                # 从文件路径推断媒体类型
+                file_path = file_info['file_path']
+                if any(keyword in file_path.lower() for keyword in ['s0', 'season', 'episode', 'ep']):
+                    media_type = 'tv_show'
+                else:
+                    media_type = 'movie'
+                
+                if media_type not in stats_by_type:
+                    stats_by_type[media_type] = []
+                stats_by_type[media_type].append(file_info)
+            
+            return {
+                'total_missing': len(missing_files),
+                'missing_by_type': {
+                    'movies': len(stats_by_type.get('movie', [])),
+                    'tv_shows': len(stats_by_type.get('tv_show', []))
+                },
+                'missing_files': missing_files,
+                'stats_by_type': stats_by_type
+            }
+            
+        except Exception as e:
+            self.logger.error(f"获取缺失AI字幕报告失败: {e}")
+            return {
+                'total_missing': 0,
+                'missing_by_type': {'movies': 0, 'tv_shows': 0},
+                'missing_files': [],
+                'stats_by_type': {}
+            }
 
 
 if __name__ == "__main__":
