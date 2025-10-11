@@ -3,31 +3,36 @@
 """
 数据库管理器
 负责SQLite数据库的初始化、连接管理和基本操作
+优化版本：启用WAL模式、性能调优、连接池支持
 """
 
 import sqlite3
 import os
 import json
 import logging
+import threading
 from datetime import datetime
 from contextlib import contextmanager
 from typing import Optional, Dict, Any, List, Tuple
+from queue import Queue, Empty
 
 class DatabaseManager:
-    """数据库管理器类"""
+    """数据库管理器类 - 优化版本"""
     
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None, pool_size: int = 5):
         """
         初始化数据库管理器
         
         Args:
             db_path: 数据库文件路径，默认为当前目录下的media_library.db
+            pool_size: 连接池大小
         """
         if db_path is None:
             db_path = os.path.join(os.path.dirname(__file__), '..', 'media_library.db')
         
         self.db_path = os.path.abspath(db_path)
         self.schema_path = os.path.join(os.path.dirname(__file__), 'schema.sql')
+        self.pool_size = pool_size
         
         # 确保数据库目录存在
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
@@ -35,16 +40,65 @@ class DatabaseManager:
         # 设置日志
         self.logger = logging.getLogger(__name__)
         
+        # 连接池
+        self._connection_pool = Queue(maxsize=pool_size)
+        self._pool_lock = threading.Lock()
+        self._pool_initialized = False
+        
         # 初始化数据库
         self.initialize_database()
+        
+        # 初始化连接池
+        self._initialize_connection_pool()
+    
+    def _initialize_connection_pool(self):
+        """初始化连接池"""
+        with self._pool_lock:
+            if self._pool_initialized:
+                return
+                
+            for _ in range(self.pool_size):
+                conn = self._create_optimized_connection()
+                self._connection_pool.put(conn)
+            
+            self._pool_initialized = True
+            self.logger.info(f"连接池初始化完成，大小: {self.pool_size}")
+    
+    def _create_optimized_connection(self) -> sqlite3.Connection:
+        """创建优化的数据库连接"""
+        conn = sqlite3.connect(
+            self.db_path, 
+            timeout=30.0,
+            check_same_thread=False  # 允许多线程使用
+        )
+        conn.row_factory = sqlite3.Row
+        
+        # SQLite性能优化设置
+        optimizations = [
+            "PRAGMA foreign_keys = ON",           # 启用外键约束
+            "PRAGMA journal_mode = WAL",          # 启用WAL模式，提高并发性能
+            "PRAGMA synchronous = NORMAL",        # 平衡安全性和性能
+            "PRAGMA cache_size = 10000",          # 增加缓存大小（约40MB）
+            "PRAGMA temp_store = MEMORY",         # 临时表存储在内存中
+            "PRAGMA mmap_size = 268435456",       # 启用内存映射（256MB）
+            "PRAGMA optimize",                    # 自动优化
+        ]
+        
+        for pragma in optimizations:
+            try:
+                conn.execute(pragma)
+            except Exception as e:
+                self.logger.warning(f"执行优化设置失败 {pragma}: {e}")
+        
+        return conn
     
     def initialize_database(self):
         """初始化数据库，创建表结构"""
         try:
-            with self.get_connection() as conn:
-                # 启用外键约束
-                conn.execute("PRAGMA foreign_keys = ON")
-                
+            # 使用临时连接进行初始化
+            conn = self._create_optimized_connection()
+            
+            try:
                 # 读取并执行schema文件
                 if os.path.exists(self.schema_path):
                     with open(self.schema_path, 'r', encoding='utf-8') as f:
@@ -60,6 +114,8 @@ class DatabaseManager:
                 else:
                     self.logger.error(f"Schema文件不存在: {self.schema_path}")
                     raise FileNotFoundError(f"Schema文件不存在: {self.schema_path}")
+            finally:
+                conn.close()
                     
         except Exception as e:
             self.logger.error(f"数据库初始化失败: {e}")
@@ -67,13 +123,19 @@ class DatabaseManager:
     
     @contextmanager
     def get_connection(self):
-        """获取数据库连接的上下文管理器"""
+        """获取数据库连接的上下文管理器（使用连接池）"""
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path, timeout=30.0)
-            conn.row_factory = sqlite3.Row  # 使结果可以通过列名访问
-            conn.execute("PRAGMA foreign_keys = ON")  # 启用外键约束
+            # 从连接池获取连接
+            try:
+                conn = self._connection_pool.get(timeout=5.0)
+            except Empty:
+                # 连接池为空，创建新连接
+                conn = self._create_optimized_connection()
+                self.logger.warning("连接池为空，创建新连接")
+            
             yield conn
+            
         except Exception as e:
             if conn:
                 conn.rollback()
@@ -81,7 +143,14 @@ class DatabaseManager:
             raise
         finally:
             if conn:
-                conn.close()
+                try:
+                    # 将连接返回连接池
+                    if self._connection_pool.qsize() < self.pool_size:
+                        self._connection_pool.put(conn)
+                    else:
+                        conn.close()
+                except:
+                    conn.close()
     
     def execute_query(self, query: str, params: Optional[tuple] = None) -> List[sqlite3.Row]:
         """
@@ -144,7 +213,7 @@ class DatabaseManager:
     
     def execute_many(self, query: str, params_list: List[tuple]) -> int:
         """
-        批量执行语句
+        批量执行语句（优化版本）
         
         Args:
             query: SQL语句
@@ -235,41 +304,55 @@ class DatabaseManager:
         Returns:
             统计信息字典
         """
+        stats = {}
+        
         try:
-            stats = {}
+            # 基本统计
+            tables = [
+                'media_items', 'tv_shows', 'episodes', 'media_files', 
+                'duplicate_files', 'scan_history', 'settings'
+            ]
             
-            # 媒体项目统计
-            result = self.execute_query(
-                "SELECT type, COUNT(*) as count FROM media_items GROUP BY type"
-            )
-            for row in result:
-                stats[f"{row['type']}_count"] = row['count']
+            for table in tables:
+                try:
+                    result = self.execute_query(f"SELECT COUNT(*) as count FROM {table}")
+                    stats[f"{table}_count"] = result[0]['count'] if result else 0
+                except:
+                    stats[f"{table}_count"] = 0
             
-            # 文件统计
-            file_stats = self.execute_query(
-                "SELECT COUNT(*) as total_files, SUM(file_size) as total_size FROM media_files"
-            )[0]
-            stats['total_files'] = file_stats['total_files']
-            stats['total_size'] = file_stats['total_size'] or 0
+            # 数据库大小
+            try:
+                result = self.execute_query("PRAGMA page_count")
+                page_count = result[0][0] if result else 0
+                result = self.execute_query("PRAGMA page_size")
+                page_size = result[0][0] if result else 0
+                stats['database_size_bytes'] = page_count * page_size
+                stats['database_size_mb'] = round(stats['database_size_bytes'] / (1024 * 1024), 2)
+            except:
+                stats['database_size_bytes'] = 0
+                stats['database_size_mb'] = 0
             
-            # 重复文件统计
-            duplicate_stats = self.execute_query(
-                "SELECT COUNT(*) as duplicate_groups FROM duplicate_files WHERE file_count > 1"
-            )[0]
-            stats['duplicate_groups'] = duplicate_stats['duplicate_groups']
+            # WAL模式状态
+            try:
+                result = self.execute_query("PRAGMA journal_mode")
+                stats['journal_mode'] = result[0][0] if result else 'unknown'
+            except:
+                stats['journal_mode'] = 'unknown'
             
-            # 最近扫描统计
-            recent_scan = self.execute_query(
-                "SELECT * FROM scan_history ORDER BY start_time DESC LIMIT 1"
-            )
-            if recent_scan:
-                stats['last_scan'] = recent_scan[0]['start_time']
-                stats['last_scan_status'] = recent_scan[0]['status']
+            # 缓存大小
+            try:
+                result = self.execute_query("PRAGMA cache_size")
+                stats['cache_size'] = result[0][0] if result else 0
+            except:
+                stats['cache_size'] = 0
+                
+            stats['connection_pool_size'] = self.pool_size
+            stats['last_updated'] = datetime.now().isoformat()
             
-            return stats
         except Exception as e:
             self.logger.error(f"获取数据库统计失败: {e}")
-            return {}
+            
+        return stats
     
     def vacuum_database(self) -> bool:
         """
@@ -299,16 +382,18 @@ class DatabaseManager:
             是否备份成功
         """
         try:
-            import shutil
-            
             # 确保备份目录存在
             os.makedirs(os.path.dirname(backup_path), exist_ok=True)
             
-            # 复制数据库文件
-            shutil.copy2(self.db_path, backup_path)
-            
-            self.logger.info(f"数据库备份完成: {backup_path}")
-            return True
+            with self.get_connection() as source:
+                backup = sqlite3.connect(backup_path)
+                try:
+                    source.backup(backup)
+                    self.logger.info(f"数据库备份完成: {backup_path}")
+                    return True
+                finally:
+                    backup.close()
+                    
         except Exception as e:
             self.logger.error(f"数据库备份失败: {e}")
             return False
@@ -326,43 +411,57 @@ class DatabaseManager:
                 self.logger.info("数据库完整性检查通过")
                 return True
             else:
-                self.logger.error("数据库完整性检查失败")
+                self.logger.error(f"数据库完整性检查失败: {result}")
                 return False
         except Exception as e:
-            self.logger.error(f"数据库完整性检查错误: {e}")
+            self.logger.error(f"数据库完整性检查失败: {e}")
             return False
+    
+    def close_all_connections(self):
+        """关闭所有连接池中的连接"""
+        with self._pool_lock:
+            while not self._connection_pool.empty():
+                try:
+                    conn = self._connection_pool.get_nowait()
+                    conn.close()
+                except Empty:
+                    break
+            self.logger.info("所有数据库连接已关闭")
 
 
 # 全局数据库管理器实例
 db_manager = None
 
-def get_db_manager(db_path: Optional[str] = None) -> DatabaseManager:
-    """获取数据库管理器实例（单例模式）"""
+def get_db_manager(db_path: Optional[str] = None, pool_size: int = 5) -> DatabaseManager:
+    """获取全局数据库管理器实例"""
     global db_manager
     if db_manager is None:
-        db_manager = DatabaseManager(db_path)
+        db_manager = DatabaseManager(db_path, pool_size)
     return db_manager
 
 
 if __name__ == "__main__":
-    # 测试数据库管理器
+    # 测试代码
     import logging
     
     logging.basicConfig(level=logging.INFO)
     
-    # 创建数据库管理器
+    # 创建数据库管理器实例
     db = DatabaseManager()
     
     # 检查数据库完整性
     db.check_database_integrity()
     
-    # 获取统计信息
+    # 获取数据库统计信息
     stats = db.get_database_stats()
     print("数据库统计信息:")
     for key, value in stats.items():
         print(f"  {key}: {value}")
     
-    # 测试配置管理
+    # 测试配置功能
     db.set_setting("test_key", {"test": "value"}, "测试配置")
     test_value = db.get_setting("test_key")
     print(f"测试配置值: {test_value}")
+    
+    # 关闭连接
+    db.close_all_connections()
