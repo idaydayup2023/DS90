@@ -683,7 +683,7 @@ def move_file(source_file, target_dir, override_files=True, dry_run=False):
         return False
 
 
-def remove_empty_directories(directory, preserve_root=True, dry_run=False):
+def remove_empty_directories(directory, preserve_root=True, dry_run=False, resolution=None, codec=None):
     """
     递归删除空目录和只包含垃圾文件的目录
     
@@ -691,6 +691,8 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False):
         directory: 要检查的目录路径
         preserve_root: 是否保留根目录（默认为True，不删除传入的根目录）
         dry_run: 是否为预览模式，只显示操作不实际执行
+        resolution: 分辨率过滤条件，用于判断字幕文件是否孤立
+        codec: 编码过滤条件，用于判断字幕文件是否孤立
         
     Returns:
         bool: 是否成功删除了目录
@@ -706,7 +708,7 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False):
             item_path = os.path.join(directory, item)
             if os.path.isdir(item_path):
                 # 递归处理子目录，子目录可以被删除
-                if remove_empty_directories(item_path, preserve_root=False, dry_run=dry_run):
+                if remove_empty_directories(item_path, preserve_root=False, dry_run=dry_run, resolution=resolution, codec=codec):
                     removed_count += 1
         
         # 检查当前目录是否可以删除或清理
@@ -733,6 +735,7 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False):
                 junk_files_removed = 0
                 
                 # 首先收集所有有效视频文件的基础名称（能提取到年份的）
+                # 注意：这里不应该应用分辨率和编码过滤，因为我们要保护所有有效视频文件对应的字幕
                 valid_video_basenames = set()
                 for item in os.listdir(directory):
                     item_path = os.path.join(directory, item)
@@ -763,6 +766,8 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False):
                         # 检查是否是孤立的字幕文件
                         elif ext.lower() in SUBTITLE_EXTENSIONS:
                             basename = os.path.splitext(item)[0]
+                            # 只有当字幕文件没有对应的有效视频文件时才删除
+                            # 即使视频文件因分辨率/编码不匹配而被跳过，字幕文件也不应该被删除
                             if basename not in valid_video_basenames:
                                 should_remove = True
                                 remove_reason = "孤立字幕文件"
@@ -955,7 +960,7 @@ def process_directory(source_dir, target_base_dir, resolution=None, codec=None,
                 continue
             
             # 使用新的递归删除函数
-            if remove_empty_directories(dir_path, preserve_root=False, dry_run=dry_run):
+            if remove_empty_directories(dir_path, preserve_root=False, dry_run=dry_run, resolution=resolution, codec=codec):
                 removed_dirs_count += 1
                 if dry_run:
                     logging.info(f"[预览] 将删除目录及其子目录: {dir_path}")
@@ -965,7 +970,7 @@ def process_directory(source_dir, target_base_dir, resolution=None, codec=None,
                 logging.debug(f"目录不为空或删除失败，跳过: {dir_path}")
         
         # 最后尝试清理源目录下的空目录和垃圾文件（但保留源目录本身）
-        if remove_empty_directories(source_dir, preserve_root=True, dry_run=dry_run):
+        if remove_empty_directories(source_dir, preserve_root=True, dry_run=dry_run, resolution=resolution, codec=codec):
             if dry_run:
                 logging.info(f"[预览] 将清理源目录下的空目录和垃圾文件: {source_dir}")
             else:
