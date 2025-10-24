@@ -344,27 +344,19 @@ def extract_movie_info(filename):
                 if codec_match:
                     movie_name_end = codec_match.start()
         
-        # 如果仍然没有找到合适的截断点，使用旧的年份模式作为后备
-        if movie_name_end == len(normalized_basename):
+        # 尝试使用旧的年份模式作为后备（无论是否已找到截断点）
+        if year is None:
             fallback_year_match = YEAR_PATTERN.search(normalized_basename)
             if fallback_year_match:
-                # 检查这个年份是否可能是电影名称的一部分
-                year_pos = fallback_year_match.start()
-                # 如果年份前后都有字母，可能是电影名称的一部分，不使用
-                before_year = normalized_basename[max(0, year_pos-2):year_pos]
-                after_year = normalized_basename[fallback_year_match.end():fallback_year_match.end()+2]
-                
-                # 如果年份前后不是纯分隔符，可能是电影名称的一部分
-                if not (re.match(r'^[.\s\(\)\[\]]*$', before_year) or 
-                       re.match(r'^[.\s\(\)\[\]]*$', after_year)):
-                    # 年份可能是电影名称的一部分，不截断
-                    pass
-                else:
-                    year = int(fallback_year_match.group(1))
+                year = int(fallback_year_match.group(1))
+                # 电影名称应在年份之前结束；若已存在截断点，取更早的位置
+                if movie_name_end == len(normalized_basename):
                     movie_name_end = fallback_year_match.start()
+                else:
+                    movie_name_end = min(movie_name_end, fallback_year_match.start())
         
-        # 最后尝试检查文件名末尾是否有年份（没有扩展名的情况）
-        if year is None and movie_name_end == len(normalized_basename):
+        # 最后尝试检查文件名末尾是否有年份（没有分隔符的特殊情况）
+        if year is None:
             # 检查文件名是否以年份结尾（包括没有分隔符的情况）
             end_year_match = re.search(r'(19[0-9]{2}|20[0-9]{2})$', normalized_basename)
             if not end_year_match:
@@ -373,7 +365,10 @@ def extract_movie_info(filename):
             
             if end_year_match:
                 year = int(end_year_match.group(1))
-                movie_name_end = end_year_match.start()
+                if movie_name_end == len(normalized_basename):
+                    movie_name_end = end_year_match.start()
+                else:
+                    movie_name_end = min(movie_name_end, end_year_match.start())
     
     # 提取电影名称部分
     movie_name_part = normalized_basename[:movie_name_end].strip('.')
