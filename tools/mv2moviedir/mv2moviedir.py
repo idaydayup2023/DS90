@@ -534,6 +534,10 @@ def can_remove_directory(directory):
             if os.path.isfile(item_path):
                 _, ext = os.path.splitext(item)
                 if ext.lower() in VIDEO_EXTENSIONS:
+                    # 如果检测到电视剧格式，目录不应被删除（脚本不处理电视剧）
+                    if TV_SHOW_PATTERN.search(item):
+                        return False
+
                     # 检查是否是有效的电影文件（能提取到年份）
                     try:
                         movie_name, year = extract_movie_info(item)
@@ -576,7 +580,10 @@ def can_remove_directory(directory):
                         # 有对应的有效视频文件，不能删除
                         return False
                 elif ext.lower() in VIDEO_EXTENSIONS:
-                    # 视频文件，检查是否是有效的电影文件
+                    # 视频文件，若为电视剧则不能删除
+                    if TV_SHOW_PATTERN.search(item):
+                        return False
+                    # 非电视剧，检查是否是有效的电影文件
                     try:
                         movie_name, year = extract_movie_info(item)
                         if year is not None:
@@ -729,7 +736,7 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False, resol
                 # 删除垃圾文件、孤立的字幕文件和无效的视频文件
                 junk_files_removed = 0
                 
-                # 首先收集所有有效视频文件的基础名称（能提取到年份的）
+                # 首先收集所有有效视频文件的基础名称（能提取到年份的，或电视剧集）
                 # 注意：这里不应该应用分辨率和编码过滤，因为我们要保护所有有效视频文件对应的字幕
                 valid_video_basenames = set()
                 for item in os.listdir(directory):
@@ -737,6 +744,11 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False, resol
                     if os.path.isfile(item_path):
                         _, ext = os.path.splitext(item)
                         if ext.lower() in VIDEO_EXTENSIONS:
+                            # 电视剧视频也需要保护其字幕
+                            if TV_SHOW_PATTERN.search(item):
+                                basename = os.path.splitext(item)[0]
+                                valid_video_basenames.add(basename)
+                                continue
                             try:
                                 movie_name, year = extract_movie_info(item)
                                 if year is not None:  # 只有能提取到年份的才算有效视频文件
@@ -768,14 +780,18 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False, resol
                                 remove_reason = "孤立字幕文件"
                         # 检查是否是无效的视频文件
                         elif ext.lower() in VIDEO_EXTENSIONS:
-                            try:
-                                movie_name, year = extract_movie_info(item)
-                                if year is None:
+                            # 电视剧视频不应被删除
+                            if TV_SHOW_PATTERN.search(item):
+                                should_remove = False
+                            else:
+                                try:
+                                    movie_name, year = extract_movie_info(item)
+                                    if year is None:
+                                        should_remove = True
+                                        remove_reason = "无效视频文件"
+                                except:
                                     should_remove = True
                                     remove_reason = "无效视频文件"
-                            except:
-                                should_remove = True
-                                remove_reason = "无效视频文件"
                         
                         if should_remove:
                             try:
