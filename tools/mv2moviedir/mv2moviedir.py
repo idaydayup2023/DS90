@@ -21,6 +21,7 @@ mv2moviedir - 将电影文件移动到按电影名组织的目录结构中
     --remove-source       移动文件后删除源目录（如果源目录为空或只剩下nfo、txt、jpg等文件）
     --force               强制处理所有视频文件，忽略AI字幕检查（默认只处理有AI字幕的文件）
     --no-override         不覆盖已存在的目标文件（默认会覆盖已存在的文件）
+    --restricted-dir      含受限语言（如 Tagalog / Filipino）或成人内容的电影将移动到该目录下（默认使用目标目录中的 restricted 子目录）
 
 示例：
     mv2moviedir.py /downloads /media/movies
@@ -1096,7 +1097,7 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='预览模式：只显示将要执行的操作，不实际移动或删除文件')
     parser.add_argument('--confirm-delete', action='store_true', help='删除目录前需要用户确认（与--remove-source一起使用）')
     parser.add_argument('--version', action='version', version=f'mv2moviedir {__version__}')
-    parser.add_argument('--restricted-dir', help='含受限语言（如Tagalog）的电影将移动到该目录下（默认使用目标目录中的restricted子目录）')
+    parser.add_argument('--restricted-dir', help='含受限语言（如 Tagalog / Filipino）或成人内容的电影将移动到该目录下（默认使用目标目录中的 restricted 子目录）')
     
     args = parser.parse_args()
     
