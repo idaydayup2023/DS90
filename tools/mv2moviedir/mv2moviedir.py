@@ -52,8 +52,39 @@ SUPPORTED_EXTENSIONS = VIDEO_EXTENSIONS + SUBTITLE_EXTENSIONS
 IGNORED_EXTENSIONS = ('.nfo', '.txt', '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff')
 
 # 正则表达式模式
-# 电视剧模式（包含SxxExx格式）- 用于排除电视剧文件
+# 旧版电视剧模式（SxxEyy紧邻）- 保留以兼容，但不再单独使用
 TV_SHOW_PATTERN = re.compile(r'[.\s\(\)\[\]][Ss][0-9]{1,2}[Ee][0-9]{1,2}[.\s\(\)\[\]]')
+
+# 分隔符字符类：空格、点、括号、方括号、下划线、连字符
+_SEP = r"[\s\.\(\)\[\]\-_]"
+
+# 扩展电视剧剧集模式：允许 Sxx[分隔符可选]Eyy，前后有分隔或边界
+TV_EPISODE_PATTERN = re.compile(rf"{_SEP}[Ss][0-9]{{1,2}}(?:{_SEP})?[Ee][0-9]{{1,3}}(?={_SEP}|$)", re.IGNORECASE)
+
+# 替代剧集模式：1x02、01x02 等，前后有分隔或边界
+TV_EPISODE_ALT_PATTERN = re.compile(rf"{_SEP}[0-9]{{1,2}}x[0-9]{{1,3}}(?={_SEP}|$)", re.IGNORECASE)
+
+# 整季目录模式：Sxx 或 Season xx，前后有分隔或边界
+TV_SEASON_DIR_PATTERN = re.compile(rf"{_SEP}(?:S[0-9]{{1,2}}|Season{_SEP}*[0-9]{{1,2}})(?={_SEP}|$)", re.IGNORECASE)
+
+def is_tv_name(name: str) -> bool:
+    """
+    判断名称（文件名或目录名）是否符合电视剧命名模式。
+
+    覆盖模式：
+    - SxxEyy（支持中间分隔符，可选）
+    - 1x02（season x episode 形式）
+    - 整季目录 Sxx 或 Season xx
+    """
+    if not name:
+        return False
+    # 为统一性，在两侧补一个空格，确保前后边界匹配
+    padded = f" {name} "
+    return (
+        TV_EPISODE_PATTERN.search(padded) is not None
+        or TV_EPISODE_ALT_PATTERN.search(padded) is not None
+        or TV_SEASON_DIR_PATTERN.search(padded) is not None
+    )
 
 # 年份模式：匹配1900-2099年，更智能的匹配
 # 优先匹配位于特定位置的年份，避免误识别电影名称中的年份
@@ -109,7 +140,7 @@ def is_movie(filename):
         return False
     
     # 如果包含电视剧格式，则不是电影
-    if TV_SHOW_PATTERN.search(filename):
+    if is_tv_name(filename):
         return False
     
     return True
@@ -520,9 +551,9 @@ def can_remove_directory(directory):
         return False
     
     try:
-        # 若目录名本身包含电视剧标识（SxxEyy），则该目录不可删除
+        # 若目录名本身包含电视剧标识（剧集或整季），则该目录不可删除
         dirname = os.path.basename(directory)
-        if TV_SHOW_PATTERN.search(dirname):
+        if is_tv_name(dirname):
             return False
         # 获取目录中的所有内容
         items = os.listdir(directory)
@@ -539,7 +570,7 @@ def can_remove_directory(directory):
                 _, ext = os.path.splitext(item)
                 if ext.lower() in VIDEO_EXTENSIONS:
                     # 如果检测到电视剧格式，目录不应被删除（脚本不处理电视剧）
-                    if TV_SHOW_PATTERN.search(item):
+                    if is_tv_name(item):
                         return False
 
                     # 检查是否是有效的电影文件（能提取到年份）
@@ -585,7 +616,7 @@ def can_remove_directory(directory):
                         return False
                 elif ext.lower() in VIDEO_EXTENSIONS:
                     # 视频文件，若为电视剧则不能删除
-                    if TV_SHOW_PATTERN.search(item):
+                    if is_tv_name(item):
                         return False
                     # 非电视剧，检查是否是有效的电影文件
                     try:
@@ -749,7 +780,7 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False, resol
                         _, ext = os.path.splitext(item)
                         if ext.lower() in VIDEO_EXTENSIONS:
                             # 电视剧视频也需要保护其字幕
-                            if TV_SHOW_PATTERN.search(item):
+                            if is_tv_name(item):
                                 basename = os.path.splitext(item)[0]
                                 valid_video_basenames.add(basename)
                                 continue
@@ -785,7 +816,7 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False, resol
                         # 检查是否是无效的视频文件
                         elif ext.lower() in VIDEO_EXTENSIONS:
                             # 电视剧视频不应被删除
-                            if TV_SHOW_PATTERN.search(item):
+                            if is_tv_name(item):
                                 should_remove = False
                             else:
                                 try:
