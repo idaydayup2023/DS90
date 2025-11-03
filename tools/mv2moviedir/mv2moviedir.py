@@ -67,6 +67,9 @@ TV_EPISODE_ALT_PATTERN = re.compile(rf"{_SEP}[0-9]{{1,2}}x[0-9]{{1,3}}(?={_SEP}|
 # 整季目录模式：Sxx 或 Season xx，前后有分隔或边界
 TV_SEASON_DIR_PATTERN = re.compile(rf"{_SEP}(?:S[0-9]{{1,2}}|Season{_SEP}*[0-9]{{1,2}})(?={_SEP}|$)", re.IGNORECASE)
 
+# 自然语言剧集模式：Ep02、Ep 02、Episode 02 等，前后有分隔或边界
+TV_EPISODE_WORD_PATTERN = re.compile(rf"{_SEP}(?:Ep|Episode){_SEP}*[0-9]{{1,3}}(?={_SEP}|$)", re.IGNORECASE)
+
 def is_tv_name(name: str) -> bool:
     """
     判断名称（文件名或目录名）是否符合电视剧命名模式。
@@ -84,6 +87,7 @@ def is_tv_name(name: str) -> bool:
         TV_EPISODE_PATTERN.search(padded) is not None
         or TV_EPISODE_ALT_PATTERN.search(padded) is not None
         or TV_SEASON_DIR_PATTERN.search(padded) is not None
+        or TV_EPISODE_WORD_PATTERN.search(padded) is not None
     )
 
 # 年份模式：匹配1900-2099年，更智能的匹配
