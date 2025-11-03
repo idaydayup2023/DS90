@@ -4,7 +4,7 @@
 
 ## 版本
 
-v1.0.0
+v1.1.0
 
 ## 功能特性
 
@@ -39,6 +39,7 @@ python3 mv2moviedir.py 源目录 目标目录
 ```bash
 usage: mv2moviedir.py [-h] [--resolution RESOLUTION] [--codec CODEC] [--year-group] [--remove-source]
                       [--force] [--no-override] [--dry-run] [--confirm-delete] [--version]
+                      [--restricted-dir RESTRICTED_DIR]
                       source_dir target_dir
 
 将电影文件移动到按电影名组织的目录结构中
@@ -59,6 +60,9 @@ options:
   --dry-run             预览模式：只显示将要执行的操作，不实际移动或删除文件
   --confirm-delete      删除目录前需要用户确认（与--remove-source一起使用）
   --version             show program's version number and exit
+  --restricted-dir RESTRICTED_DIR
+                        含受限语言（如 Tagalog）的电影将移动到该目录下（默认使用目标目录中的
+                        restricted 子目录）
 ```
 
 ### 使用示例
@@ -242,6 +246,47 @@ Avatar.2009.1080p.BluRay.x264-(YIFY).mkv
 ```
 
 **注意**: 所有文件名和目录名都已自动去除中文广告内容，保持清洁的命名格式。
+
+### 受限语言目录（Tagalog / Filipino）
+- 当文件名包含 `Tagalog` 或 `Filipino` 语言标记时，会被识别为受限语言内容。
+- 默认移动到 `目标目录/restricted/...` 下；可通过 `--restricted-dir` 指定自定义路径。
+- 目录结构和年份分组规则与普通电影一致，字幕也会随视频一起移动到受限目录。
+
+示例：
+```
+源目录/Unli.Pop.2025.1080p.Tagalog.WEB-DL.HEVC.x265-BONE.mkv
+源目录/Another.Movie.2024.Filipino.720p.WEB-DL.x264.mkv
+
+目标目录/
+└── restricted/
+    └── 2025/
+        └── Unli.Pop.2025.1080p.Tagalog.WEB-DL.HEVC.x265-BONE/
+            └── Unli.Pop.2025.1080p.Tagalog.WEB-DL.HEVC.x265-BONE.mkv
+        └── Another.Movie.2024.Filipino.720p.WEB-DL.x264/
+            └── Another.Movie.2024.Filipino.720p.WEB-DL.x264.mkv
+```
+
+### 限制级（成人/色情）内容识别与路由
+- 当文件名包含典型成人标识（要求前后为分隔符或边界）时，将被识别为限制内容并路由到 `restricted` 目录。
+- 识别示例（不完全列表）：
+  - 日本：`JAV`、`FC2-PPV`、`Carib`、`1pondo`、`Heyzo`、`IPX-####`、`SSIS-####`、`STARS-####`
+  - 西方：`BRAZZERS`、`RealityKings`、`BangBros`、`Mofos`、`Nubiles`、`Babes`、`Twistys`、`DigitalPlayground`、`NaughtyAmerica`、`Wicked`、`Private`、`Pornhub`、`X-Art`、`MetArt`、`VivThomas`
+  - 通用：`XXX`、`Porn`、`Uncensored`
+
+示例：
+```
+源目录/
+├── BRAZZERS.2025.1080p.WEB-DL.x265.mkv
+├── Carib.2025.1080p.WEB-DL.x265.mkv
+└── FC2-PPV-1234567.2025.1080p.WEB-DL.x265.mkv
+
+目标目录/
+└── restricted/
+    └── 2025/
+        ├── BRAZZERS.2025.1080p.WEB-DL.x265/
+        ├── Carib.2025.1080p.WEB-DL.x265/
+        └── FC2-PPV-1234567.2025.1080p.WEB-DL.x265/
+```
 
 ### 按年份分组结构 (--year-group)
 ```

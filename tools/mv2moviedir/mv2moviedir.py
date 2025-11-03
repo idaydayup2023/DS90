@@ -6,7 +6,7 @@
 # 基于mv2tvdir项目改进，专门用于电影文件整理
 
 # 版本信息
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 """
 mv2moviedir - 将电影文件移动到按电影名组织的目录结构中
@@ -69,6 +69,52 @@ TV_SEASON_DIR_PATTERN = re.compile(rf"{_SEP}(?:S[0-9]{{1,2}}|Season{_SEP}*[0-9]{
 
 # 自然语言剧集模式：Ep02、Ep 02、Episode 02 等，前后有分隔或边界
 TV_EPISODE_WORD_PATTERN = re.compile(rf"{_SEP}(?:Ep|Episode){_SEP}*[0-9]{{1,3}}(?={_SEP}|$)", re.IGNORECASE)
+
+# 受限语言标记（支持 Tagalog / Filipino，允许出现在开头或分隔符后）
+RESTRICTED_LANGUAGE_PATTERNS = [
+    ("Tagalog", re.compile(rf"(?:^|{_SEP})Tagalog(?={_SEP}|$)", re.IGNORECASE)),
+    ("Filipino", re.compile(rf"(?:^|{_SEP})Filipino(?={_SEP}|$)", re.IGNORECASE)),
+]
+
+def get_restricted_language(name: str):
+    """检测文件名/目录名中是否包含受限语言标记。
+
+    命中返回语言名称（如 'Tagalog'、'Filipino'），否则返回 None。
+    为避免误判，仅在分隔符或边界处匹配，或文件名开头。
+    """
+    if not name:
+        return None
+    for lang, pat in RESTRICTED_LANGUAGE_PATTERNS:
+        if pat.search(name):
+            return lang
+    return None
+
+# 成人/色情内容识别（避免误判，全部要求分隔符或边界）
+ADULT_TOKEN_PATTERNS = [
+    # 日本番号/站点（允许在开头或分隔符后出现）
+    re.compile(rf"(?:^|{_SEP})JAV(?={_SEP}|$)", re.IGNORECASE),
+    re.compile(rf"(?:^|{_SEP})FC2(?:{_SEP}|-)PPV(?={_SEP}|$)", re.IGNORECASE),
+    re.compile(rf"(?:^|{_SEP})Carib(?={_SEP}|$)", re.IGNORECASE),
+    re.compile(rf"(?:^|{_SEP})1pondo(?={_SEP}|$)", re.IGNORECASE),
+    re.compile(rf"(?:^|{_SEP})Heyzo(?={_SEP}|$)", re.IGNORECASE),
+    # 日本常见系列前缀（示例，避免过宽匹配）
+    re.compile(rf"(?:^|{_SEP})IPX-[0-9]{{3,4}}(?={_SEP}|$)", re.IGNORECASE),
+    re.compile(rf"(?:^|{_SEP})SSIS-[0-9]{{3,4}}(?={_SEP}|$)", re.IGNORECASE),
+    re.compile(rf"(?:^|{_SEP})STARS-[0-9]{{3,4}}(?={_SEP}|$)", re.IGNORECASE),
+    # 西方站点/品牌
+    re.compile(rf"(?:^|{_SEP})(?:BRAZZERS|RealityKings|BangBros|Mofos|Nubiles|Babes|Twistys|DigitalPlayground|NaughtyAmerica|Wicked|Private|Pornhub|X-Art|MetArt|VivThomas)(?={_SEP}|$)", re.IGNORECASE),
+    # 通用成人标识
+    re.compile(rf"(?:^|{_SEP})(?:XXX|Porn|Uncensored)(?={_SEP}|$)", re.IGNORECASE),
+]
+
+def is_adult_content(name: str) -> bool:
+    """判断名称是否包含成人/色情内容标识。"""
+    if not name:
+        return False
+    for pat in ADULT_TOKEN_PATTERNS:
+        if pat.search(name):
+            return True
+    return False
 
 def is_tv_name(name: str) -> bool:
     """
@@ -862,7 +908,7 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False, resol
 
 def process_directory(source_dir, target_base_dir, resolution=None, codec=None, 
                      year_group=False, remove_source=False, require_ai_subtitle=True, 
-                     override_files=True, dry_run=False):
+                     override_files=True, dry_run=False, restricted_dir=None):
     """
     处理源目录中的所有电影文件
     
@@ -928,8 +974,15 @@ def process_directory(source_dir, target_base_dir, resolution=None, codec=None,
             # 获取不含扩展名的完整文件名
             filename_without_ext = os.path.splitext(filename)[0]
             
-            # 创建目标目录
-            target_dir = create_target_directory(target_base_dir, filename_without_ext, year, year_group)
+            # 创建目标目录（若检测到受限语言或成人内容则路由到受限目录）
+            restricted_reason = get_restricted_language(filename)
+            if not restricted_reason and is_adult_content(filename):
+                restricted_reason = "Adult"
+            base_for_target = target_base_dir
+            if restricted_reason:
+                base_for_target = restricted_dir if restricted_dir else os.path.join(target_base_dir, "restricted")
+                logging.info(f"检测到限制内容: {restricted_reason}，使用限制目录: {base_for_target}")
+            target_dir = create_target_directory(base_for_target, filename_without_ext, year, year_group)
             if target_dir is None:
                 logging.error(f"跳过文件: {filename} (无法创建目标目录)")
                 failure_count += 1
@@ -1043,6 +1096,7 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='预览模式：只显示将要执行的操作，不实际移动或删除文件')
     parser.add_argument('--confirm-delete', action='store_true', help='删除目录前需要用户确认（与--remove-source一起使用）')
     parser.add_argument('--version', action='version', version=f'mv2moviedir {__version__}')
+    parser.add_argument('--restricted-dir', help='含受限语言（如Tagalog）的电影将移动到该目录下（默认使用目标目录中的restricted子目录）')
     
     args = parser.parse_args()
     
@@ -1056,6 +1110,7 @@ def main():
     override_files = not args.no_override  # 默认覆盖文件，--no-override时不覆盖
     dry_run = args.dry_run
     confirm_delete = args.confirm_delete
+    restricted_dir = args.restricted_dir
     
     # 检查源目录和目标目录是否存在
     if not os.path.isdir(source_dir):
@@ -1124,7 +1179,7 @@ def main():
     # 处理目录
     success_count, failure_count, skipped_count, removed_dirs_count = process_directory(
         source_dir, target_dir, resolution, codec, year_group, remove_source, 
-        require_ai_subtitle, override_files, dry_run
+        require_ai_subtitle, override_files, dry_run, restricted_dir
     )
     
     # 输出处理结果
