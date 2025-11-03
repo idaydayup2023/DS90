@@ -520,6 +520,10 @@ def can_remove_directory(directory):
         return False
     
     try:
+        # 若目录名本身包含电视剧标识（SxxEyy），则该目录不可删除
+        dirname = os.path.basename(directory)
+        if TV_SHOW_PATTERN.search(dirname):
+            return False
         # 获取目录中的所有内容
         items = os.listdir(directory)
         
