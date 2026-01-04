@@ -41,7 +41,7 @@ logging.basicConfig(
 )
 
 # 支持的视频和字幕文件扩展名
-VIDEO_EXTENSIONS = ('.mkv', '.mp4', '.avi')
+VIDEO_EXTENSIONS = ('.mkv', '.mp4', '.avi', '.m4v')
 SUBTITLE_EXTENSIONS = ('.srt', '.ass', '.sub')
 SUPPORTED_EXTENSIONS = VIDEO_EXTENSIONS + SUBTITLE_EXTENSIONS
 
