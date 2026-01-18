@@ -144,3 +144,24 @@
 - 翻译模型：自动解析为 `translategemma:latest`
 - 字幕条目：1335 条；1:1 对齐校验通过（每条均为“中文在上、英文在下”两行结构）
 - 抽检：未发现空中文行/空英文行/缺对齐条目
+
+---
+
+## 9) 你：编写 readme 文档和 changelog 文档
+
+我交付的结论/产物：
+
+- 已新增 README 文档：[README.md](file:///Users/daibo/DS90v2/README.md)
+  - 包含：用途与特性、环境依赖、配置项、运行方式（dry-run/写回/force）、输出文件约定、测试与常见问题
+- 已新增变更记录：[CHANGELOG.md](file:///Users/daibo/DS90v2/CHANGELOG.md)
+  - 按版本记录：新增能力、行为变化与关键修复
+
+---
+
+## 10) 你：提交到仓库，作为 version2 分支（与 v1 原理一致）
+
+我交付的结论/产物：
+
+- 已初始化 git 并完成首次提交（包含代码、PRD、对话记录、README/CHANGELOG、skills、测试）
+- 已添加忽略规则避免泄露敏感信息（默认忽略 `config.json`、缓存与状态库等）：[.gitignore](file:///Users/daibo/DS90v2/.gitignore)
+- 已推送到远端仓库并创建分支：`version2`
