@@ -1,0 +1,35 @@
+{
+  "ftp": {
+    "host": "127.0.0.1",
+    "port": 21,
+    "username": "user",
+    "password": "pass",
+    "root_path": "/Downloads",
+    "concurrency": 4
+  },
+  "paths": {
+    "local_cache_dir": "./.cache/srt_translate",
+    "state_db_path": "./.cache/srt_translate/state.sqlite3"
+  },
+  "video": {
+    "extensions": [".mkv", ".mp4", ".avi", ".mov", ".m4v", ".ts"],
+    "min_bytes": 52428800
+  },
+  "ollama": {
+    "base_url": "http://localhost:11434",
+    "model": "translategemma:latest",
+    "timeout_seconds": 120,
+    "temperature": 0.2
+  },
+  "whisper": {
+    "enabled": true,
+    "command": ["whisper"],
+    "language": "en",
+    "asr_workers": 1
+  },
+  "translation": {
+    "workers": 2,
+    "batch_size": 20,
+    "max_retries": 2
+  }
+}
