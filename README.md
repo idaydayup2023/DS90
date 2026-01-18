@@ -21,6 +21,7 @@
 ## 目录与文档
 
 - 需求与规范： [srt_translate.PRD](file:///Users/daibo/DS90v2/srt_translate.PRD)
+- 目录迁移工具 PRD： [dir_migrate.PRD](file:///Users/daibo/DS90v2/dir_migrate.PRD)
 - 对话记录（过程回顾）：[srt_translate.conversation.md](file:///Users/daibo/DS90v2/srt_translate.conversation.md)
 - Trae Skills（架构/提示词/MCP 契约）：
   - [.trae/skills/srt-translate-architecture/SKILL.md](file:///Users/daibo/DS90v2/.trae/skills/srt-translate-architecture/SKILL.md)
@@ -99,6 +100,23 @@ python3 -m unittest discover -v
 python3 demo_translate_local_srt.py --config config.json --in input.srt --out output.ai.srt
 ```
 
+## 目录迁移工具（dir_migrate）
+
+用于将源目录（常为 FTP `/Downloads`）下的视频与字幕按 LLM 识别结果规范化命名，并按分辨率/电影或剧集/年份分桶规则迁移到目标目录。
+
+- 统一配置：复用同一个 `config.json`（在 `dir_migrate` 节配置源/目标目录与规则），示例见 [config.example.json](file:///Users/daibo/DS90v2/config.example.json)
+- dry-run（输出迁移计划 JSON 行，不移动文件）：
+
+```bash
+python3 dir_migrate.py --config config.json --once --dry-run
+```
+
+- apply（执行移动/重命名）：
+
+```bash
+python3 dir_migrate.py --config config.json --once --apply
+```
+
 ## 常见问题
 
 ### 1) FTP 报 530 Login incorrect
@@ -120,4 +138,3 @@ python3 demo_translate_local_srt.py --config config.json --in input.srt --out ou
 
 - 不要把包含真实 FTP 密码的 `config.json` 提交到版本库
 - 避免在日志中输出敏感字段（本项目目前不打印密码）
-

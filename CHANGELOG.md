@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- 新增 `dir_migrate` 目录迁移工具：LLM 识别结构化字段，规范化文件名（`.` 分割），按电影/剧集与 1080p/2160p 规则规划目标目录并迁移（dry-run/apply、冲突策略）
+- 新增 `dir_migrate` 的 Agent/Orchestrator/MCP 分层实现（Scanner/Planner/Executor + MCP: storage/llm），架构风格与 `srt_translate` 对齐
+- 新增 `dir_migrate` 对话记录文档（独立沉淀）
+
+### Changed
+
+- 合并配置：支持用同一个 `config.json` 同时配置 `srt_translate` 与 `dir_migrate`，并复用顶层 `ftp/ollama/video/paths`
+- README 更新：新增 `dir_migrate` 使用说明，并改为统一配置文件
+
+### Fixed
+
+- `dir_migrate` CLI 异常处理：非 Ctrl-C 错误返回码 2，避免输出长堆栈影响使用
+
 ## [0.1.0] - 2026-01-18
 
 ### Added
@@ -24,4 +39,3 @@
 ### Fixed
 
 - Ctrl-C 中断时线程退出体验：捕获 `KeyboardInterrupt` 并返回码 130，避免线程 shutdown 堆栈影响使用
-

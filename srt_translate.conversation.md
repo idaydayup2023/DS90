@@ -165,3 +165,34 @@
 - 已初始化 git 并完成首次提交（包含代码、PRD、对话记录、README/CHANGELOG、skills、测试）
 - 已添加忽略规则避免泄露敏感信息（默认忽略 `config.json`、缓存与状态库等）：[.gitignore](file:///Users/daibo/DS90v2/.gitignore)
 - 已推送到远端仓库并创建分支：`version2`
+
+---
+
+## 11) 你：新增目录迁移工具 PRD（LLM 识别命名 + 规则归档）
+
+你提出的关键需求摘要：
+
+- 扫描指定目录（常为 FTP `/Downloads`）的视频与字幕文件
+- 使用 LLM 识别并输出规范化文件名字段（`.` 分割，目录名默认与文件名一致）
+- 电视剧目录需包含 `Sxx`；衍生剧（如 `NCIS: Miami`）归并到主系列（`NCIS`）
+- 归档规则：
+  - 1080p 电影 → `/X-Movie/<YearBucket>/...`（2024+ 按年，之前按年代）
+  - 4K/2160p 电影 → `/MOVIE/<DecadeBucket>/...`（始终按年代）
+  - 1080p 剧集 → `/X-TV/<Series>/Sxx/...`
+  - 4K 剧集 → `/TV/<Series>/Sxx/...`
+
+我交付的结论/产物：
+
+- 已新增 PRD：[dir_migrate.PRD](file:///Users/daibo/DS90v2/dir_migrate.PRD)
+
+---
+
+## 12) 你：开始编程（目录迁移工具）
+
+我交付的结论/产物：
+
+- 已实现 `dir_migrate` 工具（支持 FTP/本地两种存储，dry-run 输出计划，apply 执行迁移，含冲突策略）
+  - 入口脚本：[dir_migrate.py](file:///Users/daibo/DS90v2/dir_migrate.py)
+  - 包实现：[src/dir_migrate](file:///Users/daibo/DS90v2/src/dir_migrate)
+  - 示例配置（统一配置文件，含 `dir_migrate` 节）：[config.example.json](file:///Users/daibo/DS90v2/config.example.json)
+- 已添加单元测试并通过：`python3 -m unittest discover -v`
