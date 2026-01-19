@@ -20,6 +20,63 @@ class StorageMcp(Protocol):
 
 
 def _ftp_abs(cfg: FtpConnConfig, rel_path: str) -> str:
+    # If rel_path starts with /, assume it is already absolute relative to FTP root
+    # But wait, our 'rel_path' in the app is relative to 'cfg.root_path'.
+    # If cfg.root_path is /Downloads, and rel_path is /Sub/File.mkv, 
+    # we want /Downloads/Sub/File.mkv.
+    
+    # However, if rel_path is MEANT to be absolute (like /X-TV/...), 
+    # then we should NOT prepend root_path if it's already outside.
+    
+    # But 'StorageMcp' abstraction says:
+    # "walk_files returns paths relative to root"
+    # "rename takes src_rel and dst_rel"
+    
+    # The issue is that 'dst_dir_for' in planning.py returns an absolute path like "/X-TV/..."
+    # If we prepend "/Downloads" to "/X-TV/...", we get "/Downloads/X-TV/..." which is WRONG.
+    
+    # We need to detect if the path is intended to be absolute (target) or relative (source).
+    # But storage abstraction usually implies a chroot.
+    
+    # If the user wants to migrate FROM /Downloads TO /X-TV, 
+    # these are likely two different "Storage" instances if they were truly chrooted.
+    # But here we are using ONE FtpMcpStorage for both source and dest (or at least same connection config).
+    
+    # If we look at 'config.py', source and dest share the same FTP credentials usually.
+    # If dest.root_path is "/" (root of FTP), then "/X-TV" works fine.
+    # If source.root_path is "/Downloads", then "Sub/File.mkv" becomes "/Downloads/Sub/File.mkv".
+    
+    # Let's check how _ftp_abs is implemented:
+    # rel_path = rel_path.strip("/") -> "X-TV/..."
+    # root = cfg.root_path.rstrip("/") -> "/Downloads"
+    # join -> "/Downloads/X-TV/..." -> WRONG for destination.
+    
+    # FIX: We should trust the caller. 
+    # If the caller provides a path starting with "/", treat it as absolute on the FTP server?
+    # Or, we should enforce that 'StorageMcp' is strictly rooted.
+    
+    # In 'dir_migrate', we have 'source_storage' (root=/Downloads) and 'dest_storage' (root=/).
+    # If dest_storage is configured with root="/", then "/X-TV" becomes "X-TV" joined with "/", which is "/X-TV". Correct.
+    
+    # So the issue is likely that 'dest_storage' is being initialized with the WRONG root (maybe /Downloads?).
+    # Let's check 'config.py' again.
+    
+    # If config.json says:
+    # "dir_migrate": { "source": { "kind": "ftp", "ftp": { ... "root_path": "/Downloads" } }, 
+    #                  "dest": { "kind": "ftp", "ftp": { ... "root_path": "/" } } }
+    # Then it works.
+    
+    # But if the user reuses the "ftp" section from common config:
+    # "ftp": { "root_path": "/Downloads" }
+    # And "dest" falls back to this... then dest root is /Downloads.
+    
+    # We need to override root_path for destination if it's meant to be root-relative.
+    # But let's look at _ftp_abs logic again.
+    
+    # If we want to support absolute paths regardless of configured root:
+    if rel_path.startswith("/"):
+        return rel_path
+        
     rel_path = rel_path.strip("/")
     root = cfg.root_path.rstrip("/") or "/"
     return posixpath.join(root, rel_path) if rel_path else root
@@ -105,7 +162,10 @@ class FtpMcpStorage(StorageMcp):
 
     def exists(self, rel_path: str) -> bool:
         with FtpMcp(self._cfg.host, self._cfg.port, self._cfg.username, self._cfg.password, timeout=self._cfg.timeout_seconds) as ftp:
-            return ftp.exists(_ftp_abs(self._cfg, rel_path))
+            try:
+                return ftp.exists(_ftp_abs(self._cfg, rel_path))
+            except Exception:
+                return False
 
     def ensure_dir(self, rel_dir: str) -> None:
         with FtpMcp(self._cfg.host, self._cfg.port, self._cfg.username, self._cfg.password, timeout=self._cfg.timeout_seconds) as ftp:

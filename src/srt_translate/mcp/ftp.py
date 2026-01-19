@@ -103,7 +103,13 @@ class FtpMcp:
                 self.close()
                 self.connect()
 
-            names = self.ftp.nlst(path)
+            try:
+                names = self.ftp.nlst(path)
+            except Exception:
+                 # If nlst fails (e.g. 550 No such file), it might be because the dir doesn't exist.
+                 # Return empty list in that case.
+                 return []
+                 
             for p in names:
                 if p.endswith("/.") or p.endswith("/.."):
                     continue

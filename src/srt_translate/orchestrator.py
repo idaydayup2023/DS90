@@ -169,41 +169,49 @@ def _migrate_task(
     root_path: str,
     dry_run: bool,
 ) -> tuple[bool, str | None]:
-    # Convert absolute to relative
-    rel_video = video_remote_path
-    if rel_video.startswith(root_path):
-        rel_video = rel_video[len(root_path):].lstrip("/")
-    
-    # Find subtitles (re-scan directory using source_storage to be sure)
-    # dir_migrate scanner uses list_dir.
-    # We can just check the standard paths we know about.
-    paths = subtitle_remote_paths(video_remote_path)
-    # paths is {'ai': ..., 'eng': ...} absolute
-    
-    subs = []
-    for k, v in paths.items():
-        rel_sub = v
-        if rel_sub.startswith(root_path):
-            rel_sub = rel_sub[len(root_path):].lstrip("/")
-        if source_storage.exists(rel_sub):
-            subs.append(rel_sub)
-    
-    # Also check if there are other subs (like .chs.srt) that srt_translate didn't touch but exist?
-    # For now, let's rely on what srt_translate knows + what it generated.
-    # Ideally we should list the dir, but that's slow.
-    # Let's trust subtitle_remote_paths + existence check.
-    
-    item = SourceFiles(
-        video_path=rel_video,
-        subtitle_paths=tuple(sorted(subs)),
-        video_size_bytes=None, # We can pass None if we don't have it handy or query it
-    )
-    
-    plan = plan_one(migrate_cfg, llm, item)
-    success, result, error = apply_one(migrate_cfg, source_storage, dest_storage, plan)
-    if not success:
-        return False, f"{result}: {error}"
-    return True, None
+    try:
+        # Convert absolute to relative
+        rel_video = video_remote_path
+        if rel_video.startswith(root_path):
+            rel_video = rel_video[len(root_path):].lstrip("/")
+        
+        log.info("migrate task start video=%s rel=%s", video_remote_path, rel_video)
+
+        # Find subtitles (re-scan directory using source_storage to be sure)
+        # dir_migrate scanner uses list_dir.
+        # We can just check the standard paths we know about.
+        paths = subtitle_remote_paths(video_remote_path)
+        # paths is {'ai': ..., 'eng': ...} absolute
+        
+        subs = []
+        for k, v in paths.items():
+            rel_sub = v
+            if rel_sub.startswith(root_path):
+                rel_sub = rel_sub[len(root_path):].lstrip("/")
+            if source_storage.exists(rel_sub):
+                subs.append(rel_sub)
+        
+        log.info("migrate found subs video=%s subs=%s", video_remote_path, subs)
+
+        item = SourceFiles(
+            video_path=rel_video,
+            subtitle_paths=tuple(sorted(subs)),
+            video_size_bytes=None, # We can pass None if we don't have it handy or query it
+        )
+        
+        plan = plan_one(migrate_cfg, llm, item)
+        log.info("migrate planned video=%s dest=%s", video_remote_path, plan.dest_video_path)
+
+        success, result, error = apply_one(migrate_cfg, source_storage, dest_storage, plan)
+        if not success:
+            log.error("migrate apply failed video=%s error=%s", video_remote_path, error)
+            return False, f"{result}: {error}"
+        
+        log.info("migrate success video=%s", video_remote_path)
+        return True, None
+    except Exception as e:
+        log.exception("migrate task exception video=%s", video_remote_path)
+        return False, str(e)
 
 
 def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migrate_cfg=None) -> RunSummary:
@@ -240,7 +248,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
     source_storage = None
     dest_storage = None
     if migrate_cfg and plan_one:
-        migrate_pool = DaemonExecutor(max_workers=1, thread_name_prefix="migrate")
+        migrate_pool = DaemonExecutor(max_workers=3, thread_name_prefix="migrate")
         ollama_migrate = OllamaMcp(migrate_cfg.ollama.base_url, timeout_seconds=migrate_cfg.ollama.timeout_seconds)
         migrate_llm = LlmMcp(ollama_migrate, migrate_cfg.ollama.model, migrate_cfg.ollama.temperature)
         source_storage = build_storage_mcp(migrate_cfg.source)
@@ -277,6 +285,11 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
             dry_run
         )
         pending.add(fut)
+        # Ensure we wait if pending tasks grow too large, 
+        # BUT for migration we usually want it to just run in background.
+        # However, the main loop `while pending:` only waits when loop iterates.
+        # If we just add tasks here and return, they will run.
+        
         meta[fut] = ("migrate", video_id, remote_path, None)
 
     def _schedule_translation(video_id: str, remote_path: str, source: SubtitleSource) -> None:

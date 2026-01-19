@@ -40,7 +40,18 @@ def build_normalized_basename(fields: LlmFields, original_stem: str) -> str:
     audio_group = audio + (f"-{group}" if group else "")
 
     if fields.kind == "tv":
-        series = _dotify(fields.series or "") or _dotify(original_stem) or "Unknown.Series"
+        # User requirement: "获取衍生剧时同时要关注剧集目录名...比较保险的方法是将目录中标注的衍生剧名抄写到目标文件名上"
+        # If we have a series name, use it.
+        # If franchise_root is different from series name, we should prefer the specific series name in the filename.
+        
+        # Logic:
+        # If fields.series is present, use it.
+        # Else if fields.franchise_root is present, use it.
+        # Else fallback to original stem.
+        
+        series_name = fields.series or fields.franchise_root
+        
+        series = _dotify(series_name or "") or _dotify(original_stem) or "Unknown.Series"
         se = _season_episode(fields.season, fields.episode)
         ep_title = _dotify(fields.episode_title or "")
         parts = [series, se]
