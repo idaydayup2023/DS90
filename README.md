@@ -28,14 +28,31 @@
   - [.trae/skills/srt-translate-prompts/SKILL.md](file:///Users/daibo/DS90v2/.trae/skills/srt-translate-prompts/SKILL.md)
   - [.trae/skills/srt-translate-mcp-contracts/SKILL.md](file:///Users/daibo/DS90v2/.trae/skills/srt-translate-mcp-contracts/SKILL.md)
 
-## 运行环境
+## 运行环境与依赖
 
-- macOS / Linux
-- Python 3.11+（示例使用 `python3`）
-- FTP 服务器：支持 `MLSD` 更佳（无 `MLSD` 时会降级为目录/文件猜测）
-- Ollama：本地服务可访问（默认 `http://localhost:11434`）
-- ffprobe/ffmpeg：用于内置字幕探测与提取
-- whisper CLI：用于 ASR 兜底（可配置关闭）
+### 1. 基础环境
+*   **操作系统**: macOS / Linux (推荐), Windows (理论支持但未验证)
+*   **Python**: >= 3.11 (本项目完全使用标准库开发，无第三方 pip 依赖)
+
+### 2. 外部程序依赖
+本项目依赖以下外部工具，请确保它们在系统 `PATH` 中可用：
+
+*   **ffmpeg / ffprobe**: 用于提取视频内置字幕和探测视频信息。
+    *   *安装示例 (macOS)*: `brew install ffmpeg`
+    *   *安装示例 (Ubuntu)*: `sudo apt install ffmpeg`
+*   **ollama**: 用于运行 LLM 进行字幕翻译和文件名解析。
+    *   *官网*: https://ollama.com/
+    *   *服务*: 需启动服务 (`ollama serve`) 并确保 API 端口 (默认 11434) 可访问。
+*   **whisper** (可选): OpenAI 的语音转文字工具，用于无字幕视频的兜底 ASR。
+    *   *安装*: `pip install -U openai-whisper`
+    *   *注意*: 如果未安装，ASR 兜底功能将不可用，但不影响其他功能。
+
+### 3. 模型准备
+请在 Ollama 中拉取适合的模型：
+*   **翻译模型**: 推荐 `gemma:2b` 或专门微调过的 `translategemma`。
+    ```bash
+    ollama pull gemma:2b
+    ```
 
 ## 快速开始
 
@@ -77,6 +94,80 @@ python3 srt_translate.py --config config.json --once
 ```bash
 python3 srt_translate.py --config config.json --once --force
 ```
+
+## 命令详解
+
+### 1. 字幕翻译工具 (`srt_translate.py`)
+
+核心工具，负责扫描 FTP、提取字幕、调用 LLM 翻译并回传。
+
+**基本用法**
+
+```bash
+python3 srt_translate.py --config <CONFIG_PATH> [OPTIONS]
+```
+
+**参数说明**
+
+| 参数 | 必选 | 说明 |
+| :--- | :--- | :--- |
+| `--config CONFIG` | **是** | 指定配置文件路径（如 `config.json`）。 |
+| `--once` | 否 | **单次运行模式**。扫描一遍目录队列后即退出。如果不加此参数（且未实现守护进程模式前），行为可能未定义或默认为单次，但建议显式加上。 |
+| `--dry-run` | 否 | **空跑模式**。执行完整的扫描、提取、翻译流程，但**不上传/写入**生成的 `.ai.srt` 文件。用于验证配置和翻译质量，而不污染线上文件。 |
+| `--force` | 否 | **强制覆盖**。默认情况下，如果目标目录已存在 `.ai.srt` 文件，会跳过翻译。加上此参数将强制重新翻译并覆盖原有字幕。 |
+
+**使用示例**
+
+*   **测试配置与翻译效果（安全模式）**：
+    ```bash
+    python3 srt_translate.py --config config.json --once --dry-run
+    ```
+*   **生产环境运行（自动跳过已翻译文件）**：
+    ```bash
+    python3 srt_translate.py --config config.json --once
+    ```
+*   **修复/重译特定批次（强制覆盖）**：
+    ```bash
+    python3 srt_translate.py --config config.json --once --force
+    ```
+
+### 2. 目录迁移工具 (`dir_migrate.py`)
+
+辅助工具，用于整理下载目录，识别影视信息并按规则迁移到标准库。
+
+**基本用法**
+
+```bash
+python3 dir_migrate.py --config <CONFIG_PATH> [OPTIONS]
+```
+
+**参数说明**
+
+| 参数 | 必选 | 说明 |
+| :--- | :--- | :--- |
+| `--config CONFIG` | **是** | 指定配置文件路径。复用 `srt_translate` 的配置文件，读取其中的 `dir_migrate` 字段。 |
+| `--once` | 否 | **单次运行模式**。执行一次扫描和迁移计划后退出。 |
+| `--dry-run` | 否 | **计划预览模式**。扫描并计算迁移计划，以 JSON Lines 格式打印到控制台，但**绝不移动**任何文件。强烈建议在正式执行前使用。 |
+| `--apply` | 否 | **执行模式**。只有显式指定此参数，工具才会真正执行文件移动/重命名操作。 |
+| `--limit LIMIT` | 否 | **数量限制**。限制单次处理的视频数量（整数）。用于小规模验证规则是否正确。 |
+
+**使用示例**
+
+*   **预览迁移计划（不执行移动）**：
+    ```bash
+    python3 dir_migrate.py --config config.json --once --dry-run
+    ```
+    *输出示例：* `{"src": "/dl/movie.mkv", "dst": "/movies/Movie (2024)/Movie.mkv", "reason": "match"}`
+
+*   **小规模验证（只处理前 5 个视频）**：
+    ```bash
+    python3 dir_migrate.py --config config.json --once --apply --limit 5
+    ```
+
+*   **正式执行全量迁移**：
+    ```bash
+    python3 dir_migrate.py --config config.json --once --apply
+    ```
 
 ## 输出文件约定
 
