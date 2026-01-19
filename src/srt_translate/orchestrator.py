@@ -248,7 +248,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
     source_storage = None
     dest_storage = None
     if migrate_cfg and plan_one:
-        migrate_pool = DaemonExecutor(max_workers=3, thread_name_prefix="migrate")
+        migrate_pool = DaemonExecutor(max_workers=2, thread_name_prefix="migrate")
         ollama_migrate = OllamaMcp(migrate_cfg.ollama.base_url, timeout_seconds=migrate_cfg.ollama.timeout_seconds)
         migrate_llm = LlmMcp(ollama_migrate, migrate_cfg.ollama.model, migrate_cfg.ollama.temperature)
         source_storage = build_storage_mcp(migrate_cfg.source)
