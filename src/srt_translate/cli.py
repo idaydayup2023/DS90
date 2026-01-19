@@ -9,6 +9,7 @@ sys.dont_write_bytecode = True
 from .config import ensure_dirs, load_config
 from .orchestrator import run_once
 from .store import StateStore
+import dir_migrate.config as dm_config  # Import dir_migrate config
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,11 +24,25 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     cfg = load_config(args.config)
+    
+    # Load dir_migrate config
+    try:
+        migrate_cfg = dm_config.load_config(args.config)
+        # Sync execution flags
+        if args.dry_run:
+            migrate_cfg = migrate_cfg.with_execution(dry_run=True, apply=False)
+        else:
+            # srt_translate default is to apply if not dry-run
+            migrate_cfg = migrate_cfg.with_execution(dry_run=False, apply=True)
+    except Exception as e:
+        print(f"Warning: failed to load dir_migrate config: {e}", file=sys.stderr)
+        migrate_cfg = None
+
     ensure_dirs(cfg)
 
     try:
         with StateStore(cfg.paths.state_db_path) as store:
-            summary = run_once(cfg, store=store, force=args.force, dry_run=args.dry_run)
+            summary = run_once(cfg, store=store, force=args.force, dry_run=args.dry_run, migrate_cfg=migrate_cfg)
             if summary.failed:
                 return 2
     except KeyboardInterrupt:

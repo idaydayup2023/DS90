@@ -45,6 +45,28 @@ def scan_once(cfg: AppConfig, source_storage: StorageMcp) -> ScanResult:
         
         # Ensure the video has a corresponding .ai.srt subtitle file
         if not any(s.endswith(".ai.srt") for s in subs):
+            # Special check for TV shows: if any episode in the same directory has an .ai.srt, 
+            # and we are configured to allow partial season migration (implicit in logic), 
+            # we might want to allow it?
+            # BUT, user requirement says: "目录中我看到已经有翻译好的剧集字幕...程序逻辑是要完整整季翻译完成才迁移吗"
+            # It seems the user WANTS to migrate even if only some episodes are done.
+            # However, the current logic is strictly per-video:
+            # "If THIS video does not have .ai.srt, skip THIS video."
+            
+            # If the user sees .ai.srt files in the directory but migration is not happening for THOSE specific files,
+            # then those specific files must have the .ai.srt detected.
+            
+            # Wait, if the user sees .ai.srt for *some* episodes, but expects *all* to migrate?
+            # Or maybe the user sees .ai.srt for Episode 1, but Episode 1 is NOT migrating?
+            
+            # Re-reading user input: "已翻译好的剧集字幕，虽然没有完整翻译这一季的所有字幕，程序逻辑是要完整整季翻译完成才迁移吗"
+            # User is asking if PARTIAL season migration is supported.
+            # My logic below supports partial migration (it checks per video).
+            # So if Ep01 has .ai.srt, it SHOULD migrate.
+            # If Ep01 is NOT migrating, then:
+            # 1. The .ai.srt is not being detected (maybe naming convention issue?)
+            # 2. Or the file system listing is stale/incomplete.
+            
             continue
 
         out.append(SourceFiles(video_path=rel_path, subtitle_paths=tuple(sorted(subs)), video_size_bytes=size))

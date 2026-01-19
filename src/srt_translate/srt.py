@@ -23,42 +23,62 @@ def _to_ms(h: int, m: int, s: int, ms: int) -> int:
 
 def parse_srt(content: str) -> list[SrtCue]:
     content = content.replace("\r\n", "\n").replace("\r", "\n")
+    # Use simpler split logic to avoid splitting valid blocks accidentally
+    # but still handle multi-newlines.
     blocks = [b for b in re.split(r"\n{2,}", content) if b.strip()]
     cues: list[SrtCue] = []
+    
     for block in blocks:
         lines = [ln.rstrip("\n") for ln in block.split("\n") if ln.strip() != ""]
-        if len(lines) < 2:
+        if not lines:
             continue
-        idx_line = lines[0].strip()
-        time_line = lines[1].strip()
-        text_lines = lines[2:] if len(lines) > 2 else []
-
-        index = None
+            
         try:
-            index = int(idx_line)
-        except Exception:
-            time_line = idx_line
-            text_lines = lines[1:]
+            # Flexible parsing strategy
+            idx_line = lines[0].strip()
+            
+            # Case 1: Standard SRT (Index -> Time -> Text)
+            if idx_line.isdigit() and len(lines) >= 2 and "-->" in lines[1]:
+                index = int(idx_line)
+                time_line = lines[1].strip()
+                text_lines = lines[2:]
+            
+            # Case 2: Missing Index (Time -> Text)
+            elif "-->" in idx_line:
+                index = len(cues) + 1
+                time_line = idx_line
+                text_lines = lines[1:]
+                
+            # Case 3: Malformed/Garbage (e.g. just a number '1' with no timestamp)
+            else:
+                # Log or ignore? For robustness, we ignore blocks that don't look like cues
+                continue
 
-        m = _TIME_RE.match(time_line)
-        if not m:
-            raise ValueError(f"invalid srt time line: {time_line}")
-        start_ms = _to_ms(
-            int(m.group("sh")),
-            int(m.group("sm")),
-            int(m.group("ss")),
-            int(m.group("sms")),
-        )
-        end_ms = _to_ms(
-            int(m.group("eh")),
-            int(m.group("em")),
-            int(m.group("es")),
-            int(m.group("ems")),
-        )
-        if index is None:
-            index = len(cues) + 1
-        text = "\n".join(text_lines).strip()
-        cues.append(SrtCue(index=index, start_ms=start_ms, end_ms=end_ms, text=text))
+            m = _TIME_RE.match(time_line)
+            if not m:
+                # If regex fails, skip this block instead of crashing entire process
+                continue
+                
+            start_ms = _to_ms(
+                int(m.group("sh")),
+                int(m.group("sm")),
+                int(m.group("ss")),
+                int(m.group("sms")),
+            )
+            end_ms = _to_ms(
+                int(m.group("eh")),
+                int(m.group("em")),
+                int(m.group("es")),
+                int(m.group("ems")),
+            )
+            
+            text = "\n".join(text_lines).strip()
+            cues.append(SrtCue(index=index, start_ms=start_ms, end_ms=end_ms, text=text))
+            
+        except Exception:
+            # Swallow parsing errors for individual blocks to keep the process alive
+            continue
+
     cues.sort(key=lambda c: (c.start_ms, c.end_ms, c.index))
     return cues
 

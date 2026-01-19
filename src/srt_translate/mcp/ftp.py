@@ -35,11 +35,16 @@ class FtpMcp:
 
     def connect(self) -> None:
         if self._ftp is not None:
-            return
+            try:
+                self._ftp.voidcmd("NOOP")
+                return
+            except Exception:
+                self.close()
+        
         ftp = ftplib.FTP()
         ftp.connect(self._host, self._port, timeout=self._timeout)
-        ftp.login(self._username, self._password)
         ftp.encoding = "utf-8"
+        ftp.login(self._username, self._password)
         self._ftp = ftp
 
     def close(self) -> None:
@@ -79,18 +84,25 @@ class FtpMcp:
                     continue
                 p = posixpath.join(path, name)
                 t = facts.get("type", "file")
-                size = facts.get("size")
+                size_str = facts.get("size")
                 mtime = facts.get("modify")
                 out.append(
                     FtpEntry(
                         path=p,
                         type=t,
-                        size=int(size) if size is not None else None,
+                        size=int(size_str) if size_str is not None else None,
                         mtime=int(time.mktime(time.strptime(mtime, "%Y%m%d%H%M%S"))) if mtime else None,
                     )
                 )
             return out
         except Exception:
+            # Retry nlst once if connection is broken
+            try:
+                self.ftp.voidcmd("NOOP")
+            except Exception:
+                self.close()
+                self.connect()
+
             names = self.ftp.nlst(path)
             for p in names:
                 if p.endswith("/.") or p.endswith("/.."):
@@ -172,16 +184,25 @@ class FtpMcp:
         except Exception:
             pass
 
+    def rename(self, src: str, dst: str) -> None:
+        try:
+            self.ftp.rename(src, dst)
+        except Exception:
+            # Reconnect and retry once if broken pipe
+            self.close()
+            self.connect()
+            self.ftp.rename(src, dst)
+
     def atomic_write_from_bytes(self, remote_path: str, data: bytes) -> None:
         tmp = f"{remote_path}.tmp.{os.getpid()}.{int(time.time())}"
         self.ensure_dir(posixpath.dirname(remote_path))
         from io import BytesIO
 
-        bio = BytesIO(data)
-        self.ftp.storbinary(f"STOR {tmp}", bio)
+        with BytesIO(data) as bio:
+            self.ftp.storbinary(f"STOR {tmp}", bio)
         if self.exists(remote_path):
             self.delete(remote_path)
-        self.ftp.rename(tmp, remote_path)
+        self.rename(tmp, remote_path)
 
     def atomic_write_from_file(self, remote_path: str, local_path: Path) -> None:
         tmp = f"{remote_path}.tmp.{os.getpid()}.{int(time.time())}"
@@ -189,5 +210,5 @@ class FtpMcp:
         self.upload(local_path, tmp)
         if self.exists(remote_path):
             self.delete(remote_path)
-        self.ftp.rename(tmp, remote_path)
+        self.rename(tmp, remote_path)
 

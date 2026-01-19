@@ -120,7 +120,7 @@ class FtpMcpStorage(StorageMcp):
                 if not overwrite:
                     raise FileExistsError(dst_abs)
                 ftp.delete(dst_abs)
-            ftp.ftp.rename(src_abs, dst_abs)
+            ftp.rename(src_abs, dst_abs)
 
 
 def build_storage_mcp(cfg: StorageConfig) -> StorageMcp:

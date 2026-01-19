@@ -1,0 +1,1761 @@
+========================================================
+[2026-01-19 08:39:32] 任务开始
+[2026-01-19 08:39:32] 开始执行: 目录迁移 (dir_migrate)
+2026-01-19 08:39:32,715 INFO dir_migrate.orchestrator scan videos=1
+dir_migrate failed: 550 /X-Movie/UnknownYear/Der.Kaplan.The.Tank.UnknownYear.1080p.mkv.AV1.unknown-4KDS: No such file or directory.
+[2026-01-19 08:39:35] 目录迁移异常 (Exit Code: 2)
+[2026-01-19 08:39:35] 开始执行: 字幕翻译 (srt_translate)
+2026-01-19 08:39:35,955 INFO srt_translate.orchestrator run_once start force=False dry_run=False
+2026-01-19 08:39:35,955 INFO srt_translate.orchestrator scan ftp_root=/downloads_1 extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+2026-01-19 08:39:36,096 INFO srt_translate.orchestrator run_once summary videos=1 skipped=1 done=0 failed=0 elapsed=0.14s
+[2026-01-19 08:39:36] 字幕翻译完成
+[2026-01-19 08:39:36] 所有任务结束
+========================================================
+========================================================
+[2026-01-19 09:00:00] 任务开始
+[2026-01-19 09:00:00] 开始执行: 字幕翻译 (srt_translate)
+2026-01-19 09:00:00,703 INFO srt_translate.orchestrator run_once start force=False dry_run=False
+2026-01-19 09:00:00,703 INFO srt_translate.orchestrator scan ftp_root=/downloads_1 extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+2026-01-19 09:00:00,856 INFO srt_translate.orchestrator run_once summary videos=1 skipped=1 done=0 failed=0 elapsed=0.15s
+[2026-01-19 09:00:00] 字幕翻译完成
+[2026-01-19 09:00:00] 开始执行: 目录迁移 (dir_migrate)
+2026-01-19 09:00:01,361 INFO dir_migrate.orchestrator scan videos=1
+dir_migrate failed: 550 /X-Movie/UnknownYear/Der.Kaplan.The.Tank.UnknownYear.1080p.mkv.AV1.unknown-4KDS: No such file or directory.
+[2026-01-19 09:00:04] 目录迁移异常 (Exit Code: 2)
+[2026-01-19 09:00:04] 所有任务结束
+========================================================
+========================================================
+[2026-01-19 09:10:01] 任务开始
+[2026-01-19 09:10:01] 开始执行: 字幕翻译 (srt_translate)
+2026-01-19 09:10:01,250 INFO srt_translate.orchestrator run_once start force=False dry_run=False
+2026-01-19 09:10:01,250 INFO srt_translate.orchestrator scan ftp_root=/downloads_1 extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+2026-01-19 09:10:01,415 INFO srt_translate.orchestrator run_once summary videos=1 skipped=1 done=0 failed=0 elapsed=0.17s
+[2026-01-19 09:10:01] 字幕翻译完成
+[2026-01-19 09:10:01] 开始执行: 目录迁移 (dir_migrate)
+2026-01-19 09:10:01,968 INFO dir_migrate.orchestrator scan videos=1
+dir_migrate failed: 550 /X-Movie/UnknownYear/Der.Kaplan.The.Tank.UnknownYear.1080p.mkv.AV1.unknown-4KDS: No such file or directory.
+[2026-01-19 09:10:05] 目录迁移异常 (Exit Code: 2)
+[2026-01-19 09:10:05] 所有任务结束
+========================================================
+========================================================
+[2026-01-19 09:20:00] 任务开始
+[2026-01-19 09:20:00] 开始执行: 字幕翻译 (srt_translate)
+2026-01-19 09:20:00,912 INFO srt_translate.orchestrator run_once start force=False dry_run=False
+2026-01-19 09:20:00,912 INFO srt_translate.orchestrator scan ftp_root=/downloads_1 extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+2026-01-19 09:20:01,135 INFO srt_translate.orchestrator run_once summary videos=1 skipped=1 done=0 failed=0 elapsed=0.22s
+[2026-01-19 09:20:01] 字幕翻译完成
+[2026-01-19 09:20:01] 开始执行: 目录迁移 (dir_migrate)
+2026-01-19 09:20:01,758 INFO dir_migrate.orchestrator scan videos=1
+dir_migrate failed: 550 /X-Movie/UnknownYear/Der.Kaplan.The.Tank.UnknownYear.1080p.mkv.AV1.unknown-4K: No such file or directory.
+[2026-01-19 09:20:04] 目录迁移异常 (Exit Code: 2)
+[2026-01-19 09:20:04] 所有任务结束
+========================================================
+========================================================
+[2026-01-19 09:30:00] 任务开始
+[2026-01-19 09:30:00] 开始执行: 字幕翻译 (srt_translate)
+2026-01-19 09:30:00,584 INFO srt_translate.orchestrator run_once start force=False dry_run=False
+2026-01-19 09:30:00,584 INFO srt_translate.orchestrator scan ftp_root=/Downloads extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+2026-01-19 09:31:12,983 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E01.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:31:13,100 INFO srt_translate.translation translate start model=translategemma:latest cues=545 batch_size=20 batches=28
+2026-01-19 09:31:19,685 INFO srt_translate.translation translate progress 20/545
+2026-01-19 09:31:24,989 INFO srt_translate.translation translate progress 40/545
+2026-01-19 09:31:30,389 INFO srt_translate.translation translate progress 60/545
+2026-01-19 09:31:35,420 INFO srt_translate.translation translate progress 80/545
+2026-01-19 09:31:40,953 INFO srt_translate.translation translate progress 100/545
+2026-01-19 09:32:02,839 INFO srt_translate.translation translate progress 120/545 (fallback per-line)
+2026-01-19 09:32:08,922 INFO srt_translate.translation translate progress 140/545
+2026-01-19 09:32:24,541 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E02.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:32:24,642 INFO srt_translate.translation translate start model=translategemma:latest cues=549 batch_size=20 batches=28
+2026-01-19 09:32:30,198 INFO srt_translate.translation translate progress 20/549
+2026-01-19 09:32:35,702 INFO srt_translate.translation translate progress 40/549
+2026-01-19 09:32:41,235 INFO srt_translate.translation translate progress 60/549
+2026-01-19 09:32:46,723 INFO srt_translate.translation translate progress 80/549
+2026-01-19 09:32:52,467 INFO srt_translate.translation translate progress 100/549
+2026-01-19 09:33:03,496 INFO srt_translate.translation translate progress 120/549
+2026-01-19 09:33:09,372 INFO srt_translate.translation translate progress 140/549
+2026-01-19 09:33:22,536 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E03.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:33:28,562 INFO srt_translate.translation translate progress 160/545 (fallback per-line)
+2026-01-19 09:33:48,043 INFO srt_translate.translation translate progress 160/549 (fallback per-line)
+2026-01-19 09:33:53,728 INFO srt_translate.translation translate progress 180/549
+2026-01-19 09:33:59,543 INFO srt_translate.translation translate progress 200/549
+2026-01-19 09:34:04,951 INFO srt_translate.translation translate progress 220/549
+2026-01-19 09:34:10,502 INFO srt_translate.translation translate progress 240/549
+2026-01-19 09:34:24,588 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E04.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:34:28,818 INFO srt_translate.translation translate progress 180/545 (fallback per-line)
+2026-01-19 09:34:35,275 INFO srt_translate.translation translate progress 200/545
+2026-01-19 09:34:41,313 INFO srt_translate.translation translate progress 220/545
+2026-01-19 09:34:47,108 INFO srt_translate.translation translate progress 240/545
+2026-01-19 09:34:53,159 INFO srt_translate.translation translate progress 260/545
+2026-01-19 09:35:08,933 INFO srt_translate.translation translate progress 260/549 (fallback per-line)
+2026-01-19 09:35:14,940 INFO srt_translate.translation translate progress 280/549
+2026-01-19 09:35:21,009 INFO srt_translate.translation translate progress 300/549
+2026-01-19 09:35:26,923 INFO srt_translate.translation translate progress 320/549
+2026-01-19 09:35:29,856 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E05.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:35:33,072 INFO srt_translate.translation translate progress 340/549
+2026-01-19 09:35:39,163 INFO srt_translate.translation translate progress 360/549
+2026-01-19 09:35:45,447 INFO srt_translate.translation translate progress 380/549
+2026-01-19 09:35:51,305 INFO srt_translate.translation translate progress 400/549
+2026-01-19 09:35:57,909 INFO srt_translate.translation translate progress 420/549
+2026-01-19 09:36:03,870 INFO srt_translate.translation translate progress 440/549
+2026-01-19 09:36:10,011 INFO srt_translate.translation translate progress 460/549
+2026-01-19 09:36:22,529 INFO srt_translate.translation translate progress 280/545 (fallback per-line)
+2026-01-19 09:36:33,896 INFO srt_translate.translation translate progress 300/545
+2026-01-19 09:36:39,650 INFO srt_translate.translation translate progress 320/545
+2026-01-19 09:36:40,537 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E06.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:36:45,538 INFO srt_translate.translation translate progress 340/545
+2026-01-19 09:36:51,841 INFO srt_translate.translation translate progress 360/545
+2026-01-19 09:36:57,818 INFO srt_translate.translation translate progress 380/545
+2026-01-19 09:37:04,008 INFO srt_translate.translation translate progress 400/545
+2026-01-19 09:37:10,003 INFO srt_translate.translation translate progress 420/545
+2026-01-19 09:37:16,456 INFO srt_translate.translation translate progress 440/545
+2026-01-19 09:37:22,640 INFO srt_translate.translation translate progress 460/545
+2026-01-19 09:37:28,645 INFO srt_translate.translation translate progress 480/545
+2026-01-19 09:37:34,714 INFO srt_translate.translation translate progress 500/545
+2026-01-19 09:37:40,729 INFO srt_translate.translation translate progress 520/545
+2026-01-19 09:37:42,489 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E07.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:37:47,146 INFO srt_translate.translation translate progress 540/545
+2026-01-19 09:37:48,785 INFO srt_translate.translation translate progress 545/545
+2026-01-19 09:37:48,790 INFO srt_translate.translation translate done failed=0
+2026-01-19 09:37:49,060 INFO srt_translate.translation translate start model=translategemma:latest cues=561 batch_size=20 batches=29
+2026-01-19 09:37:54,559 INFO srt_translate.translation translate progress 20/561
+2026-01-19 09:38:13,096 INFO srt_translate.translation translate progress 480/549 (fallback per-line)
+2026-01-19 09:38:19,656 INFO srt_translate.translation translate progress 500/549
+2026-01-19 09:38:25,984 INFO srt_translate.translation translate progress 520/549
+2026-01-19 09:38:31,934 INFO srt_translate.translation translate progress 540/549
+2026-01-19 09:38:40,112 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E08.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:38:43,141 INFO srt_translate.translation translate progress 549/549 (fallback per-line)
+2026-01-19 09:38:43,147 INFO srt_translate.translation translate done failed=0
+2026-01-19 09:38:43,404 INFO srt_translate.translation translate start model=translategemma:latest cues=566 batch_size=20 batches=29
+2026-01-19 09:38:48,844 INFO srt_translate.translation translate progress 20/566
+2026-01-19 09:38:49,160 INFO srt_translate.translation translate progress 40/561 (fallback per-line)
+2026-01-19 09:38:54,398 INFO srt_translate.translation translate progress 40/566
+2026-01-19 09:39:00,753 INFO srt_translate.translation translate progress 60/561
+2026-01-19 09:39:06,197 INFO srt_translate.translation translate progress 60/566
+2026-01-19 09:39:11,571 INFO srt_translate.translation translate progress 80/561
+2026-01-19 09:39:17,032 INFO srt_translate.translation translate progress 80/566
+2026-01-19 09:39:22,838 INFO srt_translate.translation translate progress 100/561
+2026-01-19 09:39:28,379 INFO srt_translate.translation translate progress 100/566
+2026-01-19 09:39:34,965 INFO srt_translate.translation translate progress 120/561
+2026-01-19 09:39:37,869 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E09.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:39:41,054 INFO srt_translate.translation translate progress 120/566
+2026-01-19 09:39:46,794 INFO srt_translate.translation translate progress 140/561
+2026-01-19 09:39:58,191 INFO srt_translate.translation translate progress 160/561
+========================================================
+[2026-01-19 09:40:00] 任务开始
+[2026-01-19 09:40:00] 开始执行: 字幕翻译 (srt_translate)
+2026-01-19 09:40:01,051 INFO srt_translate.orchestrator run_once start force=False dry_run=False
+2026-01-19 09:40:01,051 INFO srt_translate.orchestrator scan ftp_root=/Downloads extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+2026-01-19 09:40:02,428 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E03.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:40:02,544 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E04.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:40:02,559 INFO srt_translate.translation translate start model=translategemma:latest cues=561 batch_size=20 batches=29
+2026-01-19 09:40:02,655 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E05.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:40:02,669 INFO srt_translate.translation translate start model=translategemma:latest cues=566 batch_size=20 batches=29
+2026-01-19 09:40:02,754 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E06.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:40:10,301 INFO srt_translate.translation translate progress 180/561
+2026-01-19 09:40:15,561 INFO srt_translate.translation translate progress 20/561
+2026-01-19 09:40:20,569 INFO srt_translate.translation translate progress 20/566
+2026-01-19 09:40:40,474 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E10.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:40:43,418 INFO srt_translate.translation translate progress 40/566
+2026-01-19 09:40:50,017 INFO srt_translate.translation translate progress 200/561
+2026-01-19 09:41:06,873 INFO srt_translate.translation translate progress 220/561
+2026-01-19 09:41:23,877 INFO srt_translate.translation translate progress 240/561
+2026-01-19 09:41:29,639 INFO srt_translate.translation translate progress 60/566
+2026-01-19 09:41:37,937 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E11.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:41:42,199 INFO srt_translate.translation translate progress 80/566
+2026-01-19 09:41:54,752 INFO srt_translate.translation translate progress 100/566
+2026-01-19 09:42:07,560 INFO srt_translate.translation translate progress 120/566
+2026-01-19 09:42:34,858 INFO srt_translate.translation translate progress 140/566 (fallback per-line)
+2026-01-19 09:42:38,439 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E12.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:42:41,494 INFO srt_translate.translation translate progress 160/566
+2026-01-19 09:42:47,881 INFO srt_translate.translation translate progress 180/566
+2026-01-19 09:42:48,424 INFO srt_translate.translation translate progress 40/561 (fallback per-line)
+2026-01-19 09:42:54,033 INFO srt_translate.translation translate progress 200/566
+2026-01-19 09:43:00,547 INFO srt_translate.translation translate progress 60/561
+2026-01-19 09:43:06,148 INFO srt_translate.translation translate progress 220/566
+2026-01-19 09:43:11,821 INFO srt_translate.translation translate progress 80/561
+2026-01-19 09:43:17,539 INFO srt_translate.translation translate progress 240/566
+2026-01-19 09:43:29,206 INFO srt_translate.translation translate progress 260/566
+2026-01-19 09:43:29,598 INFO srt_translate.translation translate progress 260/561 (fallback per-line)
+2026-01-19 09:43:35,622 INFO srt_translate.translation translate progress 100/561
+2026-01-19 09:43:41,910 INFO srt_translate.translation translate progress 280/566
+2026-01-19 09:43:43,265 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E13.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:43:43,347 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E01.The.Shores.of.the.Cosmic.Ocean.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+Traceback (most recent call last):
+  File "/Users/daibo/db90/srt_translate.py", line 12, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/daibo/db90/src/srt_translate/cli.py", line 30, in main
+    summary = run_once(cfg, store=store, force=args.force, dry_run=args.dry_run)
+  File "/Users/daibo/db90/src/srt_translate/orchestrator.py", line 234, in run_once
+    source = choose_source_subtitle(
+        ftp=ftp,
+    ...<4 lines>...
+        dry_run=dry_run,
+    )
+  File "/Users/daibo/db90/src/srt_translate/subtitle_acquisition.py", line 105, in choose_source_subtitle
+    q = _score_remote_srt(ftp, rp, lp)
+  File "/Users/daibo/db90/src/srt_translate/subtitle_acquisition.py", line 78, in _score_remote_srt
+    return score_srt_content(content)
+  File "/Users/daibo/db90/src/srt_translate/subtitle_quality.py", line 23, in score_srt_content
+    cues = parse_srt(content)
+  File "/Users/daibo/db90/src/srt_translate/srt.py", line 45, in parse_srt
+    raise ValueError(f"invalid srt time line: {time_line}")
+ValueError: invalid srt time line: ﻿1
+[2026-01-19 09:43:43] 开始执行: 字幕翻译 (srt_translate)
+2026-01-19 09:43:43,632 INFO srt_translate.orchestrator run_once start force=False dry_run=False
+2026-01-19 09:43:43,632 INFO srt_translate.orchestrator scan ftp_root=/Downloads extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+2026-01-19 09:43:44,040 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E01.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:43:44,117 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E02.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:43:44,151 INFO srt_translate.translation translate start model=translategemma:latest cues=545 batch_size=20 batches=28
+2026-01-19 09:43:44,198 INFO srt_translate.translation translate start model=translategemma:latest cues=549 batch_size=20 batches=28
+2026-01-19 09:43:44,206 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E03.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:43:44,265 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E04.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:43:50,035 INFO srt_translate.translation translate progress 120/561
+2026-01-19 09:43:55,596 INFO srt_translate.translation translate progress 20/545
+2026-01-19 09:44:01,266 INFO srt_translate.translation translate progress 20/549
+2026-01-19 09:44:07,151 INFO srt_translate.translation translate progress 140/561
+2026-01-19 09:44:12,767 INFO srt_translate.translation translate progress 40/545
+2026-01-19 09:44:18,257 INFO srt_translate.translation translate progress 40/549
+2026-01-19 09:44:23,949 INFO srt_translate.translation translate progress 160/561
+2026-01-19 09:44:24,253 INFO srt_translate.translation translate progress 140/566 (fallback per-line)
+2026-01-19 09:44:29,858 INFO srt_translate.translation translate progress 60/545
+2026-01-19 09:44:35,386 INFO srt_translate.translation translate progress 60/549
+2026-01-19 09:44:41,699 INFO srt_translate.translation translate progress 180/561
+2026-01-19 09:44:47,773 INFO srt_translate.translation translate progress 160/566
+2026-01-19 09:44:52,837 INFO srt_translate.translation translate progress 80/545
+2026-01-19 09:44:58,199 INFO srt_translate.translation translate progress 80/549
+2026-01-19 09:45:10,126 INFO srt_translate.translation translate progress 180/566
+2026-01-19 09:45:15,652 INFO srt_translate.translation translate progress 100/545
+2026-01-19 09:45:21,329 INFO srt_translate.translation translate progress 100/549
+2026-01-19 09:45:32,826 INFO srt_translate.translation translate progress 200/566
+========================================================
+[2026-01-19 09:50:00] 任务开始
+[2026-01-19 09:50:00] 开始执行: 字幕翻译 (srt_translate)
+2026-01-19 09:50:00,581 INFO srt_translate.orchestrator run_once start force=False dry_run=False
+2026-01-19 09:50:00,581 INFO srt_translate.orchestrator scan ftp_root=/Downloads extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+2026-01-19 09:50:01,002 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E01.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:50:01,151 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E02.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:50:01,162 INFO srt_translate.translation translate start model=translategemma:latest cues=545 batch_size=20 batches=28
+2026-01-19 09:50:01,216 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E03.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:50:01,238 INFO srt_translate.translation translate start model=translategemma:latest cues=549 batch_size=20 batches=28
+2026-01-19 09:50:01,283 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E04.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 09:50:06,429 INFO srt_translate.translation translate progress 20/545
+2026-01-19 09:50:11,863 INFO srt_translate.translation translate progress 20/549
+2026-01-19 09:50:17,146 INFO srt_translate.translation translate progress 40/545
+2026-01-19 09:50:22,515 INFO srt_translate.translation translate progress 40/549
+2026-01-19 09:50:27,835 INFO srt_translate.translation translate progress 60/545
+2026-01-19 09:50:33,217 INFO srt_translate.translation translate progress 60/549
+2026-01-19 09:50:38,174 INFO srt_translate.translation translate progress 80/545
+2026-01-19 09:50:43,455 INFO srt_translate.translation translate progress 80/549
+2026-01-19 09:50:49,082 INFO srt_translate.translation translate progress 100/545
+2026-01-19 09:50:54,632 INFO srt_translate.translation translate progress 100/549
+2026-01-19 09:51:05,752 INFO srt_translate.translation translate progress 120/549
+2026-01-19 09:51:17,052 INFO srt_translate.translation translate progress 140/549
+2026-01-19 09:51:44,703 INFO srt_translate.translation translate progress 120/545 (fallback per-line)
+2026-01-19 09:51:51,027 INFO srt_translate.translation translate progress 140/545
+2026-01-19 09:51:56,900 INFO srt_translate.translation translate progress 160/549 (fallback per-line)
+2026-01-19 09:52:07,811 INFO srt_translate.translation translate progress 180/549
+2026-01-19 09:52:18,875 INFO srt_translate.translation translate progress 200/549
+2026-01-19 09:52:24,432 INFO srt_translate.translation translate progress 220/549
+2026-01-19 09:52:29,916 INFO srt_translate.translation translate progress 240/549
+2026-01-19 09:52:51,187 INFO srt_translate.translation translate progress 160/545 (fallback per-line)
+2026-01-19 09:52:57,040 INFO srt_translate.translation translate progress 180/545
+2026-01-19 09:53:03,881 INFO srt_translate.translation translate progress 200/545
+2026-01-19 09:53:09,831 INFO srt_translate.translation translate progress 220/545
+2026-01-19 09:53:15,666 INFO srt_translate.translation translate progress 240/545
+2026-01-19 09:53:21,750 INFO srt_translate.translation translate progress 260/545
+2026-01-19 09:53:21,976 INFO srt_translate.translation translate progress 260/549 (fallback per-line)
+2026-01-19 09:53:31,922 INFO srt_translate.translation translate progress 280/549
+2026-01-19 09:53:41,649 INFO srt_translate.translation translate progress 300/549
+2026-01-19 09:53:51,302 INFO srt_translate.translation translate progress 320/549
+2026-01-19 09:53:57,339 INFO srt_translate.translation translate progress 340/549
+2026-01-19 09:54:03,486 INFO srt_translate.translation translate progress 360/549
+2026-01-19 09:54:09,759 INFO srt_translate.translation translate progress 380/549
+2026-01-19 09:54:15,692 INFO srt_translate.translation translate progress 400/549
+2026-01-19 09:54:22,317 INFO srt_translate.translation translate progress 420/549
+2026-01-19 09:54:28,272 INFO srt_translate.translation translate progress 440/549
+2026-01-19 09:54:34,396 INFO srt_translate.translation translate progress 460/549
+2026-01-19 09:54:56,222 INFO srt_translate.translation translate progress 280/545 (fallback per-line)
+2026-01-19 09:55:01,907 INFO srt_translate.translation translate progress 300/545
+2026-01-19 09:55:07,660 INFO srt_translate.translation translate progress 320/545
+2026-01-19 09:55:13,526 INFO srt_translate.translation translate progress 340/545
+2026-01-19 09:55:19,626 INFO srt_translate.translation translate progress 360/545
+2026-01-19 09:55:25,515 INFO srt_translate.translation translate progress 380/545
+2026-01-19 09:55:31,619 INFO srt_translate.translation translate progress 400/545
+2026-01-19 09:55:37,407 INFO srt_translate.translation translate progress 420/545
+2026-01-19 09:55:43,591 INFO srt_translate.translation translate progress 440/545
+2026-01-19 09:55:49,658 INFO srt_translate.translation translate progress 460/545
+2026-01-19 09:55:55,450 INFO srt_translate.translation translate progress 480/545
+2026-01-19 09:55:55,715 INFO srt_translate.translation translate progress 480/549 (fallback per-line)
+2026-01-19 09:56:01,427 INFO srt_translate.translation translate progress 500/545
+2026-01-19 09:56:07,490 INFO srt_translate.translation translate progress 500/549
+2026-01-19 09:56:13,013 INFO srt_translate.translation translate progress 520/545
+2026-01-19 09:56:18,945 INFO srt_translate.translation translate progress 520/549
+2026-01-19 09:56:24,997 INFO srt_translate.translation translate progress 540/545
+2026-01-19 09:56:30,558 INFO srt_translate.translation translate progress 540/549
+2026-01-19 09:56:31,924 INFO srt_translate.translation translate progress 545/545
+2026-01-19 09:56:31,929 INFO srt_translate.translation translate done failed=0
+2026-01-19 09:56:32,144 INFO srt_translate.translation translate start model=translategemma:latest cues=561 batch_size=20 batches=29
+2026-01-19 09:56:39,456 INFO srt_translate.translation translate progress 20/561
+Traceback (most recent call last):
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 77, in list
+    for name, facts in self.ftp.mlsd(path):
+                       ~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 584, in mlsd
+    self.retrlines(cmd, lines.append)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 458, in retrlines
+    resp = self.sendcmd('TYPE A')
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 281, in sendcmd
+    return self.getresp()
+           ~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 244, in getresp
+    resp = self.getmultiline()
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 230, in getmultiline
+    line = self.getline()
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 212, in getline
+    line = self.file.readline(self.maxline + 1)
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socket.py", line 719, in readinto
+    return self._sock.recv_into(b)
+           ~~~~~~~~~~~~~~~~~~~~^^^
+TimeoutError: [Errno 60] Operation timed out
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/daibo/db90/srt_translate.py", line 12, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/daibo/db90/src/srt_translate/cli.py", line 30, in main
+    summary = run_once(cfg, store=store, force=args.force, dry_run=args.dry_run)
+  File "/Users/daibo/db90/src/srt_translate/orchestrator.py", line 211, in run_once
+    if not force and ftp.exists(ai_remote):
+                     ~~~~~~~~~~^^^^^^^^^^^
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 167, in exists
+    return self.stat(remote_path) is not None
+           ~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 68, in stat
+    for e in self.list(parent):
+             ~~~~~~~~~^^^^^^^^
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 94, in list
+    names = self.ftp.nlst(path)
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 547, in nlst
+    self.retrlines(cmd, files.append)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 458, in retrlines
+    resp = self.sendcmd('TYPE A')
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 280, in sendcmd
+    self.putcmd(cmd)
+    ~~~~~~~~~~~^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 207, in putcmd
+    self.putline(line)
+    ~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 202, in putline
+    self.sock.sendall(line.encode(self.encoding))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+[2026-01-19 09:56:50] 字幕翻译异常 (Exit Code: 1)
+[2026-01-19 09:56:50] 开始执行: 目录迁移 (dir_migrate)
+2026-01-19 09:56:50,807 INFO dir_migrate.orchestrator scan videos=2
+dir_migrate failed: 550 /X-Movie/UnknownYear/Der.Kaplan.The.Tank.UnknownYear.1080p.mkv.AV1.unknown-4KDS: No such file or directory.
+[2026-01-19 09:56:54] 目录迁移异常 (Exit Code: 2)
+[2026-01-19 09:56:54] 所有任务结束
+========================================================
+========================================================
+[2026-01-19 10:00:00] 任务开始
+[2026-01-19 10:00:00] 开始执行: 字幕翻译 (srt_translate)
+2026-01-19 10:00:00,401 INFO srt_translate.orchestrator run_once start force=False dry_run=False
+2026-01-19 10:00:00,402 INFO srt_translate.orchestrator scan ftp_root=/Downloads extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+2026-01-19 10:00:00,790 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E02.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:00:00,854 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E03.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:00:00,897 INFO srt_translate.translation translate start model=translategemma:latest cues=549 batch_size=20 batches=28
+2026-01-19 10:00:00,917 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E04.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:00:00,941 INFO srt_translate.translation translate start model=translategemma:latest cues=561 batch_size=20 batches=29
+2026-01-19 10:00:01,002 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E05.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:00:06,628 INFO srt_translate.translation translate progress 20/549
+2026-01-19 10:00:11,823 INFO srt_translate.translation translate progress 20/561
+2026-01-19 10:00:17,168 INFO srt_translate.translation translate progress 40/549
+2026-01-19 10:00:28,078 INFO srt_translate.translation translate progress 60/549
+2026-01-19 10:00:38,788 INFO srt_translate.translation translate progress 80/549
+2026-01-19 10:00:49,818 INFO srt_translate.translation translate progress 100/549
+2026-01-19 10:01:01,067 INFO srt_translate.translation translate progress 120/549
+2026-01-19 10:01:07,083 INFO srt_translate.translation translate progress 140/549
+2026-01-19 10:01:28,600 INFO srt_translate.translation translate progress 40/561 (fallback per-line)
+2026-01-19 10:01:34,947 INFO srt_translate.translation translate progress 60/561
+2026-01-19 10:01:40,545 INFO srt_translate.translation translate progress 80/561
+2026-01-19 10:01:46,645 INFO srt_translate.translation translate progress 100/561
+2026-01-19 10:01:53,216 INFO srt_translate.translation translate progress 120/561
+2026-01-19 10:01:59,260 INFO srt_translate.translation translate progress 140/561
+2026-01-19 10:02:05,187 INFO srt_translate.translation translate progress 160/561
+2026-01-19 10:02:05,438 INFO srt_translate.translation translate progress 160/549 (fallback per-line)
+2026-01-19 10:02:11,547 INFO srt_translate.translation translate progress 180/561
+2026-01-19 10:02:17,007 INFO srt_translate.translation translate progress 180/549
+2026-01-19 10:02:29,075 INFO srt_translate.translation translate progress 200/549
+2026-01-19 10:02:35,344 INFO srt_translate.translation translate progress 200/561
+2026-01-19 10:02:40,659 INFO srt_translate.translation translate progress 220/549
+2026-01-19 10:02:46,575 INFO srt_translate.translation translate progress 220/561
+2026-01-19 10:02:51,778 INFO srt_translate.translation translate progress 240/549
+2026-01-19 10:02:57,745 INFO srt_translate.translation translate progress 240/561
+2026-01-19 10:03:39,313 INFO srt_translate.translation translate progress 260/549 (fallback per-line)
+2026-01-19 10:03:39,669 INFO srt_translate.translation translate progress 260/561 (fallback per-line)
+2026-01-19 10:03:45,619 INFO srt_translate.translation translate progress 280/549
+2026-01-19 10:03:52,082 INFO srt_translate.translation translate progress 280/561
+2026-01-19 10:03:57,829 INFO srt_translate.translation translate progress 300/549
+2026-01-19 10:04:09,064 INFO srt_translate.translation translate progress 320/549
+2026-01-19 10:04:20,716 INFO srt_translate.translation translate progress 340/549
+2026-01-19 10:04:32,290 INFO srt_translate.translation translate progress 360/549
+2026-01-19 10:04:38,610 INFO srt_translate.translation translate progress 380/549
+2026-01-19 10:04:44,572 INFO srt_translate.translation translate progress 400/549
+2026-01-19 10:04:51,146 INFO srt_translate.translation translate progress 420/549
+2026-01-19 10:04:56,964 INFO srt_translate.translation translate progress 440/549
+2026-01-19 10:05:02,975 INFO srt_translate.translation translate progress 460/549
+2026-01-19 10:05:25,903 INFO srt_translate.translation translate progress 300/561 (fallback per-line)
+2026-01-19 10:05:45,062 INFO srt_translate.translation translate progress 480/549 (fallback per-line)
+2026-01-19 10:05:51,495 INFO srt_translate.translation translate progress 500/549
+2026-01-19 10:05:57,740 INFO srt_translate.translation translate progress 520/549
+2026-01-19 10:06:03,514 INFO srt_translate.translation translate progress 540/549
+2026-01-19 10:06:14,109 INFO srt_translate.translation translate progress 320/561 (fallback per-line)
+2026-01-19 10:06:14,255 INFO srt_translate.translation translate progress 549/549 (fallback per-line)
+2026-01-19 10:06:14,261 INFO srt_translate.translation translate done failed=0
+2026-01-19 10:06:14,487 INFO srt_translate.translation translate start model=translategemma:latest cues=566 batch_size=20 batches=29
+2026-01-19 10:06:20,168 INFO srt_translate.translation translate progress 340/561
+2026-01-19 10:06:25,182 INFO srt_translate.translation translate progress 20/566
+Traceback (most recent call last):
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 82, in list
+    for name, facts in self.ftp.mlsd(path):
+                       ~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 584, in mlsd
+    self.retrlines(cmd, lines.append)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 458, in retrlines
+    resp = self.sendcmd('TYPE A')
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 281, in sendcmd
+    return self.getresp()
+           ~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 244, in getresp
+    resp = self.getmultiline()
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 230, in getmultiline
+    line = self.getline()
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 212, in getline
+    line = self.file.readline(self.maxline + 1)
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socket.py", line 719, in readinto
+    return self._sock.recv_into(b)
+           ~~~~~~~~~~~~~~~~~~~~^^^
+TimeoutError: [Errno 60] Operation timed out
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/daibo/db90/srt_translate.py", line 12, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/daibo/db90/src/srt_translate/cli.py", line 30, in main
+    summary = run_once(cfg, store=store, force=args.force, dry_run=args.dry_run)
+  File "/Users/daibo/db90/src/srt_translate/orchestrator.py", line 211, in run_once
+    if not force and ftp.exists(ai_remote):
+                     ~~~~~~~~~~^^^^^^^^^^^
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 172, in exists
+    return self.stat(remote_path) is not None
+           ~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 73, in stat
+    for e in self.list(parent):
+             ~~~~~~~~~^^^^^^^^
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 99, in list
+    names = self.ftp.nlst(path)
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 547, in nlst
+    self.retrlines(cmd, files.append)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 458, in retrlines
+    resp = self.sendcmd('TYPE A')
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 280, in sendcmd
+    self.putcmd(cmd)
+    ~~~~~~~~~~~^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 207, in putcmd
+    self.putline(line)
+    ~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 202, in putline
+    self.sock.sendall(line.encode(self.encoding))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+[2026-01-19 10:06:32] 字幕翻译异常 (Exit Code: 1)
+[2026-01-19 10:06:32] 开始执行: 目录迁移 (dir_migrate)
+2026-01-19 10:06:33,250 INFO dir_migrate.orchestrator scan videos=3
+dir_migrate failed: 550 /X-TV/Cosmos/S01/Cosmos.S01E01.S01E01.1080p.BluRay.x264.DTS-FGT: No such file or directory.
+[2026-01-19 10:06:39] 目录迁移异常 (Exit Code: 2)
+[2026-01-19 10:06:39] 所有任务结束
+========================================================
+========================================================
+[2026-01-19 10:10:00] 任务开始
+[2026-01-19 10:10:00] 开始执行: 字幕翻译 (srt_translate)
+2026-01-19 10:10:00,618 INFO srt_translate.orchestrator run_once start force=False dry_run=False
+2026-01-19 10:10:00,618 INFO srt_translate.orchestrator scan ftp_root=/Downloads extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+2026-01-19 10:10:01,005 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E03.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:10:01,062 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E04.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:10:01,108 INFO srt_translate.translation translate start model=translategemma:latest cues=561 batch_size=20 batches=29
+2026-01-19 10:10:01,127 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E05.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:10:01,146 INFO srt_translate.translation translate start model=translategemma:latest cues=566 batch_size=20 batches=29
+2026-01-19 10:10:01,203 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E06.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:10:06,532 INFO srt_translate.translation translate progress 20/561
+2026-01-19 10:10:11,373 INFO srt_translate.translation translate progress 20/566
+2026-01-19 10:10:21,815 INFO srt_translate.translation translate progress 40/566
+2026-01-19 10:10:43,052 INFO srt_translate.translation translate progress 60/566
+2026-01-19 10:10:48,919 INFO srt_translate.translation translate progress 80/566
+2026-01-19 10:10:54,662 INFO srt_translate.translation translate progress 100/566
+2026-01-19 10:11:00,779 INFO srt_translate.translation translate progress 120/566
+2026-01-19 10:11:23,815 INFO srt_translate.translation translate progress 40/561 (fallback per-line)
+2026-01-19 10:11:30,138 INFO srt_translate.translation translate progress 60/561
+2026-01-19 10:11:35,672 INFO srt_translate.translation translate progress 80/561
+2026-01-19 10:11:41,810 INFO srt_translate.translation translate progress 100/561
+2026-01-19 10:11:48,388 INFO srt_translate.translation translate progress 120/561
+2026-01-19 10:11:54,434 INFO srt_translate.translation translate progress 140/561
+2026-01-19 10:12:00,225 INFO srt_translate.translation translate progress 160/561
+2026-01-19 10:12:00,529 INFO srt_translate.translation translate progress 140/566 (fallback per-line)
+2026-01-19 10:12:06,707 INFO srt_translate.translation translate progress 180/561
+2026-01-19 10:12:12,510 INFO srt_translate.translation translate progress 160/566
+2026-01-19 10:12:18,772 INFO srt_translate.translation translate progress 200/561
+2026-01-19 10:12:24,191 INFO srt_translate.translation translate progress 180/566
+2026-01-19 10:12:30,077 INFO srt_translate.translation translate progress 220/561
+2026-01-19 10:12:35,285 INFO srt_translate.translation translate progress 200/566
+2026-01-19 10:12:41,299 INFO srt_translate.translation translate progress 240/561
+2026-01-19 10:12:46,552 INFO srt_translate.translation translate progress 220/566
+2026-01-19 10:12:57,945 INFO srt_translate.translation translate progress 240/566
+2026-01-19 10:13:09,609 INFO srt_translate.translation translate progress 260/566
+2026-01-19 10:13:21,685 INFO srt_translate.translation translate progress 280/566
+2026-01-19 10:13:46,557 INFO srt_translate.translation translate progress 260/561 (fallback per-line)
+2026-01-19 10:13:53,148 INFO srt_translate.translation translate progress 280/561
+2026-01-19 10:14:05,086 INFO srt_translate.translation translate progress 300/566 (fallback per-line)
+2026-01-19 10:14:16,703 INFO srt_translate.translation translate progress 320/566
+2026-01-19 10:14:23,467 INFO srt_translate.translation translate progress 340/566
+2026-01-19 10:14:29,414 INFO srt_translate.translation translate progress 360/566
+2026-01-19 10:14:48,461 INFO srt_translate.translation translate progress 380/566
+2026-01-19 10:14:54,457 INFO srt_translate.translation translate progress 400/566
+2026-01-19 10:15:06,112 INFO srt_translate.translation translate progress 420/566
+2026-01-19 10:15:12,443 INFO srt_translate.translation translate progress 440/566
+2026-01-19 10:15:34,647 INFO srt_translate.translation translate progress 300/561 (fallback per-line)
+2026-01-19 10:15:56,040 INFO srt_translate.translation translate progress 460/566 (fallback per-line)
+2026-01-19 10:16:02,208 INFO srt_translate.translation translate progress 480/566
+2026-01-19 10:16:08,021 INFO srt_translate.translation translate progress 500/566
+2026-01-19 10:16:14,182 INFO srt_translate.translation translate progress 520/566
+2026-01-19 10:16:20,097 INFO srt_translate.translation translate progress 540/566
+2026-01-19 10:16:26,100 INFO srt_translate.translation translate progress 560/566
+2026-01-19 10:16:28,199 INFO srt_translate.translation translate progress 566/566
+2026-01-19 10:16:28,204 INFO srt_translate.translation translate done failed=0
+2026-01-19 10:16:28,421 INFO srt_translate.translation translate start model=translategemma:latest cues=586 batch_size=20 batches=30
+2026-01-19 10:16:33,461 INFO srt_translate.translation translate progress 20/586
+2026-01-19 10:16:38,955 INFO srt_translate.translation translate progress 40/586
+2026-01-19 10:16:44,440 INFO srt_translate.translation translate progress 320/561 (fallback per-line)
+Traceback (most recent call last):
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 82, in list
+    for name, facts in self.ftp.mlsd(path):
+                       ~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 584, in mlsd
+    self.retrlines(cmd, lines.append)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 458, in retrlines
+    resp = self.sendcmd('TYPE A')
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 281, in sendcmd
+    return self.getresp()
+           ~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 244, in getresp
+    resp = self.getmultiline()
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 230, in getmultiline
+    line = self.getline()
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 212, in getline
+    line = self.file.readline(self.maxline + 1)
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socket.py", line 719, in readinto
+    return self._sock.recv_into(b)
+           ~~~~~~~~~~~~~~~~~~~~^^^
+TimeoutError: [Errno 60] Operation timed out
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/daibo/db90/srt_translate.py", line 12, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/daibo/db90/src/srt_translate/cli.py", line 30, in main
+    summary = run_once(cfg, store=store, force=args.force, dry_run=args.dry_run)
+  File "/Users/daibo/db90/src/srt_translate/orchestrator.py", line 218, in run_once
+    if not force and ftp.exists(ai_remote):
+                     ~~~~~~~~~~^^^^^^^^^^^
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 172, in exists
+    return self.stat(remote_path) is not None
+           ~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 73, in stat
+    for e in self.list(parent):
+             ~~~~~~~~~^^^^^^^^
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 99, in list
+    names = self.ftp.nlst(path)
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 547, in nlst
+    self.retrlines(cmd, files.append)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 458, in retrlines
+    resp = self.sendcmd('TYPE A')
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 280, in sendcmd
+    self.putcmd(cmd)
+    ~~~~~~~~~~~^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 207, in putcmd
+    self.putline(line)
+    ~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 202, in putline
+    self.sock.sendall(line.encode(self.encoding))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+[2026-01-19 10:16:46] 字幕翻译异常 (Exit Code: 1)
+[2026-01-19 10:16:46] 开始执行: 目录迁移 (dir_migrate)
+2026-01-19 10:16:47,057 INFO dir_migrate.orchestrator scan videos=4
+dir_migrate failed: 550 /X-TV/Cosmos/S01: No such file or directory.
+[2026-01-19 10:16:54] 目录迁移异常 (Exit Code: 2)
+[2026-01-19 10:16:54] 所有任务结束
+========================================================
+========================================================
+[2026-01-19 10:20:00] 任务开始
+[2026-01-19 10:20:00] 开始执行: 字幕翻译 (srt_translate)
+Traceback (most recent call last):
+  File "/Users/daibo/db90/srt_translate.py", line 9, in <module>
+    from srt_translate.cli import main
+  File "/Users/daibo/db90/src/srt_translate/cli.py", line 10, in <module>
+    from .orchestrator import run_once
+  File "/Users/daibo/db90/src/srt_translate/orchestrator.py", line 13, in <module>
+    from .mcp.ftp import FtpMcp
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 191
+    def atomic_write_from_file(self, remote_path: str, local_path: Path) -> None:
+    ^^^
+IndentationError: expected an indented block after function definition on line 189
+[2026-01-19 10:20:00] 字幕翻译异常 (Exit Code: 1)
+[2026-01-19 10:20:00] 开始执行: 目录迁移 (dir_migrate)
+Traceback (most recent call last):
+  File "/Users/daibo/db90/dir_migrate.py", line 9, in <module>
+    from dir_migrate.cli import main
+  File "/Users/daibo/db90/src/dir_migrate/cli.py", line 10, in <module>
+    from .orchestrator import run_once
+  File "/Users/daibo/db90/src/dir_migrate/orchestrator.py", line 11, in <module>
+    from .agents.executor import apply_one
+  File "/Users/daibo/db90/src/dir_migrate/agents/executor.py", line 8, in <module>
+    from ..mcp.storage import StorageMcp
+  File "/Users/daibo/db90/src/dir_migrate/mcp/storage.py", line 9, in <module>
+    from srt_translate.mcp.ftp import FtpMcp
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 191
+    def atomic_write_from_file(self, remote_path: str, local_path: Path) -> None:
+    ^^^
+IndentationError: expected an indented block after function definition on line 189
+[2026-01-19 10:20:00] 目录迁移异常 (Exit Code: 1)
+[2026-01-19 10:20:00] 所有任务结束
+========================================================
+========================================================
+[2026-01-19 10:30:00] 任务开始
+[2026-01-19 10:30:00] 开始执行: 字幕翻译 (srt_translate)
+2026-01-19 10:30:01,213 INFO srt_translate.orchestrator run_once start force=False dry_run=False
+2026-01-19 10:30:01,215 INFO srt_translate.orchestrator scan ftp_root=/Downloads extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+2026-01-19 10:30:01,679 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E03.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:30:01,756 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E05.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:30:01,795 INFO srt_translate.translation translate start model=translategemma:latest cues=561 batch_size=20 batches=29
+2026-01-19 10:30:01,837 INFO srt_translate.translation translate start model=translategemma:latest cues=586 batch_size=20 batches=30
+2026-01-19 10:30:01,845 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E06.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:30:01,898 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E07.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:30:08,846 INFO srt_translate.translation translate progress 20/561
+2026-01-19 10:30:13,534 INFO srt_translate.translation translate progress 20/586
+2026-01-19 10:30:34,576 INFO srt_translate.translation translate progress 40/586
+2026-01-19 10:31:02,368 INFO srt_translate.translation translate progress 40/561 (fallback per-line)
+2026-01-19 10:31:08,651 INFO srt_translate.translation translate progress 60/561
+2026-01-19 10:31:14,142 INFO srt_translate.translation translate progress 80/561
+2026-01-19 10:31:14,285 INFO srt_translate.translation translate progress 60/586 (fallback per-line)
+2026-01-19 10:31:20,180 INFO srt_translate.translation translate progress 100/561
+2026-01-19 10:31:25,375 INFO srt_translate.translation translate progress 80/586
+2026-01-19 10:31:31,696 INFO srt_translate.translation translate progress 120/561
+2026-01-19 10:31:37,137 INFO srt_translate.translation translate progress 100/586
+2026-01-19 10:31:42,810 INFO srt_translate.translation translate progress 140/561
+2026-01-19 10:31:48,690 INFO srt_translate.translation translate progress 120/586
+2026-01-19 10:31:54,391 INFO srt_translate.translation translate progress 160/561
+2026-01-19 10:32:00,207 INFO srt_translate.translation translate progress 140/586
+2026-01-19 10:32:06,400 INFO srt_translate.translation translate progress 180/561
+2026-01-19 10:32:12,266 INFO srt_translate.translation translate progress 160/586
+2026-01-19 10:32:24,084 INFO srt_translate.translation translate progress 180/586
+2026-01-19 10:32:35,736 INFO srt_translate.translation translate progress 200/586
+2026-01-19 10:33:04,555 INFO srt_translate.translation translate progress 200/561 (fallback per-line)
+2026-01-19 10:33:10,703 INFO srt_translate.translation translate progress 220/561
+2026-01-19 10:33:16,995 INFO srt_translate.translation translate progress 240/561
+2026-01-19 10:33:17,222 INFO srt_translate.translation translate progress 220/586 (fallback per-line)
+2026-01-19 10:33:29,152 INFO srt_translate.translation translate progress 240/586
+2026-01-19 10:33:41,268 INFO srt_translate.translation translate progress 260/586
+2026-01-19 10:33:53,173 INFO srt_translate.translation translate progress 280/586
+2026-01-19 10:34:04,989 INFO srt_translate.translation translate progress 300/586
+2026-01-19 10:34:10,857 INFO srt_translate.translation translate progress 320/586
+2026-01-19 10:34:16,699 INFO srt_translate.translation translate progress 340/586
+2026-01-19 10:34:22,491 INFO srt_translate.translation translate progress 360/586
+2026-01-19 10:34:28,072 INFO srt_translate.translation translate progress 380/586
+2026-01-19 10:34:48,295 INFO srt_translate.translation translate progress 260/561 (fallback per-line)
+2026-01-19 10:34:55,003 INFO srt_translate.translation translate progress 280/561
+2026-01-19 10:35:14,703 INFO srt_translate.translation translate progress 400/586 (fallback per-line)
+2026-01-19 10:35:19,804 INFO srt_translate.translation translate progress 420/586
+2026-01-19 10:35:38,673 INFO srt_translate.translation translate progress 300/561 (fallback per-line)
+2026-01-19 10:35:57,919 INFO srt_translate.translation translate progress 440/586 (fallback per-line)
+2026-01-19 10:36:03,469 INFO srt_translate.translation translate progress 460/586
+2026-01-19 10:36:23,309 INFO srt_translate.translation translate progress 320/561 (fallback per-line)
+2026-01-19 10:36:29,561 INFO srt_translate.translation translate progress 340/561
+2026-01-19 10:36:50,193 INFO srt_translate.translation translate progress 480/586 (fallback per-line)
+2026-01-19 10:36:55,810 INFO srt_translate.translation translate progress 500/586
+2026-01-19 10:37:01,907 INFO srt_translate.translation translate progress 520/586
+2026-01-19 10:37:21,960 INFO srt_translate.translation translate progress 360/561 (fallback per-line)
+2026-01-19 10:37:28,333 INFO srt_translate.translation translate progress 380/561
+2026-01-19 10:37:34,618 INFO srt_translate.translation translate progress 400/561
+2026-01-19 10:37:53,644 INFO srt_translate.translation translate progress 540/586 (fallback per-line)
+2026-01-19 10:38:12,705 INFO srt_translate.translation translate progress 420/561 (fallback per-line)
+2026-01-19 10:38:18,932 INFO srt_translate.translation translate progress 440/561
+2026-01-19 10:38:39,728 INFO srt_translate.translation translate progress 560/586 (fallback per-line)
+2026-01-19 10:38:45,512 INFO srt_translate.translation translate progress 580/586
+2026-01-19 10:38:47,682 INFO srt_translate.translation translate progress 586/586
+2026-01-19 10:38:47,688 INFO srt_translate.translation translate done failed=0
+2026-01-19 10:38:47,917 INFO srt_translate.translation translate start model=translategemma:latest cues=653 batch_size=20 batches=33
+Traceback (most recent call last):
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 82, in list
+    for name, facts in self.ftp.mlsd(path):
+                       ~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 584, in mlsd
+    self.retrlines(cmd, lines.append)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 458, in retrlines
+    resp = self.sendcmd('TYPE A')
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 281, in sendcmd
+    return self.getresp()
+           ~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 244, in getresp
+    resp = self.getmultiline()
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 230, in getmultiline
+    line = self.getline()
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 212, in getline
+    line = self.file.readline(self.maxline + 1)
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socket.py", line 719, in readinto
+    return self._sock.recv_into(b)
+           ~~~~~~~~~~~~~~~~~~~~^^^
+TimeoutError: [Errno 60] Operation timed out
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/daibo/db90/srt_translate.py", line 12, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/daibo/db90/src/srt_translate/cli.py", line 30, in main
+    summary = run_once(cfg, store=store, force=args.force, dry_run=args.dry_run)
+  File "/Users/daibo/db90/src/srt_translate/orchestrator.py", line 218, in run_once
+    if not force and ftp.exists(ai_remote):
+                     ~~~~~~~~~~^^^^^^^^^^^
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 172, in exists
+    return self.stat(remote_path) is not None
+           ~~~~~~~~~^^^^^^^^^^^^^
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 73, in stat
+    for e in self.list(parent):
+             ~~~~~~~~~^^^^^^^^
+  File "/Users/daibo/db90/src/srt_translate/mcp/ftp.py", line 99, in list
+    names = self.ftp.nlst(path)
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 547, in nlst
+    self.retrlines(cmd, files.append)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 458, in retrlines
+    resp = self.sendcmd('TYPE A')
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 280, in sendcmd
+    self.putcmd(cmd)
+    ~~~~~~~~~~~^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 207, in putcmd
+    self.putline(line)
+    ~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/ftplib.py", line 202, in putline
+    self.sock.sendall(line.encode(self.encoding))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+[2026-01-19 10:39:05] 字幕翻译异常 (Exit Code: 1)
+[2026-01-19 10:39:05] 开始执行: 目录迁移 (dir_migrate)
+2026-01-19 10:39:06,603 INFO dir_migrate.orchestrator scan videos=5
+dir_migrate failed: 550 /X-Movie/UnknownYear/Der.Kaplan.The.Tank.UnknownYear.1080p.mkv.AV1.unknown-4K: No such file or directory.
+[2026-01-19 10:39:16] 目录迁移异常 (Exit Code: 2)
+[2026-01-19 10:39:16] 所有任务结束
+========================================================
+========================================================
+[2026-01-19 10:40:00] 任务开始
+[2026-01-19 10:40:00] 开始执行: 字幕翻译 (srt_translate)
+2026-01-19 10:40:00,803 INFO srt_translate.orchestrator run_once start force=False dry_run=False
+2026-01-19 10:40:00,803 INFO srt_translate.orchestrator scan ftp_root=/Downloads extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+2026-01-19 10:40:01,228 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E03.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:40:01,319 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E06.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:40:01,340 INFO srt_translate.translation translate start model=translategemma:latest cues=561 batch_size=20 batches=29
+2026-01-19 10:40:01,381 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E07.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:40:01,872 INFO srt_translate.translation translate start model=translategemma:latest cues=653 batch_size=20 batches=33
+2026-01-19 10:40:01,928 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E08.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:40:06,751 INFO srt_translate.translation translate progress 20/561
+2026-01-19 10:40:28,635 INFO srt_translate.translation translate progress 40/561
+2026-01-19 10:40:40,060 INFO srt_translate.translation translate progress 60/561
+2026-01-19 10:40:45,600 INFO srt_translate.translation translate progress 80/561
+2026-01-19 10:40:51,703 INFO srt_translate.translation translate progress 100/561
+2026-01-19 10:40:58,387 INFO srt_translate.translation translate progress 120/561
+2026-01-19 10:41:04,525 INFO srt_translate.translation translate progress 140/561
+2026-01-19 10:41:10,624 INFO srt_translate.translation translate progress 160/561
+2026-01-19 10:41:17,209 INFO srt_translate.translation translate progress 180/561
+2026-01-19 10:41:41,166 INFO srt_translate.translation translate progress 20/653 (fallback per-line)
+2026-01-19 10:41:59,171 INFO srt_translate.translation translate progress 200/561 (fallback per-line)
+2026-01-19 10:42:05,332 INFO srt_translate.translation translate progress 220/561
+2026-01-19 10:42:11,695 INFO srt_translate.translation translate progress 240/561
+2026-01-19 10:42:33,975 INFO srt_translate.translation translate progress 40/653 (fallback per-line)
+2026-01-19 10:42:39,111 INFO srt_translate.translation translate progress 60/653
+2026-01-19 10:42:44,641 INFO srt_translate.translation translate progress 80/653
+2026-01-19 10:43:02,936 INFO srt_translate.translation translate progress 260/561 (fallback per-line)
+2026-01-19 10:43:09,575 INFO srt_translate.translation translate progress 280/561
+========================================================
+[2026-01-19 10:50:00] 任务开始
+[2026-01-19 10:50:00] 开始执行: 字幕翻译 (srt_translate)
+2026-01-19 10:50:00,751 INFO srt_translate.orchestrator run_once start force=False dry_run=False
+2026-01-19 10:50:00,752 INFO srt_translate.orchestrator scan ftp_root=/Downloads extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+2026-01-19 10:50:01,149 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E03.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:50:01,235 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E06.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:50:01,248 INFO srt_translate.translation translate start model=translategemma:latest cues=561 batch_size=20 batches=29
+2026-01-19 10:50:01,296 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E07.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:50:01,895 INFO srt_translate.translation translate start model=translategemma:latest cues=653 batch_size=20 batches=33
+2026-01-19 10:50:01,916 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E08.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:50:08,036 INFO srt_translate.translation translate progress 20/561
+2026-01-19 10:50:18,721 INFO srt_translate.translation translate progress 40/561
+2026-01-19 10:50:29,766 INFO srt_translate.translation translate progress 60/561
+2026-01-19 10:50:40,048 INFO srt_translate.translation translate progress 80/561
+2026-01-19 10:50:46,084 INFO srt_translate.translation translate progress 100/561
+2026-01-19 10:50:52,627 INFO srt_translate.translation translate progress 120/561
+2026-01-19 10:50:58,518 INFO srt_translate.translation translate progress 140/561
+2026-01-19 10:51:04,507 INFO srt_translate.translation translate progress 160/561
+2026-01-19 10:51:10,881 INFO srt_translate.translation translate progress 180/561
+2026-01-19 10:51:17,212 INFO srt_translate.translation translate progress 200/561
+2026-01-19 10:51:23,450 INFO srt_translate.translation translate progress 220/561
+2026-01-19 10:51:29,693 INFO srt_translate.translation translate progress 240/561
+2026-01-19 10:51:52,354 INFO srt_translate.translation translate progress 20/653 (fallback per-line)
+2026-01-19 10:52:10,931 INFO srt_translate.translation translate progress 260/561 (fallback per-line)
+2026-01-19 10:52:17,445 INFO srt_translate.translation translate progress 280/561
+2026-01-19 10:52:37,328 INFO srt_translate.translation translate progress 40/653 (fallback per-line)
+2026-01-19 10:52:42,336 INFO srt_translate.translation translate progress 60/653
+2026-01-19 10:52:47,749 INFO srt_translate.translation translate progress 80/653
+2026-01-19 10:53:05,818 INFO srt_translate.translation translate progress 300/561 (fallback per-line)
+2026-01-19 10:53:26,222 INFO srt_translate.translation translate progress 100/653 (fallback per-line)
+2026-01-19 10:53:31,623 INFO srt_translate.translation translate progress 120/653
+2026-01-19 10:53:37,198 INFO srt_translate.translation translate progress 140/653
+2026-01-19 10:53:42,942 INFO srt_translate.translation translate progress 160/653
+2026-01-19 10:53:48,852 INFO srt_translate.translation translate progress 180/653
+2026-01-19 10:54:08,271 INFO srt_translate.translation translate progress 320/561 (fallback per-line)
+2026-01-19 10:54:14,295 INFO srt_translate.translation translate progress 340/561
+2026-01-19 10:54:37,176 INFO srt_translate.translation translate progress 200/653 (fallback per-line)
+2026-01-19 10:54:42,970 INFO srt_translate.translation translate progress 220/653
+2026-01-19 10:55:01,042 INFO srt_translate.translation translate progress 360/561 (fallback per-line)
+2026-01-19 10:55:07,274 INFO srt_translate.translation translate progress 380/561
+2026-01-19 10:55:13,457 INFO srt_translate.translation translate progress 400/561
+2026-01-19 10:55:34,119 INFO srt_translate.translation translate progress 240/653 (fallback per-line)
+2026-01-19 10:55:52,145 INFO srt_translate.translation translate progress 420/561 (fallback per-line)
+2026-01-19 10:55:58,167 INFO srt_translate.translation translate progress 440/561
+2026-01-19 10:56:20,275 INFO srt_translate.translation translate progress 260/653 (fallback per-line)
+2026-01-19 10:56:39,049 INFO srt_translate.translation translate progress 460/561 (fallback per-line)
+2026-01-19 10:56:45,318 INFO srt_translate.translation translate progress 480/561
+2026-01-19 10:57:07,781 INFO srt_translate.translation translate progress 280/653 (fallback per-line)
+2026-01-19 10:57:26,859 INFO srt_translate.translation translate progress 500/561 (fallback per-line)
+2026-01-19 10:57:33,003 INFO srt_translate.translation translate progress 520/561
+2026-01-19 10:57:39,528 INFO srt_translate.translation translate progress 540/561
+2026-01-19 10:57:46,161 INFO srt_translate.translation translate progress 560/561
+2026-01-19 10:57:47,780 INFO srt_translate.translation translate progress 561/561 (fallback per-line)
+2026-01-19 10:57:47,787 INFO srt_translate.translation translate done failed=0
+2026-01-19 10:57:47,995 INFO srt_translate.translation translate start model=translategemma:latest cues=484 batch_size=20 batches=25
+2026-01-19 10:57:53,981 INFO srt_translate.translation translate progress 20/484
+2026-01-19 10:58:06,338 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E09.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 10:58:12,202 INFO srt_translate.translation translate progress 300/653 (fallback per-line)
+2026-01-19 10:58:33,727 INFO srt_translate.translation translate progress 40/484 (fallback per-line)
+2026-01-19 10:58:39,471 INFO srt_translate.translation translate progress 60/484
+2026-01-19 10:58:45,640 INFO srt_translate.translation translate progress 80/484
+2026-01-19 10:58:51,608 INFO srt_translate.translation translate progress 100/484
+2026-01-19 10:58:51,765 INFO srt_translate.translation translate progress 320/653 (fallback per-line)
+2026-01-19 10:58:57,282 INFO srt_translate.translation translate progress 120/484
+2026-01-19 10:59:02,739 INFO srt_translate.translation translate progress 340/653
+2026-01-19 10:59:30,911 INFO srt_translate.translation translate progress 140/484
+2026-01-19 10:59:42,579 INFO srt_translate.translation translate progress 160/484
+2026-01-19 10:59:48,995 INFO srt_translate.translation translate progress 180/484
+2026-01-19 10:59:55,125 INFO srt_translate.translation translate progress 200/484
+[2026-01-19 11:00:00] 上次任务 (PID: 30796) 仍在运行，本次跳过
+2026-01-19 11:00:17,254 INFO srt_translate.translation translate progress 360/653 (fallback per-line)
+2026-01-19 11:00:23,202 INFO srt_translate.translation translate progress 380/653
+2026-01-19 11:00:28,847 INFO srt_translate.translation translate progress 400/653
+2026-01-19 11:00:46,728 INFO srt_translate.translation translate progress 220/484 (fallback per-line)
+2026-01-19 11:00:52,217 INFO srt_translate.translation translate progress 240/484
+2026-01-19 11:00:58,969 INFO srt_translate.translation translate progress 260/484
+2026-01-19 11:01:05,776 INFO srt_translate.translation translate progress 280/484
+2026-01-19 11:01:12,450 INFO srt_translate.translation translate progress 300/484
+2026-01-19 11:01:19,655 INFO srt_translate.translation translate progress 320/484
+2026-01-19 11:01:26,005 INFO srt_translate.translation translate progress 340/484
+2026-01-19 11:01:32,036 INFO srt_translate.translation translate progress 360/484
+2026-01-19 11:01:38,302 INFO srt_translate.translation translate progress 380/484
+2026-01-19 11:01:44,623 INFO srt_translate.translation translate progress 400/484
+2026-01-19 11:01:50,775 INFO srt_translate.translation translate progress 420/484
+2026-01-19 11:02:12,068 INFO srt_translate.translation translate progress 420/653 (fallback per-line)
+2026-01-19 11:02:18,021 INFO srt_translate.translation translate progress 440/653
+2026-01-19 11:02:24,513 INFO srt_translate.translation translate progress 460/653
+2026-01-19 11:02:46,318 INFO srt_translate.translation translate progress 440/484 (fallback per-line)
+2026-01-19 11:02:52,117 INFO srt_translate.translation translate progress 460/484
+2026-01-19 11:02:58,135 INFO srt_translate.translation translate progress 480/484
+2026-01-19 11:02:59,595 INFO srt_translate.translation translate progress 484/484
+2026-01-19 11:02:59,600 INFO srt_translate.translation translate done failed=0
+2026-01-19 11:02:59,885 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E10.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 11:02:59,900 INFO srt_translate.translation translate start model=translategemma:latest cues=486 batch_size=20 batches=25
+2026-01-19 11:03:04,897 INFO srt_translate.translation translate progress 20/486
+2026-01-19 11:03:11,162 INFO srt_translate.translation translate progress 40/486
+2026-01-19 11:03:17,100 INFO srt_translate.translation translate progress 60/486
+2026-01-19 11:03:23,270 INFO srt_translate.translation translate progress 80/486
+2026-01-19 11:03:29,279 INFO srt_translate.translation translate progress 100/486
+2026-01-19 11:03:35,637 INFO srt_translate.translation translate progress 120/486
+2026-01-19 11:03:41,988 INFO srt_translate.translation translate progress 140/486
+2026-01-19 11:03:47,904 INFO srt_translate.translation translate progress 160/486
+2026-01-19 11:03:48,152 INFO srt_translate.translation translate progress 480/653 (fallback per-line)
+2026-01-19 11:03:54,146 INFO srt_translate.translation translate progress 180/486
+2026-01-19 11:03:59,902 INFO srt_translate.translation translate progress 500/653
+2026-01-19 11:04:05,555 INFO srt_translate.translation translate progress 200/486
+2026-01-19 11:04:17,298 INFO srt_translate.translation translate progress 220/486
+2026-01-19 11:04:29,106 INFO srt_translate.translation translate progress 240/486
+2026-01-19 11:04:40,760 INFO srt_translate.translation translate progress 260/486
+2026-01-19 11:04:47,516 INFO srt_translate.translation translate progress 280/486
+2026-01-19 11:04:53,926 INFO srt_translate.translation translate progress 300/486
+2026-01-19 11:05:20,497 INFO srt_translate.translation translate progress 520/653 (fallback per-line)
+2026-01-19 11:05:38,559 INFO srt_translate.translation translate progress 320/486 (fallback per-line)
+2026-01-19 11:05:45,578 INFO srt_translate.translation translate progress 340/486
+2026-01-19 11:06:05,079 INFO srt_translate.translation translate progress 360/486
+2026-01-19 11:06:17,511 INFO srt_translate.translation translate progress 380/486
+2026-01-19 11:06:23,902 INFO srt_translate.translation translate progress 400/486
+2026-01-19 11:06:30,511 INFO srt_translate.translation translate progress 420/486
+2026-01-19 11:06:37,145 INFO srt_translate.translation translate progress 440/486
+2026-01-19 11:06:43,862 INFO srt_translate.translation translate progress 460/486
+2026-01-19 11:06:50,209 INFO srt_translate.translation translate progress 480/486
+2026-01-19 11:06:52,354 INFO srt_translate.translation translate progress 486/486
+2026-01-19 11:06:52,358 INFO srt_translate.translation translate done failed=0
+2026-01-19 11:06:52,553 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E11.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 11:06:52,560 INFO srt_translate.translation translate start model=translategemma:latest cues=563 batch_size=20 batches=29
+2026-01-19 11:06:57,905 INFO srt_translate.translation translate progress 20/563
+2026-01-19 11:07:03,818 INFO srt_translate.translation translate progress 40/563
+2026-01-19 11:07:09,652 INFO srt_translate.translation translate progress 60/563
+2026-01-19 11:07:15,749 INFO srt_translate.translation translate progress 540/653 (fallback per-line)
+2026-01-19 11:07:26,949 INFO srt_translate.translation translate progress 560/653
+2026-01-19 11:07:38,758 INFO srt_translate.translation translate progress 580/653
+2026-01-19 11:07:50,776 INFO srt_translate.translation translate progress 600/653
+2026-01-19 11:07:56,632 INFO srt_translate.translation translate progress 620/653
+2026-01-19 11:08:02,866 INFO srt_translate.translation translate progress 640/653
+2026-01-19 11:08:07,347 INFO srt_translate.translation translate progress 653/653
+2026-01-19 11:08:07,351 INFO srt_translate.translation translate done failed=0
+2026-01-19 11:08:07,553 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E12.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 11:08:07,572 INFO srt_translate.translation translate start model=translategemma:latest cues=463 batch_size=20 batches=24
+2026-01-19 11:08:12,731 INFO srt_translate.translation translate progress 20/463
+2026-01-19 11:08:18,612 INFO srt_translate.translation translate progress 40/463
+2026-01-19 11:08:24,403 INFO srt_translate.translation translate progress 60/463
+2026-01-19 11:08:30,597 INFO srt_translate.translation translate progress 80/463
+2026-01-19 11:08:36,091 INFO srt_translate.translation translate progress 100/463
+2026-01-19 11:08:42,310 INFO srt_translate.translation translate progress 120/463
+2026-01-19 11:08:48,485 INFO srt_translate.translation translate progress 140/463
+2026-01-19 11:08:54,574 INFO srt_translate.translation translate progress 160/463
+2026-01-19 11:09:00,612 INFO srt_translate.translation translate progress 180/463
+2026-01-19 11:09:06,795 INFO srt_translate.translation translate progress 200/463
+2026-01-19 11:09:12,965 INFO srt_translate.translation translate progress 220/463
+2026-01-19 11:09:18,550 INFO srt_translate.translation translate progress 240/463
+2026-01-19 11:09:29,968 INFO srt_translate.translation translate progress 80/563 (fallback per-line)
+2026-01-19 11:09:40,882 INFO srt_translate.translation translate progress 100/563
+2026-01-19 11:09:46,817 INFO srt_translate.translation translate progress 120/563
+2026-01-19 11:09:52,905 INFO srt_translate.translation translate progress 140/563
+[2026-01-19 11:10:00] 上次任务 (PID: 30796) 仍在运行，本次跳过
+2026-01-19 11:10:15,881 INFO srt_translate.translation translate progress 260/463 (fallback per-line)
+2026-01-19 11:10:22,035 INFO srt_translate.translation translate progress 280/463
+2026-01-19 11:10:27,782 INFO srt_translate.translation translate progress 300/463
+2026-01-19 11:10:33,599 INFO srt_translate.translation translate progress 320/463
+2026-01-19 11:10:39,582 INFO srt_translate.translation translate progress 340/463
+2026-01-19 11:10:45,537 INFO srt_translate.translation translate progress 360/463
+2026-01-19 11:10:45,695 INFO srt_translate.translation translate progress 160/563 (fallback per-line)
+2026-01-19 11:10:51,356 INFO srt_translate.translation translate progress 380/463
+2026-01-19 11:11:02,437 INFO srt_translate.translation translate progress 400/463
+2026-01-19 11:11:13,870 INFO srt_translate.translation translate progress 420/463
+2026-01-19 11:11:25,451 INFO srt_translate.translation translate progress 440/463
+2026-01-19 11:11:30,856 INFO srt_translate.translation translate progress 460/463
+2026-01-19 11:11:34,499 INFO srt_translate.translation translate progress 463/463 (fallback per-line)
+2026-01-19 11:11:34,504 INFO srt_translate.translation translate done failed=0
+2026-01-19 11:11:34,706 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E13.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 11:11:34,733 INFO srt_translate.translation translate start model=translategemma:latest cues=530 batch_size=20 batches=27
+2026-01-19 11:11:40,708 INFO srt_translate.translation translate progress 20/530
+2026-01-19 11:11:46,917 INFO srt_translate.translation translate progress 40/530
+2026-01-19 11:11:53,491 INFO srt_translate.translation translate progress 60/530
+2026-01-19 11:11:59,335 INFO srt_translate.translation translate progress 80/530
+2026-01-19 11:12:19,849 INFO srt_translate.translation translate progress 180/563 (fallback per-line)
+2026-01-19 11:12:26,105 INFO srt_translate.translation translate progress 200/563
+2026-01-19 11:12:49,556 INFO srt_translate.translation translate progress 100/530 (fallback per-line)
+2026-01-19 11:13:10,749 INFO srt_translate.translation translate progress 220/563 (fallback per-line)
+2026-01-19 11:13:32,863 INFO srt_translate.translation translate progress 120/530 (fallback per-line)
+2026-01-19 11:13:39,231 INFO srt_translate.translation translate progress 140/530
+2026-01-19 11:13:58,612 INFO srt_translate.translation translate progress 240/563 (fallback per-line)
+2026-01-19 11:14:05,079 INFO srt_translate.translation translate progress 260/563
+2026-01-19 11:14:11,458 INFO srt_translate.translation translate progress 280/563
+2026-01-19 11:14:17,646 INFO srt_translate.translation translate progress 300/563
+2026-01-19 11:14:23,756 INFO srt_translate.translation translate progress 320/563
+2026-01-19 11:14:29,792 INFO srt_translate.translation translate progress 340/563
+2026-01-19 11:14:35,605 INFO srt_translate.translation translate progress 360/563
+2026-01-19 11:14:41,957 INFO srt_translate.translation translate progress 380/563
+2026-01-19 11:14:48,060 INFO srt_translate.translation translate progress 400/563
+2026-01-19 11:15:08,394 INFO srt_translate.translation translate progress 160/530 (fallback per-line)
+2026-01-19 11:15:32,617 INFO srt_translate.translation translate progress 420/563 (fallback per-line)
+2026-01-19 11:15:38,987 INFO srt_translate.translation translate progress 440/563
+2026-01-19 11:15:45,291 INFO srt_translate.translation translate progress 460/563
+2026-01-19 11:15:51,883 INFO srt_translate.translation translate progress 480/563
+2026-01-19 11:15:58,290 INFO srt_translate.translation translate progress 500/563
+2026-01-19 11:16:04,382 INFO srt_translate.translation translate progress 520/563
+2026-01-19 11:16:10,546 INFO srt_translate.translation translate progress 540/563
+2026-01-19 11:16:10,893 INFO srt_translate.translation translate progress 180/530 (fallback per-line)
+2026-01-19 11:16:16,198 INFO srt_translate.translation translate progress 560/563
+2026-01-19 11:16:22,022 INFO srt_translate.translation translate progress 200/530
+2026-01-19 11:16:22,946 INFO srt_translate.translation translate progress 563/563
+2026-01-19 11:16:22,952 INFO srt_translate.translation translate done failed=0
+2026-01-19 11:16:23,172 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E01.The.Shores.of.the.Cosmic.Ocean.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+2026-01-19 11:16:23,190 INFO srt_translate.translation translate start model=translategemma:latest cues=510 batch_size=20 batches=26
+2026-01-19 11:16:28,674 INFO srt_translate.translation translate progress 220/530
+2026-01-19 11:16:39,348 INFO srt_translate.translation translate progress 240/530
+2026-01-19 11:16:59,925 INFO srt_translate.translation translate progress 260/530
+2026-01-19 11:17:06,529 INFO srt_translate.translation translate progress 280/530
+2026-01-19 11:17:28,916 INFO srt_translate.translation translate progress 20/510 (fallback per-line)
+2026-01-19 11:17:34,985 INFO srt_translate.translation translate progress 40/510
+2026-01-19 11:17:40,296 INFO srt_translate.translation translate progress 60/510
+2026-01-19 11:17:46,754 INFO srt_translate.translation translate progress 80/510
+2026-01-19 11:17:52,305 INFO srt_translate.translation translate progress 100/510
+2026-01-19 11:17:52,538 INFO srt_translate.translation translate progress 300/530 (fallback per-line)
+2026-01-19 11:18:03,748 INFO srt_translate.translation translate progress 320/530
+2026-01-19 11:18:38,926 INFO srt_translate.translation translate progress 120/510 (fallback per-line)
+2026-01-19 11:18:44,935 INFO srt_translate.translation translate progress 140/510
+2026-01-19 11:18:45,253 INFO srt_translate.translation translate progress 340/530 (fallback per-line)
+2026-01-19 11:18:51,151 INFO srt_translate.translation translate progress 160/510
+2026-01-19 11:19:09,398 INFO srt_translate.translation translate progress 360/530
+2026-01-19 11:19:20,860 INFO srt_translate.translation translate progress 380/530
+2026-01-19 11:19:49,673 INFO srt_translate.translation translate progress 180/510 (fallback per-line)
+2026-01-19 11:19:55,490 INFO srt_translate.translation translate progress 200/510
+[2026-01-19 11:20:00] 上次任务 (PID: 30796) 仍在运行，本次跳过
+2026-01-19 11:20:01,801 INFO srt_translate.translation translate progress 400/530 (fallback per-line)
+2026-01-19 11:20:13,547 INFO srt_translate.translation translate progress 420/530
+2026-01-19 11:20:25,556 INFO srt_translate.translation translate progress 440/530
+2026-01-19 11:20:31,724 INFO srt_translate.translation translate progress 460/530
+2026-01-19 11:20:55,138 INFO srt_translate.translation translate progress 220/510 (fallback per-line)
+2026-01-19 11:21:15,247 INFO srt_translate.translation translate progress 480/530 (fallback per-line)
+2026-01-19 11:21:21,148 INFO srt_translate.translation translate progress 500/530
+2026-01-19 11:21:26,904 INFO srt_translate.translation translate progress 520/530
+2026-01-19 11:21:30,448 INFO srt_translate.translation translate progress 530/530
+2026-01-19 11:21:30,454 INFO srt_translate.translation translate done failed=0
+2026-01-19 11:21:30,665 INFO srt_translate.translation translate start model=translategemma:latest cues=582 batch_size=20 batches=30
+2026-01-19 11:21:48,468 INFO srt_translate.translation translate progress 20/582
+Traceback (most recent call last):
+  File "/Users/daibo/db90/srt_translate.py", line 12, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/daibo/db90/src/srt_translate/cli.py", line 30, in main
+    summary = run_once(cfg, store=store, force=args.force, dry_run=args.dry_run)
+  File "/Users/daibo/db90/src/srt_translate/orchestrator.py", line 241, in run_once
+    source = choose_source_subtitle(
+        ftp=ftp,
+    ...<4 lines>...
+        dry_run=dry_run,
+    )
+  File "/Users/daibo/db90/src/srt_translate/subtitle_acquisition.py", line 105, in choose_source_subtitle
+    q = _score_remote_srt(ftp, rp, lp)
+  File "/Users/daibo/db90/src/srt_translate/subtitle_acquisition.py", line 78, in _score_remote_srt
+    return score_srt_content(content)
+  File "/Users/daibo/db90/src/srt_translate/subtitle_quality.py", line 23, in score_srt_content
+    cues = parse_srt(content)
+  File "/Users/daibo/db90/src/srt_translate/srt.py", line 45, in parse_srt
+    raise ValueError(f"invalid srt time line: {time_line}")
+ValueError: invalid srt time line: ﻿1
+[2026-01-19 11:21:48] 字幕翻译异常 (Exit Code: 1)
+[2026-01-19 11:21:48] 开始执行: 目录迁移 (dir_migrate)
+2026-01-19 11:21:49,618 INFO dir_migrate.orchestrator scan videos=12
+dir_migrate failed: 550 /X-Movie/UnknownYear/Der.Kaplan.The.Tank.UnknownYear.1080p.mkv.AV1.unknown-4KDS: No such file or directory.
+[2026-01-19 11:22:12] 目录迁移异常 (Exit Code: 2)
+[2026-01-19 11:22:12] 所有任务结束
+========================================================
+========================================================
+[2026-01-19 11:30:00] 任务开始
+[2026-01-19 11:30:00] 开始执行: 字幕翻译 (srt_translate)
+2026-01-19 11:30:01,023 INFO srt_translate.orchestrator run_once start force=False dry_run=False
+2026-01-19 11:30:01,024 INFO srt_translate.orchestrator scan ftp_root=/Downloads extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+2026-01-19 11:30:01,538 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E12.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 11:30:01,599 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.A.Spacetime.Odyssey.2014.S01.1080p.BluRay.x264.DTS.FGT/Cosmos.A.Spacetime.Odyssey.2014.S01E13.1080p.BluRay.x264.DTS-FGT.mkv source=emb
+2026-01-19 11:30:01,641 INFO srt_translate.translation translate start model=translategemma:latest cues=510 batch_size=20 batches=26
+2026-01-19 11:30:01,779 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E01.The.Shores.of.the.Cosmic.Ocean.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+2026-01-19 11:30:01,798 INFO srt_translate.translation translate start model=translategemma:latest cues=582 batch_size=20 batches=30
+2026-01-19 11:30:01,875 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E02.One.Voice.in.the.Cosmic.Fugue.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+2026-01-19 11:30:40,789 INFO srt_translate.translation translate progress 20/510 (fallback per-line)
+2026-01-19 11:30:41,109 INFO srt_translate.translation translate progress 20/582 (fallback per-line)
+2026-01-19 11:30:47,019 INFO srt_translate.translation translate progress 40/510
+2026-01-19 11:30:52,113 INFO srt_translate.translation translate progress 40/582
+2026-01-19 11:30:57,233 INFO srt_translate.translation translate progress 60/510
+2026-01-19 11:31:02,662 INFO srt_translate.translation translate progress 60/582
+2026-01-19 11:31:08,691 INFO srt_translate.translation translate progress 80/510
+2026-01-19 11:31:14,597 INFO srt_translate.translation translate progress 80/582
+2026-01-19 11:31:19,907 INFO srt_translate.translation translate progress 100/510
+2026-01-19 11:31:25,366 INFO srt_translate.translation translate progress 100/582
+2026-01-19 11:31:36,950 INFO srt_translate.translation translate progress 120/582
+2026-01-19 11:31:49,225 INFO srt_translate.translation translate progress 140/582
+2026-01-19 11:32:00,719 INFO srt_translate.translation translate progress 160/582
+2026-01-19 11:32:25,803 INFO srt_translate.translation translate progress 120/510 (fallback per-line)
+2026-01-19 11:32:31,725 INFO srt_translate.translation translate progress 140/510
+2026-01-19 11:32:37,752 INFO srt_translate.translation translate progress 160/510
+2026-01-19 11:32:43,850 INFO srt_translate.translation translate progress 180/582 (fallback per-line)
+2026-01-19 11:32:49,627 INFO srt_translate.translation translate progress 180/510
+2026-01-19 11:32:56,039 INFO srt_translate.translation translate progress 200/582
+2026-01-19 11:33:01,621 INFO srt_translate.translation translate progress 200/510
+2026-01-19 11:33:45,614 INFO srt_translate.translation translate progress 220/582 (fallback per-line)
+2026-01-19 11:33:45,852 INFO srt_translate.translation translate progress 220/510 (fallback per-line)
+2026-01-19 11:33:52,371 INFO srt_translate.translation translate progress 240/582
+2026-01-19 11:34:28,427 INFO srt_translate.translation translate progress 260/582
+2026-01-19 11:34:35,049 INFO srt_translate.translation translate progress 280/582
+2026-01-19 11:34:41,482 INFO srt_translate.translation translate progress 300/582
+2026-01-19 11:34:47,788 INFO srt_translate.translation translate progress 320/582
+2026-01-19 11:34:59,204 INFO srt_translate.translation translate progress 340/582
+2026-01-19 11:35:24,208 INFO srt_translate.translation translate progress 240/510 (fallback per-line)
+2026-01-19 11:35:30,633 INFO srt_translate.translation translate progress 260/510
+2026-01-19 11:35:36,652 INFO srt_translate.translation translate progress 280/510
+2026-01-19 11:35:57,487 INFO srt_translate.translation translate progress 360/582 (fallback per-line)
+2026-01-19 11:36:03,489 INFO srt_translate.translation translate progress 380/582
+2026-01-19 11:36:09,801 INFO srt_translate.translation translate progress 400/582
+2026-01-19 11:36:15,869 INFO srt_translate.translation translate progress 420/582
+2026-01-19 11:36:27,678 INFO srt_translate.translation translate progress 440/582
+2026-01-19 11:36:33,244 INFO srt_translate.translation translate progress 460/582
+2026-01-19 11:36:38,814 INFO srt_translate.translation translate progress 480/582
+2026-01-19 11:36:44,457 INFO srt_translate.translation translate progress 500/582
+2026-01-19 11:36:50,514 INFO srt_translate.translation translate progress 520/582
+2026-01-19 11:36:56,260 INFO srt_translate.translation translate progress 540/582
+2026-01-19 11:37:02,012 INFO srt_translate.translation translate progress 560/582
+2026-01-19 11:37:08,426 INFO srt_translate.translation translate progress 580/582
+2026-01-19 11:37:09,350 INFO srt_translate.translation translate progress 582/582
+2026-01-19 11:37:09,355 INFO srt_translate.translation translate done failed=0
+2026-01-19 11:37:09,564 INFO srt_translate.translation translate start model=translategemma:latest cues=780 batch_size=20 batches=39
+2026-01-19 11:37:27,314 INFO srt_translate.translation translate progress 300/510 (fallback per-line)
+2026-01-19 11:37:27,861 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E03.Harmony.of.the.Worlds.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+2026-01-19 11:37:33,359 INFO srt_translate.translation translate progress 320/510
+2026-01-19 11:37:39,559 INFO srt_translate.translation translate progress 340/510
+2026-01-19 11:37:46,005 INFO srt_translate.translation translate progress 360/510
+2026-01-19 11:37:52,029 INFO srt_translate.translation translate progress 380/510
+2026-01-19 11:37:58,471 INFO srt_translate.translation translate progress 400/510
+2026-01-19 11:38:04,628 INFO srt_translate.translation translate progress 420/510
+2026-01-19 11:38:10,646 INFO srt_translate.translation translate progress 440/510
+2026-01-19 11:38:32,187 INFO srt_translate.translation translate progress 20/780 (fallback per-line)
+2026-01-19 11:38:52,438 INFO srt_translate.translation translate progress 460/510 (fallback per-line)
+2026-01-19 11:39:13,720 INFO srt_translate.translation translate progress 40/780 (fallback per-line)
+2026-01-19 11:39:19,354 INFO srt_translate.translation translate progress 60/780
+2026-01-19 11:39:24,837 INFO srt_translate.translation translate progress 80/780
+2026-01-19 11:39:30,359 INFO srt_translate.translation translate progress 100/780
+2026-01-19 11:39:36,334 INFO srt_translate.translation translate progress 120/780
+2026-01-19 11:39:53,899 INFO srt_translate.translation translate progress 140/780
+2026-01-19 11:40:00,216 INFO srt_translate.translation translate progress 160/780
+[2026-01-19 11:40:00] 上次任务 (PID: 35537) 仍在运行，本次跳过
+2026-01-19 11:40:12,350 INFO srt_translate.translation translate progress 480/510 (fallback per-line)
+2026-01-19 11:40:18,311 INFO srt_translate.translation translate progress 180/780
+2026-01-19 11:40:24,161 INFO srt_translate.translation translate progress 500/510
+2026-01-19 11:40:32,326 INFO srt_translate.translation translate progress 510/510
+2026-01-19 11:40:32,328 INFO srt_translate.translation translate done failed=0
+2026-01-19 11:40:32,535 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E04.Heaven.and.Hell.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+2026-01-19 11:40:32,548 INFO srt_translate.translation translate start model=translategemma:latest cues=796 batch_size=20 batches=40
+2026-01-19 11:40:42,574 INFO srt_translate.translation translate progress 20/796
+2026-01-19 11:40:53,782 INFO srt_translate.translation translate progress 40/796
+2026-01-19 11:40:59,248 INFO srt_translate.translation translate progress 60/796
+2026-01-19 11:41:22,328 INFO srt_translate.translation translate progress 200/780 (fallback per-line)
+2026-01-19 11:41:28,304 INFO srt_translate.translation translate progress 220/780
+2026-01-19 11:41:34,245 INFO srt_translate.translation translate progress 240/780
+2026-01-19 11:41:40,140 INFO srt_translate.translation translate progress 260/780
+2026-01-19 11:41:46,671 INFO srt_translate.translation translate progress 280/780
+2026-01-19 11:41:46,842 INFO srt_translate.translation translate progress 80/796 (fallback per-line)
+2026-01-19 11:41:52,644 INFO srt_translate.translation translate progress 300/780
+2026-01-19 11:42:04,266 INFO srt_translate.translation translate progress 320/780
+2026-01-19 11:42:15,560 INFO srt_translate.translation translate progress 340/780
+2026-01-19 11:42:21,110 INFO srt_translate.translation translate progress 100/796
+2026-01-19 11:42:26,748 INFO srt_translate.translation translate progress 360/780
+2026-01-19 11:42:37,707 INFO srt_translate.translation translate progress 380/780
+2026-01-19 11:42:49,346 INFO srt_translate.translation translate progress 400/780
+2026-01-19 11:43:00,497 INFO srt_translate.translation translate progress 420/780
+2026-01-19 11:43:26,339 INFO srt_translate.translation translate progress 120/796 (fallback per-line)
+2026-01-19 11:43:32,603 INFO srt_translate.translation translate progress 140/796
+2026-01-19 11:43:38,466 INFO srt_translate.translation translate progress 160/796
+2026-01-19 11:43:44,741 INFO srt_translate.translation translate progress 180/796
+2026-01-19 11:43:44,991 INFO srt_translate.translation translate progress 440/780 (fallback per-line)
+2026-01-19 11:44:27,523 INFO srt_translate.translation translate progress 200/796 (fallback per-line)
+2026-01-19 11:44:27,734 INFO srt_translate.translation translate progress 460/780 (fallback per-line)
+2026-01-19 11:44:33,394 INFO srt_translate.translation translate progress 220/796
+2026-01-19 11:44:39,599 INFO srt_translate.translation translate progress 480/780
+2026-01-19 11:44:45,302 INFO srt_translate.translation translate progress 240/796
+2026-01-19 11:44:57,210 INFO srt_translate.translation translate progress 260/796
+2026-01-19 11:45:31,811 INFO srt_translate.translation translate progress 500/780 (fallback per-line)
+2026-01-19 11:45:37,848 INFO srt_translate.translation translate progress 520/780
+2026-01-19 11:45:38,044 INFO srt_translate.translation translate progress 280/796 (fallback per-line)
+2026-01-19 11:45:43,740 INFO srt_translate.translation translate progress 540/780
+2026-01-19 11:45:49,254 INFO srt_translate.translation translate progress 300/796
+2026-01-19 11:45:55,291 INFO srt_translate.translation translate progress 560/780
+2026-01-19 11:46:01,145 INFO srt_translate.translation translate progress 320/796
+2026-01-19 11:46:13,028 INFO srt_translate.translation translate progress 340/796
+2026-01-19 11:46:24,653 INFO srt_translate.translation translate progress 360/796
+2026-01-19 11:46:35,917 INFO srt_translate.translation translate progress 380/796
+2026-01-19 11:46:41,949 INFO srt_translate.translation translate progress 400/796
+2026-01-19 11:46:48,811 INFO srt_translate.translation translate progress 420/796
+2026-01-19 11:46:54,950 INFO srt_translate.translation translate progress 440/796
+2026-01-19 11:47:00,929 INFO srt_translate.translation translate progress 460/796
+2026-01-19 11:47:07,105 INFO srt_translate.translation translate progress 480/796
+2026-01-19 11:47:13,059 INFO srt_translate.translation translate progress 500/796
+2026-01-19 11:47:33,518 INFO srt_translate.translation translate progress 580/780 (fallback per-line)
+2026-01-19 11:47:54,295 INFO srt_translate.translation translate progress 520/796 (fallback per-line)
+2026-01-19 11:48:00,414 INFO srt_translate.translation translate progress 540/796
+2026-01-19 11:48:06,505 INFO srt_translate.translation translate progress 560/796
+2026-01-19 11:48:12,353 INFO srt_translate.translation translate progress 580/796
+2026-01-19 11:48:18,617 INFO srt_translate.translation translate progress 600/796
+2026-01-19 11:48:24,556 INFO srt_translate.translation translate progress 620/796
+2026-01-19 11:48:30,693 INFO srt_translate.translation translate progress 640/796
+2026-01-19 11:48:47,032 INFO srt_translate.translation translate progress 660/796
+2026-01-19 11:49:04,819 INFO srt_translate.translation translate progress 600/780 (fallback per-line)
+2026-01-19 11:49:10,707 INFO srt_translate.translation translate progress 620/780
+2026-01-19 11:49:33,124 INFO srt_translate.translation translate progress 680/796 (fallback per-line)
+2026-01-19 11:49:39,077 INFO srt_translate.translation translate progress 700/796
+2026-01-19 11:49:44,873 INFO srt_translate.translation translate progress 720/796
+[2026-01-19 11:50:00] 上次任务 (PID: 35537) 仍在运行，本次跳过
+2026-01-19 11:50:03,686 INFO srt_translate.translation translate progress 740/796
+2026-01-19 11:50:03,954 INFO srt_translate.translation translate progress 640/780 (fallback per-line)
+2026-01-19 11:50:09,945 INFO srt_translate.translation translate progress 760/796
+2026-01-19 11:50:20,853 INFO srt_translate.translation translate progress 780/796
+2026-01-19 11:50:26,381 INFO srt_translate.translation translate progress 660/780
+2026-01-19 11:50:31,657 INFO srt_translate.translation translate progress 796/796
+2026-01-19 11:50:31,666 INFO srt_translate.translation translate done failed=0
+2026-01-19 11:50:32,051 INFO srt_translate.translation translate start model=translategemma:latest cues=830 batch_size=20 batches=42
+2026-01-19 11:50:37,329 INFO srt_translate.translation translate progress 680/780
+2026-01-19 11:50:42,781 INFO srt_translate.translation translate progress 20/830
+2026-01-19 11:50:48,337 INFO srt_translate.translation translate progress 700/780
+2026-01-19 11:50:50,370 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E05.Blues.for.a.Red.Planet.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+2026-01-19 11:50:54,252 INFO srt_translate.translation translate progress 40/830
+2026-01-19 11:50:59,747 INFO srt_translate.translation translate progress 720/780
+2026-01-19 11:51:05,166 INFO srt_translate.translation translate progress 60/830
+2026-01-19 11:51:11,088 INFO srt_translate.translation translate progress 740/780
+2026-01-19 11:51:16,529 INFO srt_translate.translation translate progress 80/830
+2026-01-19 11:51:22,341 INFO srt_translate.translation translate progress 760/780
+2026-01-19 11:51:27,860 INFO srt_translate.translation translate progress 100/830
+2026-01-19 11:51:38,828 INFO srt_translate.translation translate progress 120/830
+2026-01-19 11:51:44,203 INFO srt_translate.translation translate progress 780/780
+2026-01-19 11:51:44,211 INFO srt_translate.translation translate done failed=0
+2026-01-19 11:51:44,446 INFO srt_translate.translation translate start model=translategemma:latest cues=907 batch_size=20 batches=46
+2026-01-19 11:51:44,460 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E06.Travellers.Tales.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+2026-01-19 11:51:50,065 INFO srt_translate.translation translate progress 140/830
+2026-01-19 11:51:55,200 INFO srt_translate.translation translate progress 20/907
+2026-01-19 11:52:00,852 INFO srt_translate.translation translate progress 160/830
+2026-01-19 11:52:06,174 INFO srt_translate.translation translate progress 40/907
+2026-01-19 11:52:11,529 INFO srt_translate.translation translate progress 180/830
+2026-01-19 11:52:17,593 INFO srt_translate.translation translate progress 60/907
+2026-01-19 11:52:23,364 INFO srt_translate.translation translate progress 200/830
+2026-01-19 11:52:29,023 INFO srt_translate.translation translate progress 80/907
+2026-01-19 11:52:34,646 INFO srt_translate.translation translate progress 220/830
+2026-01-19 11:52:40,580 INFO srt_translate.translation translate progress 100/907
+2026-01-19 11:52:46,300 INFO srt_translate.translation translate progress 240/830
+2026-01-19 11:52:51,990 INFO srt_translate.translation translate progress 120/907
+2026-01-19 11:52:57,285 INFO srt_translate.translation translate progress 260/830
+2026-01-19 11:53:02,763 INFO srt_translate.translation translate progress 140/907
+2026-01-19 11:53:08,009 INFO srt_translate.translation translate progress 280/830
+2026-01-19 11:53:14,032 INFO srt_translate.translation translate progress 160/907
+2026-01-19 11:53:19,623 INFO srt_translate.translation translate progress 300/830
+2026-01-19 11:53:31,096 INFO srt_translate.translation translate progress 320/830
+2026-01-19 11:53:42,773 INFO srt_translate.translation translate progress 340/830
+2026-01-19 11:53:54,596 INFO srt_translate.translation translate progress 360/830
+2026-01-19 11:54:17,152 INFO srt_translate.translation translate progress 180/907 (fallback per-line)
+2026-01-19 11:54:36,213 INFO srt_translate.translation translate progress 380/830 (fallback per-line)
+2026-01-19 11:54:42,268 INFO srt_translate.translation translate progress 400/830
+2026-01-19 11:54:47,942 INFO srt_translate.translation translate progress 420/830
+2026-01-19 11:54:53,875 INFO srt_translate.translation translate progress 440/830
+2026-01-19 11:55:11,692 INFO srt_translate.translation translate progress 460/830
+2026-01-19 11:55:17,892 INFO srt_translate.translation translate progress 480/830
+2026-01-19 11:55:23,911 INFO srt_translate.translation translate progress 500/830
+2026-01-19 11:55:30,136 INFO srt_translate.translation translate progress 520/830
+2026-01-19 11:55:36,649 INFO srt_translate.translation translate progress 540/830
+2026-01-19 11:55:43,201 INFO srt_translate.translation translate progress 560/830
+2026-01-19 11:55:54,604 INFO srt_translate.translation translate progress 580/830
+2026-01-19 11:56:00,363 INFO srt_translate.translation translate progress 600/830
+2026-01-19 11:56:17,633 INFO srt_translate.translation translate progress 200/907 (fallback per-line)
+2026-01-19 11:56:24,075 INFO srt_translate.translation translate progress 220/907
+2026-01-19 11:56:30,122 INFO srt_translate.translation translate progress 240/907
+2026-01-19 11:56:36,637 INFO srt_translate.translation translate progress 260/907
+2026-01-19 11:56:42,267 INFO srt_translate.translation translate progress 280/907
+2026-01-19 11:56:48,184 INFO srt_translate.translation translate progress 300/907
+2026-01-19 11:56:54,174 INFO srt_translate.translation translate progress 320/907
+2026-01-19 11:56:59,950 INFO srt_translate.translation translate progress 340/907
+2026-01-19 11:57:05,855 INFO srt_translate.translation translate progress 360/907
+2026-01-19 11:57:11,699 INFO srt_translate.translation translate progress 380/907
+2026-01-19 11:57:17,855 INFO srt_translate.translation translate progress 400/907
+2026-01-19 11:57:24,386 INFO srt_translate.translation translate progress 420/907
+2026-01-19 11:57:30,573 INFO srt_translate.translation translate progress 440/907
+2026-01-19 11:57:36,765 INFO srt_translate.translation translate progress 460/907
+2026-01-19 11:57:43,139 INFO srt_translate.translation translate progress 480/907
+2026-01-19 11:57:48,840 INFO srt_translate.translation translate progress 500/907
+2026-01-19 11:57:59,479 INFO srt_translate.translation translate progress 620/830 (fallback per-line)
+2026-01-19 11:58:14,236 INFO srt_translate.translation translate progress 640/830
+2026-01-19 11:58:20,342 INFO srt_translate.translation translate progress 660/830
+2026-01-19 11:58:41,922 INFO srt_translate.translation translate progress 520/907 (fallback per-line)
+2026-01-19 11:58:53,661 INFO srt_translate.translation translate progress 540/907
+2026-01-19 11:58:59,666 INFO srt_translate.translation translate progress 560/907
+2026-01-19 11:59:05,734 INFO srt_translate.translation translate progress 580/907
+2026-01-19 11:59:11,633 INFO srt_translate.translation translate progress 600/907
+2026-01-19 11:59:11,829 INFO srt_translate.translation translate progress 680/830 (fallback per-line)
+2026-01-19 11:59:17,795 INFO srt_translate.translation translate progress 620/907
+2026-01-19 11:59:29,223 INFO srt_translate.translation translate progress 640/907
+2026-01-19 11:59:34,822 INFO srt_translate.translation translate progress 700/830
+2026-01-19 11:59:41,085 INFO srt_translate.translation translate progress 660/907
+2026-01-19 11:59:46,560 INFO srt_translate.translation translate progress 720/830
+2026-01-19 11:59:52,711 INFO srt_translate.translation translate progress 680/907
+2026-01-19 11:59:58,223 INFO srt_translate.translation translate progress 740/830
+[2026-01-19 12:00:00] 上次任务 (PID: 35537) 仍在运行，本次跳过
+2026-01-19 12:00:03,891 INFO srt_translate.translation translate progress 700/907
+2026-01-19 12:00:09,750 INFO srt_translate.translation translate progress 760/830
+2026-01-19 12:00:15,771 INFO srt_translate.translation translate progress 720/907
+2026-01-19 12:00:21,749 INFO srt_translate.translation translate progress 780/830
+2026-01-19 12:00:32,862 INFO srt_translate.translation translate progress 800/830
+2026-01-19 12:00:43,732 INFO srt_translate.translation translate progress 820/830
+2026-01-19 12:00:52,052 INFO srt_translate.translation translate progress 830/830
+2026-01-19 12:00:52,056 INFO srt_translate.translation translate done failed=0
+2026-01-19 12:00:52,309 INFO srt_translate.translation translate start model=translategemma:latest cues=809 batch_size=20 batches=41
+2026-01-19 12:00:58,253 INFO srt_translate.translation translate progress 20/809
+2026-01-19 12:01:04,109 INFO srt_translate.translation translate progress 40/809
+2026-01-19 12:01:09,842 INFO srt_translate.translation translate progress 60/809
+2026-01-19 12:01:10,584 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E07.The.Backbone.of.Night.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+2026-01-19 12:01:15,763 INFO srt_translate.translation translate progress 80/809
+2026-01-19 12:01:21,938 INFO srt_translate.translation translate progress 100/809
+2026-01-19 12:01:27,894 INFO srt_translate.translation translate progress 120/809
+2026-01-19 12:01:33,696 INFO srt_translate.translation translate progress 140/809
+2026-01-19 12:01:39,886 INFO srt_translate.translation translate progress 160/809
+2026-01-19 12:01:46,124 INFO srt_translate.translation translate progress 180/809
+2026-01-19 12:01:52,232 INFO srt_translate.translation translate progress 200/809
+2026-01-19 12:01:58,395 INFO srt_translate.translation translate progress 220/809
+2026-01-19 12:02:04,206 INFO srt_translate.translation translate progress 240/809
+2026-01-19 12:02:10,302 INFO srt_translate.translation translate progress 260/809
+2026-01-19 12:02:15,869 INFO srt_translate.translation translate progress 280/809
+2026-01-19 12:02:33,402 INFO srt_translate.translation translate progress 740/907 (fallback per-line)
+2026-01-19 12:02:39,121 INFO srt_translate.translation translate progress 760/907
+2026-01-19 12:02:44,968 INFO srt_translate.translation translate progress 780/907
+2026-01-19 12:02:50,885 INFO srt_translate.translation translate progress 800/907
+2026-01-19 12:03:02,021 INFO srt_translate.translation translate progress 820/907
+2026-01-19 12:03:08,217 INFO srt_translate.translation translate progress 840/907
+2026-01-19 12:03:14,376 INFO srt_translate.translation translate progress 860/907
+2026-01-19 12:03:20,236 INFO srt_translate.translation translate progress 880/907
+2026-01-19 12:03:39,675 INFO srt_translate.translation translate progress 300/809 (fallback per-line)
+2026-01-19 12:03:45,718 INFO srt_translate.translation translate progress 320/809
+2026-01-19 12:04:06,241 INFO srt_translate.translation translate progress 900/907 (fallback per-line)
+2026-01-19 12:04:08,804 INFO srt_translate.translation translate progress 907/907
+2026-01-19 12:04:08,812 INFO srt_translate.translation translate done failed=0
+2026-01-19 12:04:09,039 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E08.Journeys.in.Space.and.Time.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+2026-01-19 12:04:09,048 INFO srt_translate.translation translate start model=translategemma:latest cues=862 batch_size=20 batches=44
+2026-01-19 12:04:14,313 INFO srt_translate.translation translate progress 20/862
+2026-01-19 12:04:19,930 INFO srt_translate.translation translate progress 40/862
+2026-01-19 12:04:24,966 INFO srt_translate.translation translate progress 60/862
+2026-01-19 12:04:36,535 INFO srt_translate.translation translate progress 80/862
+2026-01-19 12:04:42,410 INFO srt_translate.translation translate progress 100/862
+2026-01-19 12:04:48,577 INFO srt_translate.translation translate progress 120/862
+2026-01-19 12:04:54,778 INFO srt_translate.translation translate progress 140/862
+2026-01-19 12:05:00,602 INFO srt_translate.translation translate progress 160/862
+2026-01-19 12:05:06,076 INFO srt_translate.translation translate progress 180/862
+2026-01-19 12:05:06,273 INFO srt_translate.translation translate progress 340/809 (fallback per-line)
+2026-01-19 12:05:17,983 INFO srt_translate.translation translate progress 360/809
+2026-01-19 12:05:29,427 INFO srt_translate.translation translate progress 380/809
+2026-01-19 12:05:41,046 INFO srt_translate.translation translate progress 400/809
+2026-01-19 12:05:46,896 INFO srt_translate.translation translate progress 420/809
+2026-01-19 12:06:10,512 INFO srt_translate.translation translate progress 200/862 (fallback per-line)
+2026-01-19 12:06:16,381 INFO srt_translate.translation translate progress 220/862
+2026-01-19 12:06:22,140 INFO srt_translate.translation translate progress 240/862
+2026-01-19 12:06:34,613 INFO srt_translate.translation translate progress 440/809 (fallback per-line)
+2026-01-19 12:06:46,364 INFO srt_translate.translation translate progress 460/809
+2026-01-19 12:06:52,349 INFO srt_translate.translation translate progress 480/809
+2026-01-19 12:06:57,924 INFO srt_translate.translation translate progress 500/809
+2026-01-19 12:07:04,299 INFO srt_translate.translation translate progress 520/809
+2026-01-19 12:07:10,167 INFO srt_translate.translation translate progress 540/809
+2026-01-19 12:07:31,652 INFO srt_translate.translation translate progress 260/862 (fallback per-line)
+2026-01-19 12:07:37,718 INFO srt_translate.translation translate progress 280/862
+2026-01-19 12:07:43,456 INFO srt_translate.translation translate progress 300/862
+2026-01-19 12:07:49,640 INFO srt_translate.translation translate progress 320/862
+2026-01-19 12:07:55,659 INFO srt_translate.translation translate progress 340/862
+2026-01-19 12:08:01,457 INFO srt_translate.translation translate progress 360/862
+2026-01-19 12:08:13,128 INFO srt_translate.translation translate progress 560/809 (fallback per-line)
+2026-01-19 12:08:18,805 INFO srt_translate.translation translate progress 380/862
+2026-01-19 12:08:24,348 INFO srt_translate.translation translate progress 580/809
+2026-01-19 12:08:29,861 INFO srt_translate.translation translate progress 400/862
+2026-01-19 12:08:35,600 INFO srt_translate.translation translate progress 600/809
+2026-01-19 12:08:41,252 INFO srt_translate.translation translate progress 420/862
+2026-01-19 12:08:47,044 INFO srt_translate.translation translate progress 620/809
+2026-01-19 12:08:52,262 INFO srt_translate.translation translate progress 440/862
+2026-01-19 12:08:58,166 INFO srt_translate.translation translate progress 640/809
+2026-01-19 12:09:03,600 INFO srt_translate.translation translate progress 460/862
+2026-01-19 12:09:09,902 INFO srt_translate.translation translate progress 660/809
+2026-01-19 12:09:52,484 INFO srt_translate.translation translate progress 480/862 (fallback per-line)
+2026-01-19 12:09:52,698 INFO srt_translate.translation translate progress 680/809 (fallback per-line)
+2026-01-19 12:09:57,876 INFO srt_translate.translation translate progress 500/862
+[2026-01-19 12:10:00] 上次任务 (PID: 35537) 仍在运行，本次跳过
+2026-01-19 12:10:03,475 INFO srt_translate.translation translate progress 700/809
+2026-01-19 12:10:09,322 INFO srt_translate.translation translate progress 520/862
+2026-01-19 12:10:14,997 INFO srt_translate.translation translate progress 720/809
+2026-01-19 12:10:20,568 INFO srt_translate.translation translate progress 540/862
+2026-01-19 12:10:26,480 INFO srt_translate.translation translate progress 740/809
+2026-01-19 12:10:38,504 INFO srt_translate.translation translate progress 760/809
+2026-01-19 12:10:50,653 INFO srt_translate.translation translate progress 780/809
+2026-01-19 12:11:20,839 INFO srt_translate.translation translate progress 560/862 (fallback per-line)
+2026-01-19 12:11:27,253 INFO srt_translate.translation translate progress 580/862
+2026-01-19 12:11:33,283 INFO srt_translate.translation translate progress 600/862
+2026-01-19 12:11:33,479 INFO srt_translate.translation translate progress 800/809 (fallback per-line)
+2026-01-19 12:11:39,294 INFO srt_translate.translation translate progress 620/862
+2026-01-19 12:11:41,868 INFO srt_translate.translation translate progress 809/809
+2026-01-19 12:11:41,873 INFO srt_translate.translation translate done failed=0
+2026-01-19 12:11:42,646 INFO srt_translate.translation translate start model=translategemma:latest cues=880 batch_size=20 batches=44
+2026-01-19 12:11:47,815 INFO srt_translate.translation translate progress 640/862
+2026-01-19 12:11:52,934 INFO srt_translate.translation translate progress 20/880
+2026-01-19 12:11:58,383 INFO srt_translate.translation translate progress 660/862
+2026-01-19 12:12:01,030 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E09.The.Lives.of.the.Stars.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+2026-01-19 12:12:04,057 INFO srt_translate.translation translate progress 40/880
+2026-01-19 12:12:09,883 INFO srt_translate.translation translate progress 680/862
+2026-01-19 12:12:15,031 INFO srt_translate.translation translate progress 60/880
+2026-01-19 12:12:21,078 INFO srt_translate.translation translate progress 700/862
+2026-01-19 12:12:26,539 INFO srt_translate.translation translate progress 80/880
+2026-01-19 12:12:32,676 INFO srt_translate.translation translate progress 720/862
+2026-01-19 12:12:43,090 INFO srt_translate.translation translate progress 740/862
+2026-01-19 12:12:53,571 INFO srt_translate.translation translate progress 760/862
+2026-01-19 12:13:04,565 INFO srt_translate.translation translate progress 780/862
+2026-01-19 12:13:10,705 INFO srt_translate.translation translate progress 800/862
+2026-01-19 12:13:17,002 INFO srt_translate.translation translate progress 820/862
+2026-01-19 12:13:40,358 INFO srt_translate.translation translate progress 100/880 (fallback per-line)
+2026-01-19 12:13:45,991 INFO srt_translate.translation translate progress 120/880
+2026-01-19 12:14:04,324 INFO srt_translate.translation translate progress 840/862 (fallback per-line)
+2026-01-19 12:14:09,973 INFO srt_translate.translation translate progress 860/862
+2026-01-19 12:14:10,854 INFO srt_translate.translation translate progress 862/862
+2026-01-19 12:14:10,862 INFO srt_translate.translation translate done failed=0
+2026-01-19 12:14:11,393 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E10.The.Edge.of.Forever.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+2026-01-19 12:14:11,408 INFO srt_translate.translation translate start model=translategemma:latest cues=922 batch_size=20 batches=47
+2026-01-19 12:14:22,536 INFO srt_translate.translation translate progress 20/922
+2026-01-19 12:14:28,311 INFO srt_translate.translation translate progress 40/922
+2026-01-19 12:14:34,178 INFO srt_translate.translation translate progress 60/922
+2026-01-19 12:14:53,810 INFO srt_translate.translation translate progress 140/880 (fallback per-line)
+2026-01-19 12:14:59,149 INFO srt_translate.translation translate progress 160/880
+2026-01-19 12:15:05,010 INFO srt_translate.translation translate progress 180/880
+2026-01-19 12:15:10,918 INFO srt_translate.translation translate progress 200/880
+2026-01-19 12:15:16,723 INFO srt_translate.translation translate progress 220/880
+2026-01-19 12:15:22,619 INFO srt_translate.translation translate progress 240/880
+2026-01-19 12:15:40,859 INFO srt_translate.translation translate progress 80/922 (fallback per-line)
+2026-01-19 12:15:46,572 INFO srt_translate.translation translate progress 100/922
+2026-01-19 12:15:52,206 INFO srt_translate.translation translate progress 120/922
+2026-01-19 12:15:57,937 INFO srt_translate.translation translate progress 140/922
+2026-01-19 12:16:03,704 INFO srt_translate.translation translate progress 160/922
+2026-01-19 12:16:09,547 INFO srt_translate.translation translate progress 180/922
+2026-01-19 12:16:21,934 INFO srt_translate.translation translate progress 200/922
+2026-01-19 12:16:28,112 INFO srt_translate.translation translate progress 220/922
+2026-01-19 12:16:34,158 INFO srt_translate.translation translate progress 240/922
+2026-01-19 12:16:40,064 INFO srt_translate.translation translate progress 260/922
+2026-01-19 12:16:57,178 INFO srt_translate.translation translate progress 260/880 (fallback per-line)
+2026-01-19 12:17:03,059 INFO srt_translate.translation translate progress 280/880
+2026-01-19 12:17:09,384 INFO srt_translate.translation translate progress 300/880
+2026-01-19 12:17:15,405 INFO srt_translate.translation translate progress 320/880
+2026-01-19 12:17:35,193 INFO srt_translate.translation translate progress 280/922 (fallback per-line)
+2026-01-19 12:17:41,055 INFO srt_translate.translation translate progress 300/922
+2026-01-19 12:17:52,428 INFO srt_translate.translation translate progress 320/922
+2026-01-19 12:17:58,530 INFO srt_translate.translation translate progress 340/922
+2026-01-19 12:18:04,664 INFO srt_translate.translation translate progress 360/922
+2026-01-19 12:18:10,432 INFO srt_translate.translation translate progress 380/922
+2026-01-19 12:18:16,488 INFO srt_translate.translation translate progress 400/922
+2026-01-19 12:18:22,486 INFO srt_translate.translation translate progress 340/880 (fallback per-line)
+2026-01-19 12:18:28,304 INFO srt_translate.translation translate progress 420/922
+2026-01-19 12:18:34,141 INFO srt_translate.translation translate progress 360/880
+2026-01-19 12:18:44,921 INFO srt_translate.translation translate progress 380/880
+2026-01-19 12:18:56,400 INFO srt_translate.translation translate progress 400/880
+2026-01-19 12:19:06,747 INFO srt_translate.translation translate progress 420/880
+2026-01-19 12:19:13,043 INFO srt_translate.translation translate progress 440/880
+2026-01-19 12:19:18,871 INFO srt_translate.translation translate progress 460/880
+2026-01-19 12:19:24,886 INFO srt_translate.translation translate progress 480/880
+2026-01-19 12:19:47,440 INFO srt_translate.translation translate progress 440/922 (fallback per-line)
+2026-01-19 12:19:53,611 INFO srt_translate.translation translate progress 460/922
+2026-01-19 12:19:59,445 INFO srt_translate.translation translate progress 480/922
+[2026-01-19 12:20:00] 上次任务 (PID: 35537) 仍在运行，本次跳过
+2026-01-19 12:20:05,287 INFO srt_translate.translation translate progress 500/922
+2026-01-19 12:20:10,897 INFO srt_translate.translation translate progress 520/922
+2026-01-19 12:20:16,736 INFO srt_translate.translation translate progress 540/922
+2026-01-19 12:20:22,301 INFO srt_translate.translation translate progress 560/922
+2026-01-19 12:20:22,549 INFO srt_translate.translation translate progress 500/880 (fallback per-line)
+2026-01-19 12:20:28,012 INFO srt_translate.translation translate progress 580/922
+2026-01-19 12:20:38,994 INFO srt_translate.translation translate progress 600/922
+2026-01-19 12:21:11,131 INFO srt_translate.translation translate progress 520/880 (fallback per-line)
+2026-01-19 12:21:17,276 INFO srt_translate.translation translate progress 620/922 (fallback per-line)
+2026-01-19 12:21:39,972 INFO srt_translate.translation translate progress 640/922
+2026-01-19 12:21:45,969 INFO srt_translate.translation translate progress 660/922
+2026-01-19 12:21:51,686 INFO srt_translate.translation translate progress 680/922
+2026-01-19 12:22:09,041 INFO srt_translate.translation translate progress 700/922
+2026-01-19 12:22:14,872 INFO srt_translate.translation translate progress 720/922
+2026-01-19 12:22:20,462 INFO srt_translate.translation translate progress 740/922
+2026-01-19 12:22:38,272 INFO srt_translate.translation translate progress 760/922
+2026-01-19 12:22:43,800 INFO srt_translate.translation translate progress 780/922
+2026-01-19 12:22:49,628 INFO srt_translate.translation translate progress 800/922
+2026-01-19 12:23:09,345 INFO srt_translate.translation translate progress 540/880 (fallback per-line)
+2026-01-19 12:23:15,189 INFO srt_translate.translation translate progress 560/880
+2026-01-19 12:23:21,183 INFO srt_translate.translation translate progress 580/880
+2026-01-19 12:23:26,986 INFO srt_translate.translation translate progress 600/880
+2026-01-19 12:23:33,271 INFO srt_translate.translation translate progress 620/880
+2026-01-19 12:23:39,201 INFO srt_translate.translation translate progress 640/880
+2026-01-19 12:23:45,315 INFO srt_translate.translation translate progress 660/880
+2026-01-19 12:24:05,850 INFO srt_translate.translation translate progress 820/922 (fallback per-line)
+2026-01-19 12:24:11,649 INFO srt_translate.translation translate progress 840/922
+2026-01-19 12:24:17,594 INFO srt_translate.translation translate progress 860/922
+2026-01-19 12:24:23,677 INFO srt_translate.translation translate progress 880/922
+2026-01-19 12:24:29,556 INFO srt_translate.translation translate progress 900/922
+2026-01-19 12:24:35,493 INFO srt_translate.translation translate progress 920/922
+2026-01-19 12:24:36,426 INFO srt_translate.translation translate progress 922/922
+2026-01-19 12:24:36,436 INFO srt_translate.translation translate done failed=0
+2026-01-19 12:24:37,221 INFO srt_translate.translation translate start model=translategemma:latest cues=792 batch_size=20 batches=40
+2026-01-19 12:24:42,330 INFO srt_translate.translation translate progress 20/792
+2026-01-19 12:24:48,004 INFO srt_translate.translation translate progress 40/792
+2026-01-19 12:24:53,506 INFO srt_translate.translation translate progress 60/792
+2026-01-19 12:24:55,526 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E11.The.Persistence.of.Memory.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+2026-01-19 12:25:00,313 INFO srt_translate.translation translate progress 680/880 (fallback per-line)
+2026-01-19 12:25:26,768 INFO srt_translate.translation translate progress 80/792 (fallback per-line)
+2026-01-19 12:25:32,704 INFO srt_translate.translation translate progress 100/792
+2026-01-19 12:25:38,405 INFO srt_translate.translation translate progress 700/880 (fallback per-line)
+2026-01-19 12:25:49,431 INFO srt_translate.translation translate progress 720/880
+2026-01-19 12:26:01,026 INFO srt_translate.translation translate progress 740/880
+2026-01-19 12:26:07,088 INFO srt_translate.translation translate progress 760/880
+2026-01-19 12:26:18,572 INFO srt_translate.translation translate progress 780/880
+2026-01-19 12:26:34,528 INFO srt_translate.translation translate progress 800/880
+2026-01-19 12:26:40,551 INFO srt_translate.translation translate progress 820/880
+2026-01-19 12:26:46,436 INFO srt_translate.translation translate progress 840/880
+2026-01-19 12:26:52,535 INFO srt_translate.translation translate progress 860/880
+2026-01-19 12:27:10,802 INFO srt_translate.translation translate progress 120/792 (fallback per-line)
+2026-01-19 12:27:16,020 INFO srt_translate.translation translate progress 140/792
+2026-01-19 12:27:21,240 INFO srt_translate.translation translate progress 160/792
+2026-01-19 12:27:40,696 INFO srt_translate.translation translate progress 880/880 (fallback per-line)
+2026-01-19 12:27:40,703 INFO srt_translate.translation translate done failed=0
+2026-01-19 12:27:41,277 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E12.Encyclopaedia.Galactica.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+2026-01-19 12:27:41,289 INFO srt_translate.translation translate start model=translategemma:latest cues=882 batch_size=20 batches=45
+2026-01-19 12:27:46,449 INFO srt_translate.translation translate progress 20/882
+2026-01-19 12:27:52,410 INFO srt_translate.translation translate progress 40/882
+2026-01-19 12:27:58,233 INFO srt_translate.translation translate progress 60/882
+2026-01-19 12:28:09,488 INFO srt_translate.translation translate progress 80/882
+2026-01-19 12:28:15,360 INFO srt_translate.translation translate progress 100/882
+2026-01-19 12:28:21,410 INFO srt_translate.translation translate progress 120/882
+2026-01-19 12:28:27,591 INFO srt_translate.translation translate progress 140/882
+2026-01-19 12:28:33,261 INFO srt_translate.translation translate progress 160/882
+2026-01-19 12:28:39,555 INFO srt_translate.translation translate progress 180/882
+2026-01-19 12:28:39,690 INFO srt_translate.translation translate progress 180/792 (fallback per-line)
+2026-01-19 12:28:46,022 INFO srt_translate.translation translate progress 200/882
+2026-01-19 12:28:51,361 INFO srt_translate.translation translate progress 200/792
+2026-01-19 12:28:57,342 INFO srt_translate.translation translate progress 220/882
+2026-01-19 12:29:37,092 INFO srt_translate.translation translate progress 220/792 (fallback per-line)
+2026-01-19 12:29:37,227 INFO srt_translate.translation translate progress 240/882 (fallback per-line)
+2026-01-19 12:29:42,720 INFO srt_translate.translation translate progress 240/792
+2026-01-19 12:29:53,768 INFO srt_translate.translation translate progress 260/792
+[2026-01-19 12:30:00] 上次任务 (PID: 35537) 仍在运行，本次跳过
+2026-01-19 12:30:05,117 INFO srt_translate.translation translate progress 280/792
+2026-01-19 12:30:16,424 INFO srt_translate.translation translate progress 300/792
+2026-01-19 12:30:22,348 INFO srt_translate.translation translate progress 320/792
+2026-01-19 12:30:43,738 INFO srt_translate.translation translate progress 260/882 (fallback per-line)
+2026-01-19 12:30:49,234 INFO srt_translate.translation translate progress 280/882
+2026-01-19 12:31:01,963 INFO srt_translate.translation translate progress 300/882
+2026-01-19 12:31:08,736 INFO srt_translate.translation translate progress 320/882
+2026-01-19 12:31:08,935 INFO srt_translate.translation translate progress 340/792 (fallback per-line)
+2026-01-19 12:31:14,463 INFO srt_translate.translation translate progress 340/882
+2026-01-19 12:31:19,970 INFO srt_translate.translation translate progress 360/792
+2026-01-19 12:31:30,913 INFO srt_translate.translation translate progress 380/792
+2026-01-19 12:31:42,331 INFO srt_translate.translation translate progress 400/792
+2026-01-19 12:32:11,986 INFO srt_translate.translation translate progress 360/882 (fallback per-line)
+2026-01-19 12:32:18,224 INFO srt_translate.translation translate progress 380/882
+2026-01-19 12:32:24,293 INFO srt_translate.translation translate progress 400/882
+2026-01-19 12:32:24,553 INFO srt_translate.translation translate progress 420/792 (fallback per-line)
+2026-01-19 12:32:30,609 INFO srt_translate.translation translate progress 420/882
+2026-01-19 12:32:36,672 INFO srt_translate.translation translate progress 440/792
+2026-01-19 12:32:42,458 INFO srt_translate.translation translate progress 440/882
+2026-01-19 12:32:48,093 INFO srt_translate.translation translate progress 460/792
+2026-01-19 12:32:59,296 INFO srt_translate.translation translate progress 480/792
+2026-01-19 12:33:34,029 INFO srt_translate.translation translate progress 460/882 (fallback per-line)
+2026-01-19 12:33:40,053 INFO srt_translate.translation translate progress 480/882
+2026-01-19 12:33:40,321 INFO srt_translate.translation translate progress 500/792 (fallback per-line)
+2026-01-19 12:33:51,495 INFO srt_translate.translation translate progress 520/792
+2026-01-19 12:34:03,093 INFO srt_translate.translation translate progress 540/792
+2026-01-19 12:34:14,203 INFO srt_translate.translation translate progress 560/792
+2026-01-19 12:34:20,168 INFO srt_translate.translation translate progress 580/792
+2026-01-19 12:34:26,503 INFO srt_translate.translation translate progress 600/792
+2026-01-19 12:34:32,715 INFO srt_translate.translation translate progress 620/792
+2026-01-19 12:34:38,798 INFO srt_translate.translation translate progress 640/792
+2026-01-19 12:35:01,541 INFO srt_translate.translation translate progress 500/882 (fallback per-line)
+2026-01-19 12:35:07,387 INFO srt_translate.translation translate progress 520/882
+2026-01-19 12:35:12,877 INFO srt_translate.translation translate progress 540/882
+2026-01-19 12:35:18,698 INFO srt_translate.translation translate progress 560/882
+2026-01-19 12:35:24,439 INFO srt_translate.translation translate progress 580/882
+2026-01-19 12:35:30,546 INFO srt_translate.translation translate progress 600/882
+2026-01-19 12:35:41,672 INFO srt_translate.translation translate progress 660/792 (fallback per-line)
+2026-01-19 12:35:52,107 INFO srt_translate.translation translate progress 680/792
+2026-01-19 12:35:58,186 INFO srt_translate.translation translate progress 700/792
+2026-01-19 12:36:04,139 INFO srt_translate.translation translate progress 720/792
+2026-01-19 12:36:10,157 INFO srt_translate.translation translate progress 740/792
+2026-01-19 12:36:16,337 INFO srt_translate.translation translate progress 760/792
+2026-01-19 12:36:34,953 INFO srt_translate.translation translate progress 780/792
+2026-01-19 12:36:38,858 INFO srt_translate.translation translate progress 792/792
+2026-01-19 12:36:38,865 INFO srt_translate.translation translate done failed=0
+2026-01-19 12:36:39,459 INFO srt_translate.translation translate start model=translategemma:latest cues=864 batch_size=20 batches=44
+2026-01-19 12:36:44,972 INFO srt_translate.translation translate progress 20/864
+2026-01-19 12:36:50,196 INFO srt_translate.translation translate progress 40/864
+2026-01-19 12:36:55,465 INFO srt_translate.translation translate progress 60/864
+2026-01-19 12:36:57,779 INFO srt_translate.orchestrator translate queued video=/Downloads/Cosmos.1980.S01.1080p.Bluray.x265.AAC.MVGroup.org/Cosmos.1980.S01E13.Who.Speaks.for.Earth.1080p.Bluray.x265.AAC.MVGroup.org.mkv source=external
+2026-01-19 12:37:00,916 INFO srt_translate.translation translate progress 80/864
+2026-01-19 12:37:06,535 INFO srt_translate.translation translate progress 100/864
+2026-01-19 12:37:22,945 INFO srt_translate.translation translate progress 620/882 (fallback per-line)
+2026-01-19 12:37:28,738 INFO srt_translate.translation translate progress 640/882
+2026-01-19 12:37:34,635 INFO srt_translate.translation translate progress 660/882
+2026-01-19 12:37:40,332 INFO srt_translate.translation translate progress 680/882
+2026-01-19 12:37:46,323 INFO srt_translate.translation translate progress 700/882
+2026-01-19 12:37:51,992 INFO srt_translate.translation translate progress 720/882
+2026-01-19 12:38:11,892 INFO srt_translate.translation translate progress 120/864 (fallback per-line)
+2026-01-19 12:38:17,501 INFO srt_translate.translation translate progress 140/864
+2026-01-19 12:38:23,227 INFO srt_translate.translation translate progress 160/864
+2026-01-19 12:38:29,196 INFO srt_translate.translation translate progress 180/864
+2026-01-19 12:38:35,156 INFO srt_translate.translation translate progress 200/864
+2026-01-19 12:38:41,047 INFO srt_translate.translation translate progress 220/864
+2026-01-19 12:38:47,036 INFO srt_translate.translation translate progress 240/864
+2026-01-19 12:38:52,785 INFO srt_translate.translation translate progress 260/864
+2026-01-19 12:38:58,737 INFO srt_translate.translation translate progress 280/864
+2026-01-19 12:39:04,701 INFO srt_translate.translation translate progress 300/864
+2026-01-19 12:39:04,912 INFO srt_translate.translation translate progress 740/882 (fallback per-line)
+2026-01-19 12:39:15,775 INFO srt_translate.translation translate progress 760/882
+2026-01-19 12:39:26,577 INFO srt_translate.translation translate progress 780/882
+2026-01-19 12:39:37,534 INFO srt_translate.translation translate progress 800/882
+2026-01-19 12:39:43,273 INFO srt_translate.translation translate progress 820/882
+[2026-01-19 12:40:00] 上次任务 (PID: 35537) 仍在运行，本次跳过
+2026-01-19 12:40:03,970 INFO srt_translate.translation translate progress 320/864 (fallback per-line)
+2026-01-19 12:40:20,445 INFO srt_translate.translation translate progress 840/882 (fallback per-line)
+2026-01-19 12:40:42,217 INFO srt_translate.translation translate progress 340/864 (fallback per-line)
+2026-01-19 12:40:48,012 INFO srt_translate.translation translate progress 360/864
+2026-01-19 12:40:53,783 INFO srt_translate.translation translate progress 380/864
+2026-01-19 12:41:05,389 INFO srt_translate.translation translate progress 860/882 (fallback per-line)
+2026-01-19 12:41:16,379 INFO srt_translate.translation translate progress 880/882
+2026-01-19 12:41:17,934 INFO srt_translate.translation translate progress 882/882
+2026-01-19 12:41:17,943 INFO srt_translate.translation translate done failed=0
+2026-01-19 12:41:18,459 INFO srt_translate.translation translate start model=translategemma:latest cues=796 batch_size=20 batches=40
+2026-01-19 12:41:24,269 INFO srt_translate.translation translate progress 20/796
+2026-01-19 12:41:29,250 INFO srt_translate.translation translate progress 40/796
+2026-01-19 12:41:35,224 INFO srt_translate.translation translate progress 60/796
+2026-01-19 12:41:41,194 INFO srt_translate.translation translate progress 80/796
+2026-01-19 12:42:01,819 INFO srt_translate.translation translate progress 400/864 (fallback per-line)
+2026-01-19 12:42:07,659 INFO srt_translate.translation translate progress 420/864
+2026-01-19 12:42:13,368 INFO srt_translate.translation translate progress 440/864
+2026-01-19 12:42:19,109 INFO srt_translate.translation translate progress 460/864
+2026-01-19 12:42:37,654 INFO srt_translate.translation translate progress 100/796 (fallback per-line)
+2026-01-19 12:42:43,508 INFO srt_translate.translation translate progress 120/796
+2026-01-19 12:42:49,777 INFO srt_translate.translation translate progress 140/796
+2026-01-19 12:42:55,973 INFO srt_translate.translation translate progress 160/796
+2026-01-19 12:43:02,083 INFO srt_translate.translation translate progress 180/796
+2026-01-19 12:43:08,274 INFO srt_translate.translation translate progress 200/796
+2026-01-19 12:43:14,589 INFO srt_translate.translation translate progress 220/796
+2026-01-19 12:43:32,744 INFO srt_translate.translation translate progress 480/864 (fallback per-line)
+2026-01-19 12:43:37,989 INFO srt_translate.translation translate progress 500/864
+2026-01-19 12:43:43,467 INFO srt_translate.translation translate progress 520/864
+2026-01-19 12:44:02,236 INFO srt_translate.translation translate progress 240/796 (fallback per-line)
+2026-01-19 12:44:08,425 INFO srt_translate.translation translate progress 260/796
+2026-01-19 12:44:28,969 INFO srt_translate.translation translate progress 540/864 (fallback per-line)
+2026-01-19 12:44:34,972 INFO srt_translate.translation translate progress 560/864
+2026-01-19 12:44:40,855 INFO srt_translate.translation translate progress 580/864
+2026-01-19 12:45:01,408 INFO srt_translate.translation translate progress 280/796 (fallback per-line)
+2026-01-19 12:45:07,809 INFO srt_translate.translation translate progress 300/796
+2026-01-19 12:45:14,442 INFO srt_translate.translation translate progress 320/796
+2026-01-19 12:45:20,295 INFO srt_translate.translation translate progress 340/796
+2026-01-19 12:45:26,612 INFO srt_translate.translation translate progress 360/796
+2026-01-19 12:45:32,413 INFO srt_translate.translation translate progress 380/796
+2026-01-19 12:45:43,571 INFO srt_translate.translation translate progress 400/796
+2026-01-19 12:45:54,662 INFO srt_translate.translation translate progress 420/796
+2026-01-19 12:46:00,766 INFO srt_translate.translation translate progress 440/796
+2026-01-19 12:46:06,659 INFO srt_translate.translation translate progress 460/796
+2026-01-19 12:46:12,268 INFO srt_translate.translation translate progress 480/796
+2026-01-19 12:46:12,451 INFO srt_translate.translation translate progress 600/864 (fallback per-line)
+2026-01-19 12:46:18,059 INFO srt_translate.translation translate progress 500/796
+2026-01-19 12:46:23,275 INFO srt_translate.translation translate progress 620/864
+2026-01-19 12:46:29,294 INFO srt_translate.translation translate progress 520/796
+2026-01-19 12:46:34,708 INFO srt_translate.translation translate progress 640/864
+2026-01-19 12:46:40,344 INFO srt_translate.translation translate progress 540/796
+2026-01-19 12:46:45,557 INFO srt_translate.translation translate progress 660/864
+2026-01-19 12:46:56,207 INFO srt_translate.translation translate progress 680/864
+2026-01-19 12:47:07,427 INFO srt_translate.translation translate progress 700/864
+2026-01-19 12:47:12,969 INFO srt_translate.translation translate progress 560/796
+2026-01-19 12:47:34,515 INFO srt_translate.translation translate progress 580/796
+2026-01-19 12:47:45,669 INFO srt_translate.translation translate progress 600/796
+2026-01-19 12:47:51,448 INFO srt_translate.translation translate progress 620/796
+2026-01-19 12:48:11,820 INFO srt_translate.translation translate progress 720/864 (fallback per-line)
+2026-01-19 12:48:17,448 INFO srt_translate.translation translate progress 740/864
+2026-01-19 12:48:23,027 INFO srt_translate.translation translate progress 760/864
+2026-01-19 12:48:28,601 INFO srt_translate.translation translate progress 780/864
+2026-01-19 12:48:34,559 INFO srt_translate.translation translate progress 800/864
+2026-01-19 12:48:34,717 INFO srt_translate.translation translate progress 640/796 (fallback per-line)
+2026-01-19 12:48:40,541 INFO srt_translate.translation translate progress 820/864
+2026-01-19 12:48:46,423 INFO srt_translate.translation translate progress 660/796
+2026-01-19 12:48:52,209 INFO srt_translate.translation translate progress 840/864
+2026-01-19 12:48:58,087 INFO srt_translate.translation translate progress 680/796
+2026-01-19 12:49:03,689 INFO srt_translate.translation translate progress 860/864
+2026-01-19 12:49:10,138 INFO srt_translate.translation translate progress 864/864
+2026-01-19 12:49:10,146 INFO srt_translate.translation translate done failed=0
+2026-01-19 12:49:10,849 INFO srt_translate.translation translate start model=translategemma:latest cues=825 batch_size=20 batches=42
+2026-01-19 12:49:21,038 INFO srt_translate.translation translate progress 20/825
+2026-01-19 12:49:31,833 INFO srt_translate.translation translate progress 40/825
+2026-01-19 12:49:37,693 INFO srt_translate.translation translate progress 60/825
+2026-01-19 12:49:43,294 INFO srt_translate.translation translate progress 80/825
+[2026-01-19 12:50:00] 上次任务 (PID: 35537) 仍在运行，本次跳过
+2026-01-19 12:50:04,556 INFO srt_translate.translation translate progress 700/796 (fallback per-line)
+2026-01-19 12:50:10,097 INFO srt_translate.translation translate progress 720/796
+2026-01-19 12:50:15,805 INFO srt_translate.translation translate progress 740/796
+2026-01-19 12:50:21,630 INFO srt_translate.translation translate progress 760/796
+2026-01-19 12:50:27,867 INFO srt_translate.translation translate progress 780/796
+2026-01-19 12:50:32,108 INFO srt_translate.translation translate progress 796/796
+2026-01-19 12:50:32,116 INFO srt_translate.translation translate done failed=0
+2026-01-19 12:50:32,316 INFO srt_translate.translation translate progress 100/825 (fallback per-line)
+2026-01-19 12:50:37,717 INFO srt_translate.translation translate progress 120/825
+2026-01-19 12:50:43,042 INFO srt_translate.translation translate progress 140/825
+2026-01-19 12:50:48,177 INFO srt_translate.translation translate progress 160/825
+2026-01-19 12:50:53,150 INFO srt_translate.translation translate progress 180/825
+2026-01-19 12:50:58,564 INFO srt_translate.translation translate progress 200/825
+2026-01-19 12:51:19,612 INFO srt_translate.translation translate progress 220/825 (fallback per-line)
+2026-01-19 12:51:25,372 INFO srt_translate.translation translate progress 240/825
+2026-01-19 12:51:30,815 INFO srt_translate.translation translate progress 260/825
+2026-01-19 12:51:40,805 INFO srt_translate.translation translate progress 280/825
+2026-01-19 12:51:51,147 INFO srt_translate.translation translate progress 300/825
+2026-01-19 12:51:56,695 INFO srt_translate.translation translate progress 320/825
+2026-01-19 12:52:02,444 INFO srt_translate.translation translate progress 340/825
+2026-01-19 12:52:08,513 INFO srt_translate.translation translate progress 360/825
+2026-01-19 12:52:13,944 INFO srt_translate.translation translate progress 380/825
+2026-01-19 12:52:36,109 INFO srt_translate.translation translate progress 400/825 (fallback per-line)
+2026-01-19 12:52:41,584 INFO srt_translate.translation translate progress 420/825
+2026-01-19 12:53:01,475 INFO srt_translate.translation translate progress 440/825 (fallback per-line)
+2026-01-19 12:53:07,092 INFO srt_translate.translation translate progress 460/825
+2026-01-19 12:53:12,918 INFO srt_translate.translation translate progress 480/825
+2026-01-19 12:53:18,158 INFO srt_translate.translation translate progress 500/825
+2026-01-19 12:53:24,212 INFO srt_translate.translation translate progress 520/825
+2026-01-19 12:53:29,707 INFO srt_translate.translation translate progress 540/825
+2026-01-19 12:53:35,605 INFO srt_translate.translation translate progress 560/825
+2026-01-19 12:53:41,363 INFO srt_translate.translation translate progress 580/825
+2026-01-19 12:53:46,972 INFO srt_translate.translation translate progress 600/825
+2026-01-19 12:53:52,313 INFO srt_translate.translation translate progress 620/825
+2026-01-19 12:53:57,948 INFO srt_translate.translation translate progress 640/825
+2026-01-19 12:54:03,722 INFO srt_translate.translation translate progress 660/825
+2026-01-19 12:54:09,095 INFO srt_translate.translation translate progress 680/825
+2026-01-19 12:54:14,500 INFO srt_translate.translation translate progress 700/825
+2026-01-19 12:54:34,707 INFO srt_translate.translation translate progress 720/825 (fallback per-line)
+2026-01-19 12:54:40,433 INFO srt_translate.translation translate progress 740/825
+2026-01-19 12:55:00,561 INFO srt_translate.translation translate progress 760/825 (fallback per-line)
+2026-01-19 12:55:11,069 INFO srt_translate.translation translate progress 780/825
+2026-01-19 12:55:30,513 INFO srt_translate.translation translate progress 800/825 (fallback per-line)
+2026-01-19 12:55:49,522 INFO srt_translate.translation translate progress 820/825 (fallback per-line)
+2026-01-19 12:55:50,973 INFO srt_translate.translation translate progress 825/825
+2026-01-19 12:55:50,981 INFO srt_translate.translation translate done failed=0
+2026-01-19 12:55:51,561 INFO srt_translate.orchestrator run_once summary videos=27 skipped=12 done=15 failed=0 elapsed=5150.54s
+[2026-01-19 12:55:51] 字幕翻译完成
+[2026-01-19 12:55:51] 开始执行: 目录迁移 (dir_migrate)
+2026-01-19 12:55:52,734 INFO dir_migrate.orchestrator scan videos=27
+dir_migrate failed: 550 /X-Movie/UnknownYear/Der.Kaplan.The.Tank.UnknownYear.1080p.mkv.AV1.unknown-4KDS: No such file or directory.
+/Users/daibo/db90/run_cron.sh: line 78: omebrew/bin/python3: No such file or directory
+[2026-01-19 12:56:44] 所有任务结束
+========================================================
+========================================================
+[2026-01-19 13:00:00] 任务开始
+[2026-01-19 13:00:00] 开始执行: 字幕翻译与迁移 (srt_translate)
+2026-01-19 13:00:00,558 INFO srt_translate.orchestrator run_once start force=False dry_run=False migrate=True
+2026-01-19 13:00:00,559 INFO srt_translate.orchestrator scan ftp_root=/Downloads extensions=.mkv,.mp4,.avi,.mov,.m4v,.ts
+Traceback (most recent call last):
+  File "/Users/daibo/db90/srt_translate.py", line 12, in <module>
+    raise SystemExit(main())
+                     ~~~~^^
+  File "/Users/daibo/db90/src/srt_translate/cli.py", line 45, in main
+    summary = run_once(cfg, store=store, force=args.force, dry_run=args.dry_run, migrate_cfg=migrate_cfg)
+  File "/Users/daibo/db90/src/srt_translate/orchestrator.py", line 245, in run_once
+    migrate_llm = LlmMcp(ollama_migrate, migrate_cfg.ollama.model)
+TypeError: LlmMcp.__init__() missing 1 required positional argument: 'temperature'
+[2026-01-19 13:00:01] 任务异常 (Exit Code: 1)
+[2026-01-19 13:00:01] 所有任务结束
+========================================================

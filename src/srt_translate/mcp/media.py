@@ -43,7 +43,7 @@ class MediaMcp:
             "-show_streams",
             str(video_path),
         ]
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, timeout=60)
         if p.returncode != 0:
             raise RuntimeError(f"ffprobe failed: {p.stderr.strip()}")
         data = json.loads(p.stdout)
@@ -82,7 +82,8 @@ class MediaMcp:
             f"0:{stream_index}",
             str(out_srt_path),
         ]
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+        # Add timeout to prevent hanging
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, timeout=300)
         if p.returncode != 0:
             raise RuntimeError(f"ffmpeg extract subtitle failed: {p.stderr.strip()}")
         return out_srt_path

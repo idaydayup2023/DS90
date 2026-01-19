@@ -37,7 +37,7 @@ def dest_dir_for(rules: RulesConfig, fields: LlmFields, normalized_basename: str
         sb = series_bucket(fields)
         season = fields.season if fields.season is not None else 0
         sxx = f"S{season:02d}"
-        return posixpath.join("/", root, sb, sxx, normalized_basename)
+        return posixpath.join("/", root, sb, sxx)
     root = rules.movie_4k_root if _is_4k(fields.resolution) else rules.movie_1080_root
     if _is_4k(fields.resolution):
         bucket = _decade_bucket(fields.year)
