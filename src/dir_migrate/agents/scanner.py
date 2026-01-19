@@ -42,6 +42,11 @@ def scan_once(cfg: AppConfig, source_storage: StorageMcp) -> ScanResult:
                 continue
             if q.stem == stem or q.name.startswith(stem + "."):
                 subs.append(ep)
+        
+        # Ensure the video has a corresponding .ai.srt subtitle file
+        if not any(s.endswith(".ai.srt") for s in subs):
+            continue
+
         out.append(SourceFiles(video_path=rel_path, subtitle_paths=tuple(sorted(subs)), video_size_bytes=size))
         if cfg.execution.limit is not None and len(out) >= cfg.execution.limit:
             break
