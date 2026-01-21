@@ -479,19 +479,31 @@ print(json.dumps(out, ensure_ascii=False))
         tt = (imdb_tt or "").strip().lower()
         if not tt.startswith("tt"):
             return None
-        url = f"https://www.imdb.com/title/{tt}/"
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0",
-                "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                html = resp.read().decode("utf-8", errors="replace")
-        except Exception:
+        urls = [
+            f"https://m.imdb.com/title/{tt}/",
+            f"https://www.imdb.com/title/{tt}/",
+        ]
+        html = None
+        for url in urls:
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "text/html,application/xhtml+xml",
+                    "Accept-Language": "en-US,en;q=0.9",
+                },
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    status = getattr(resp, "status", 200)
+                    if status == 202:
+                        continue
+                    html = resp.read().decode("utf-8", errors="replace")
+            except Exception:
+                continue
+            if html:
+                break
+        if not html:
             return None
         obj = self._parse_ld_json(html)
         if obj is None:
