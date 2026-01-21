@@ -15,6 +15,7 @@
 - 新增 PGS OCR 两阶段流水线：先将 PGS 轨抽取为同目录 `*.en.sup`，再异步 OCR 生成 `*.emb.srt` 并进入翻译队列
 - 新增迁移后清理智能体：大模型判定残留目录/残留文件是否可安全删除（不确定不清理，`torrent.files` 永不清理）
 - 新增 `killcron.sh`：根据锁文件 PID 递归中断 cron 任务进程树
+- 新增 IMDb 查询兜底链路：支持从 `.nfo/.txt/.url` 提取 `tt` 号并直查；当 imdbpy 无结果时回退到 IMDb suggestion + 页面 `ld+json` 抽取评分
 
 ### Changed
 
@@ -22,6 +23,8 @@
 - README 更新：新增 `dir_migrate` 使用说明，并改为统一配置文件
 - 目录迁移字幕收集：迁移同目录字幕时包含 `.en.srt/.zh.srt` 等 sidecar 文件
 - 迁移冲突策略增强：当目标已存在 `.ai.srt` 且非 overwrite 时，源 `.ai.srt` 会被清理以避免残留
+- IMDb 低分归集判定更保守：仅在 IMDb 查询成功时才按“无评分/低分”归集到 `low_imdb`，查询失败/未命中默认 keep
+- `srt_translate` 跳过已生成字幕：当远端已存在 `.ai.srt` 时不再重复翻译（FTP exists 对大小写不敏感）
 
 ### Fixed
 
@@ -30,6 +33,7 @@
 - 修复 PGS OCR：规避 pgsrip 对 `eng/en` 语言码规范化导致的文件找不到问题（OCR 前统一临时命名为 `subtitle.<lang>.sup`）
 - 修复 PGS OCR：对外部工具输出进行容错解码（避免 `UnicodeDecodeError` 影响 OCR 任务）
 - 修复：PGS OCR 失败时自动回落到 ASR，避免单片卡住主流程
+- 修复目录路径拼接不一致导致的 `/Downloads/Downloads` 嵌套与清理误判
 
 ## [0.1.0] - 2026-01-18
 

@@ -211,8 +211,8 @@ python3 demo_translate_local_srt.py --config config.json --in input.srt --out ou
 用于将源目录（常为 FTP `/Downloads`）下的视频与字幕按 LLM 识别结果规范化命名，并按分辨率/电影或剧集/年份分桶规则迁移到目标目录。
 
 - 统一配置：复用同一个 `config.json`（在 `dir_migrate` 节配置源/目标目录与规则），示例见 [config.example.json](config.example.json)
-- IMDb 校验与低分过滤（可选）：开启 `dir_migrate.imdb.enabled` 后，会查询 IMDb 评分/年份/标题用于校验与纠正命名；可用 `min_rating/min_votes` 过滤低分片源
-- 低分片源归集：低于 5.0 分或无评分的电影会被移动到 `/Downloads/low_imdb`（不参与后续翻译与递归清理）
+- IMDb 校验与低分过滤（可选）：开启 `dir_migrate.imdb.enabled` 后，会尽力查询 IMDb 评分/年份/标题用于校验与纠正命名；支持从同目录 `.nfo/.txt/.url` 提取 `tt` 号优先直查，必要时回退到 IMDb suggestion + 页面 `ld+json` 抽取（用于绕过某些环境下 imdbpy 返回空的问题）
+- 低分片源归集：当 IMDb 查询**成功**时，低于 `min_rating/min_votes` 或确认“无评分”的电影会被移动到 `/Downloads/low_imdb`；当 IMDb 查询失败/未命中时默认 **keep**，避免误判进入 `low_imdb`
 - dry-run（输出迁移计划 JSON 行，不移动文件）：
 
 ```bash
