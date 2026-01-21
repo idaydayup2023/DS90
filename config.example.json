@@ -25,7 +25,21 @@
     "enabled": true,
     "command": ["whisper"],
     "language": "en",
-    "asr_workers": 1
+    "asr_workers": 1,
+    "auto_install": true,
+    "device": "auto",
+    "model": "small",
+    "fallback_models": ["medium"],
+    "task": "transcribe",
+    "temperature": 0.0,
+    "no_speech_threshold": 0.6
+  },
+  "pgs_ocr": {
+    "enabled": true,
+    "auto_install": true,
+    "languages": ["en"],
+    "max_workers": 1,
+    "keep_temp_files": false
   },
   "translation": {
     "workers": 2,
@@ -61,6 +75,12 @@
       "limit": 50,
       "workers": 2,
       "on_conflict": "skip"
+    },
+    "cleanup": {
+      "enabled": true,
+      "protected_dirnames": ["torrent.files"],
+      "min_confidence": 0.85,
+      "delete_residual_files": true
     }
   }
 }

@@ -40,6 +40,14 @@ class SubtitleConfig:
 
 
 @dataclass(frozen=True)
+class CleanupConfig:
+    enabled: bool = True
+    protected_dirnames: tuple[str, ...] = ("torrent.files",)
+    min_confidence: float = 0.85
+    delete_residual_files: bool = True
+
+
+@dataclass(frozen=True)
 class OllamaConfig:
     base_url: str
     model: str
@@ -73,6 +81,7 @@ class AppConfig:
     paths: PathsConfig
     video: VideoConfig
     subtitle: SubtitleConfig
+    cleanup: CleanupConfig
     ollama: OllamaConfig
     rules: RulesConfig
     execution: ExecutionConfig
@@ -202,6 +211,17 @@ def load_config(path: str | Path) -> AppConfig:
     sub_raw = tool_raw.get("subtitle") or {}
     subtitle = SubtitleConfig(extensions=normalize_extensions(_as_tuple_str(sub_raw.get("extensions", [".srt", ".ass", ".ssa", ".vtt"]))))
 
+    cleanup_raw = tool_raw.get("cleanup") or {}
+    protected = [str(x).strip() for x in cleanup_raw.get("protected_dirnames", ["torrent.files"]) if str(x).strip()]
+    if "torrent.files" not in {p.lower() for p in protected}:
+        protected.append("torrent.files")
+    cleanup = CleanupConfig(
+        enabled=bool(cleanup_raw.get("enabled", True)),
+        protected_dirnames=tuple(dict.fromkeys(protected)),
+        min_confidence=float(cleanup_raw.get("min_confidence", 0.85)),
+        delete_residual_files=bool(cleanup_raw.get("delete_residual_files", True)),
+    )
+
     ollama_raw = tool_raw.get("ollama") or common_ollama_raw
     if ollama_raw is None:
         raise KeyError("missing config key: ollama")
@@ -237,6 +257,7 @@ def load_config(path: str | Path) -> AppConfig:
         paths=paths,
         video=video,
         subtitle=subtitle,
+        cleanup=cleanup,
         ollama=ollama,
         rules=rules,
         execution=execution,

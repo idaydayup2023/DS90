@@ -42,6 +42,23 @@ class WhisperConfig:
     command: tuple[str, ...]
     language: str | None
     asr_workers: int = 1
+    auto_install: bool = True
+    device: str = "auto"
+    model: str = "small"
+    fallback_models: tuple[str, ...] = ("medium",)
+    task: str = "transcribe"
+    temperature: float = 0.0
+    no_speech_threshold: float = 0.6
+
+
+@dataclass(frozen=True)
+class PgsOcrConfig:
+    enabled: bool = True
+    auto_install: bool = True
+    languages: tuple[str, ...] = ("en",)
+    max_workers: int = 1
+    keep_temp_files: bool = False
+    min_diversity_confidence: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -58,6 +75,7 @@ class AppConfig:
     video: VideoConfig
     ollama: OllamaConfig
     whisper: WhisperConfig
+    pgs_ocr: PgsOcrConfig
     translation: TranslationConfig
 
 
@@ -114,6 +132,23 @@ def load_config(path: str | Path) -> AppConfig:
         command=_as_tuple_str(_require(whisper_raw, "command")),
         language=whisper_raw.get("language"),
         asr_workers=int(whisper_raw.get("asr_workers", 1)),
+        auto_install=bool(whisper_raw.get("auto_install", True)),
+        device=str(whisper_raw.get("device", "auto")),
+        model=str(whisper_raw.get("model", "small")),
+        fallback_models=_as_tuple_str(whisper_raw.get("fallback_models", ["medium"])),
+        task=str(whisper_raw.get("task", "transcribe")),
+        temperature=float(whisper_raw.get("temperature", 0.0)),
+        no_speech_threshold=float(whisper_raw.get("no_speech_threshold", 0.6)),
+    )
+
+    pgs_raw = raw.get("pgs_ocr") or {}
+    pgs_ocr = PgsOcrConfig(
+        enabled=bool(pgs_raw.get("enabled", True)),
+        auto_install=bool(pgs_raw.get("auto_install", True)),
+        languages=_as_tuple_str(pgs_raw.get("languages", ["en"])),
+        max_workers=int(pgs_raw.get("max_workers", 1)),
+        keep_temp_files=bool(pgs_raw.get("keep_temp_files", False)),
+        min_diversity_confidence=float(pgs_raw.get("min_diversity_confidence", 0.0)),
     )
 
     translation_raw = _require(raw, "translation")
@@ -129,6 +164,7 @@ def load_config(path: str | Path) -> AppConfig:
         video=video,
         ollama=ollama,
         whisper=whisper,
+        pgs_ocr=pgs_ocr,
         translation=translation,
     )
 

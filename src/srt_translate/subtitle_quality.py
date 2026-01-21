@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,6 +25,25 @@ def score_srt_content(content: str) -> SubtitleQuality:
     if not cues:
         return SubtitleQuality(0.0, {"reason": "empty"})
     return score_cues(cues)
+
+
+def validate_srt_diversity(content: str) -> tuple[bool, str | None]:
+    cues = parse_srt(content)
+    if not cues:
+        return False, "empty"
+    texts = [c.text.strip() for c in cues if (c.text or "").strip()]
+    if not texts:
+        return False, "empty text"
+    lowered = [t.lower() for t in texts]
+    c = Counter(lowered)
+    most_common, most_n = c.most_common(1)[0]
+    total = len(lowered)
+    casting = sum(1 for t in lowered if "castingwords" in t)
+    if total >= 10 and (most_n / total) >= 0.7:
+        return False, f"repetitive: {most_common!r} x{most_n}/{total}"
+    if total >= 10 and (casting / total) >= 0.2:
+        return False, f"watermark-like: castingwords {casting}/{total}"
+    return True, None
 
 
 def score_cues(cues: list[SrtCue]) -> SubtitleQuality:
@@ -106,4 +126,3 @@ def score_cues(cues: list[SrtCue]) -> SubtitleQuality:
         "coverage": round(coverage, 4),
     }
     return SubtitleQuality(score=float(round(score, 2)), breakdown=breakdown)
-

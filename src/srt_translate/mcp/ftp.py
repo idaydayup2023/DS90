@@ -199,6 +199,27 @@ class FtpMcp:
             self.connect()
             self.ftp.rename(src, dst)
 
+    def rmdir(self, remote_dir: str) -> None:
+        remote_dir = remote_dir.rstrip("/") or "/"
+        if remote_dir == "/":
+            return
+        self.ftp.rmd(remote_dir)
+
+    def rmdir_if_empty(self, remote_dir: str) -> bool:
+        remote_dir = remote_dir.rstrip("/") or "/"
+        if remote_dir == "/":
+            return False
+        try:
+            if self.list(remote_dir):
+                return False
+        except Exception:
+            return False
+        try:
+            self.rmdir(remote_dir)
+            return True
+        except Exception:
+            return False
+
     def atomic_write_from_bytes(self, remote_path: str, data: bytes) -> None:
         tmp = f"{remote_path}.tmp.{os.getpid()}.{int(time.time())}"
         self.ensure_dir(posixpath.dirname(remote_path))
@@ -217,4 +238,3 @@ class FtpMcp:
         if self.exists(remote_path):
             self.delete(remote_path)
         self.rename(tmp, remote_path)
-

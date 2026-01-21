@@ -1,4 +1,10 @@
 import unittest
+import sys
+from pathlib import Path
+
+SRC = Path(__file__).resolve().parents[1] / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from dir_migrate.domain import LlmFields
 from dir_migrate.naming import build_normalized_basename, subtitle_suffix
@@ -49,4 +55,3 @@ class TestDirMigrateNaming(unittest.TestCase):
     def test_subtitle_suffix(self):
         self.assertEqual(subtitle_suffix("Movie", "Movie"), "")
         self.assertEqual(subtitle_suffix("Movie", "Movie.en"), ".en")
-

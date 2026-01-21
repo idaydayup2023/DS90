@@ -1,4 +1,10 @@
 import unittest
+import sys
+from pathlib import Path
+
+SRC = Path(__file__).resolve().parents[1] / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from dir_migrate.config import RulesConfig
 from dir_migrate.domain import LlmFields
@@ -89,5 +95,4 @@ class TestDirMigratePlanning(unittest.TestCase):
         )
         d = dest_dir_for(rules, f, "X")
         self.assertIn("/X-TV/NCIS/", d)
-        self.assertIn("/S02/", d)
-
+        self.assertTrue(d.endswith("/S02"))

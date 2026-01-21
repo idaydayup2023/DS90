@@ -1,4 +1,10 @@
 import unittest
+import sys
+from pathlib import Path
+
+SRC = Path(__file__).resolve().parents[1] / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from srt_translate.subtitle_quality import score_srt_content
 
@@ -16,4 +22,3 @@ class TestQuality(unittest.TestCase):
         q_good = score_srt_content(good)
         q_bad = score_srt_content(bad)
         self.assertGreater(q_good.score, q_bad.score)
-

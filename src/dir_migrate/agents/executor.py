@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import posixpath
 from pathlib import PurePosixPath
 
@@ -7,6 +8,10 @@ from ..config import AppConfig
 from ..domain import MovePlan
 from ..mcp.storage import StorageMcp
 from ..naming import subtitle_suffix
+from .cleaner import cleanup_source_residual_dirs
+
+
+log = logging.getLogger("dir_migrate.agents.executor")
 
 
 def _pick_non_conflicting(cfg: AppConfig, dest_storage: StorageMcp, plan: MovePlan) -> MovePlan | None:
@@ -52,6 +57,9 @@ def apply_one(cfg: AppConfig, source_storage: StorageMcp, dest_storage: StorageM
         source_storage.rename(chosen.source.video_path, chosen.dest_video_path, overwrite=overwrite)
         moved.append((chosen.dest_video_path, chosen.source.video_path))
         for src_sub, dst_sub in chosen.subtitle_moves:
+            if (not overwrite) and dest_storage.exists(dst_sub) and dst_sub.lower().endswith(".ai.srt"):
+                source_storage.delete_file(src_sub)
+                continue
             source_storage.rename(src_sub, dst_sub, overwrite=overwrite)
             moved.append((dst_sub, src_sub))
     except Exception as e:
@@ -61,5 +69,8 @@ def apply_one(cfg: AppConfig, source_storage: StorageMcp, dest_storage: StorageM
             except Exception:
                 pass
         return False, "FAILED", str(e)
+    try:
+        cleanup_source_residual_dirs(cfg, source_storage, chosen)
+    except Exception as e:
+        log.warning("cleanup failed video=%s error=%s", chosen.source.video_path, e)
     return True, None, None
-

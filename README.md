@@ -9,6 +9,7 @@
   - 命中同目录 `basename.emb.srt` 直接使用
   - 外置字幕：`basename.srt` / `basename.en.srt` / `basename.*.srt` 多候选择优
   - 内置字幕：ffprobe/ffmpeg 探测并提取英文文本轨，写回 `basename.emb.srt`
+  - 内置 PGS OCR（可选）：当只有 PGS（位图）字幕时，抽取 `.sup` 并 OCR 生成 `basename.emb.srt`
   - 兜底 ASR：Whisper 生成 `basename.asr.srt`，并进入翻译队列
 - 翻译输出：
   - 生成 `basename.ai.srt`
@@ -17,22 +18,25 @@
 - 并行与不中断：
   - ASR 与翻译走不同 worker 池，ASR 再慢也不会阻塞翻译吞吐
   - Ctrl-C 可快速退出（返回码 130）
+- 目录迁移与清理（dir_migrate）：
+  - 同目录字幕（含 `.en.srt/.zh.srt`）随视频一起迁移
+  - 迁移完成后：大模型评估并清理残留空目录/附加文件（不确定不清理，`torrent.files` 永不清理）
 
 ## 目录与文档
 
-- 需求与规范： [srt_translate.PRD](file:///Users/daibo/DS90v2/srt_translate.PRD)
-- 目录迁移工具 PRD： [dir_migrate.PRD](file:///Users/daibo/DS90v2/dir_migrate.PRD)
-- 对话记录（过程回顾）：[srt_translate.conversation.md](file:///Users/daibo/DS90v2/srt_translate.conversation.md)
+- 需求与规范： [srt_translate.PRD](srt_translate.PRD)
+- 目录迁移工具 PRD： [dir_migrate.PRD](dir_migrate.PRD)
+- 对话记录（过程回顾）：[srt_translate.conversation.md](srt_translate.conversation.md)
 - Trae Skills（架构/提示词/MCP 契约）：
-  - [.trae/skills/srt-translate-architecture/SKILL.md](file:///Users/daibo/DS90v2/.trae/skills/srt-translate-architecture/SKILL.md)
-  - [.trae/skills/srt-translate-prompts/SKILL.md](file:///Users/daibo/DS90v2/.trae/skills/srt-translate-prompts/SKILL.md)
-  - [.trae/skills/srt-translate-mcp-contracts/SKILL.md](file:///Users/daibo/DS90v2/.trae/skills/srt-translate-mcp-contracts/SKILL.md)
+  - [.trae/skills/srt-translate-architecture/SKILL.md](.trae/skills/srt-translate-architecture/SKILL.md)
+  - [.trae/skills/srt-translate-prompts/SKILL.md](.trae/skills/srt-translate-prompts/SKILL.md)
+  - [.trae/skills/srt-translate-mcp-contracts/SKILL.md](.trae/skills/srt-translate-mcp-contracts/SKILL.md)
 
 ## 运行环境与依赖
 
 ### 1. 基础环境
 *   **操作系统**: macOS / Linux (推荐), Windows (理论支持但未验证)
-*   **Python**: >= 3.11 (本项目完全使用标准库开发，无第三方 pip 依赖)
+*   **Python**: >= 3.11（核心代码只用标准库；ASR/PGS-OCR 会自动创建 venv 并安装所需包）
 
 ### 2. 外部程序依赖
 本项目依赖以下外部工具，请确保它们在系统 `PATH` 中可用：
@@ -43,9 +47,11 @@
 *   **ollama**: 用于运行 LLM 进行字幕翻译和文件名解析。
     *   *官网*: https://ollama.com/
     *   *服务*: 需启动服务 (`ollama serve`) 并确保 API 端口 (默认 11434) 可访问。
-*   **whisper** (可选): OpenAI 的语音转文字工具，用于无字幕视频的兜底 ASR。
-    *   *安装*: `pip install -U openai-whisper`
-    *   *注意*: 如果未安装，ASR 兜底功能将不可用，但不影响其他功能。
+*   **whisper** (可选): 用于无字幕视频的兜底 ASR。
+    *   默认启用“自动安装”：首次需要时会在 `paths.local_cache_dir/tools/whisper_venv` 创建 venv，并安装 `openai-whisper`。
+    *   可配置使用 GPU：`whisper.device = auto|cuda|mps|cpu`。
+*   **tesseract** (可选): 用于 PGS 字幕 OCR（将内置位图字幕转成 SRT）。
+    *   默认启用“自动安装”：若检测不到 `tesseract`，会尝试 `brew install tesseract`（macOS）。
 
 ### 3. 模型准备
 请在 Ollama 中拉取适合的模型：
@@ -177,12 +183,21 @@ python3 dir_migrate.py --config <CONFIG_PATH> [OPTIONS]
 - `basename.asr.srt`：Whisper ASR 产物（英文源字幕兜底）
 - `basename.ai.srt`：最终输出（中文在上、英文在下）
 
+## 进程控制
+
+中断 cron 中仍在运行的任务（根据 `logs/run_cron.lock` 的 PID 递归杀子进程，先 TERM 后 KILL）：
+
+```bash
+chmod +x killcron.sh
+./killcron.sh
+```
+
 ## 开发与测试
 
 单元测试：
 
 ```bash
-python3 -m unittest discover -v
+python3 -m unittest discover -s tests -p "test_*.py" -v
 ```
 
 本地翻译冒烟（不走 FTP，只翻译本地 srt）：
@@ -195,7 +210,7 @@ python3 demo_translate_local_srt.py --config config.json --in input.srt --out ou
 
 用于将源目录（常为 FTP `/Downloads`）下的视频与字幕按 LLM 识别结果规范化命名，并按分辨率/电影或剧集/年份分桶规则迁移到目标目录。
 
-- 统一配置：复用同一个 `config.json`（在 `dir_migrate` 节配置源/目标目录与规则），示例见 [config.example.json](file:///Users/daibo/DS90v2/config.example.json)
+- 统一配置：复用同一个 `config.json`（在 `dir_migrate` 节配置源/目标目录与规则），示例见 [config.example.json](config.example.json)
 - dry-run（输出迁移计划 JSON 行，不移动文件）：
 
 ```bash

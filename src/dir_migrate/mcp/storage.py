@@ -17,6 +17,8 @@ class StorageMcp(Protocol):
     def exists(self, rel_path: str) -> bool: ...
     def ensure_dir(self, rel_dir: str) -> None: ...
     def rename(self, src_rel: str, dst_rel: str, overwrite: bool) -> None: ...
+    def delete_file(self, rel_path: str) -> None: ...
+    def rmdir_if_empty(self, rel_dir: str) -> bool: ...
 
 
 def _ftp_abs(cfg: FtpConnConfig, rel_path: str) -> str:
@@ -141,6 +143,25 @@ class LocalMcp(StorageMcp):
                 dst_p.unlink()
         shutil.move(str(src_p), str(dst_p))
 
+    def delete_file(self, rel_path: str) -> None:
+        p = self._abs(rel_path)
+        if not p.exists() or not p.is_file():
+            return
+        try:
+            p.unlink()
+        except Exception:
+            pass
+
+    def rmdir_if_empty(self, rel_dir: str) -> bool:
+        p = self._abs(rel_dir)
+        if not p.exists() or not p.is_dir():
+            return False
+        try:
+            p.rmdir()
+            return True
+        except Exception:
+            return False
+
 
 class FtpMcpStorage(StorageMcp):
     def __init__(self, cfg: FtpConnConfig):
@@ -182,6 +203,20 @@ class FtpMcpStorage(StorageMcp):
                 ftp.delete(dst_abs)
             ftp.rename(src_abs, dst_abs)
 
+    def delete_file(self, rel_path: str) -> None:
+        with FtpMcp(self._cfg.host, self._cfg.port, self._cfg.username, self._cfg.password, timeout=self._cfg.timeout_seconds) as ftp:
+            try:
+                ftp.delete(_ftp_abs(self._cfg, rel_path))
+            except Exception:
+                pass
+
+    def rmdir_if_empty(self, rel_dir: str) -> bool:
+        with FtpMcp(self._cfg.host, self._cfg.port, self._cfg.username, self._cfg.password, timeout=self._cfg.timeout_seconds) as ftp:
+            try:
+                return ftp.rmdir_if_empty(_ftp_abs(self._cfg, rel_dir))
+            except Exception:
+                return False
+
 
 def build_storage_mcp(cfg: StorageConfig) -> StorageMcp:
     if cfg.kind == "local":
@@ -193,4 +228,3 @@ def build_storage_mcp(cfg: StorageConfig) -> StorageMcp:
             raise ValueError("ftp config is required for ftp storage")
         return FtpMcpStorage(cfg.ftp)
     raise ValueError(f"unsupported storage kind: {cfg.kind}")
-

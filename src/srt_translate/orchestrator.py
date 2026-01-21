@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+import posixpath
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, wait
 from pathlib import Path
 from dataclasses import dataclass
 
 from .config import AppConfig, normalize_extensions
+from .bootstrap import resolve_whisper_command, resolve_whisper_device
 from .domain import VideoFile, compute_video_id, subtitle_remote_paths
 from .daemon_executor import DaemonExecutor
 from .logging_util import setup_logging
@@ -14,6 +16,7 @@ from .mcp.ftp import FtpMcp
 from .mcp.media import MediaMcp
 from .mcp.ollama import OllamaMcp
 from .mcp.asr import AsrMcp
+from .mcp.pgs_ocr import PgsOcrMcp
 from .store import StateStore, TaskRecord
 from .subtitle_acquisition import SubtitleSource, choose_source_subtitle
 from .translation import to_ai_srt_content, translate_srt_to_bilingual
@@ -147,12 +150,28 @@ def _translate_and_upload(
             ftp.atomic_write_from_file(ai_remote, local_ai)
 
 
-def _asr_then_upload(cfg: AppConfig, video_id: str, video_remote_path: str, dry_run: bool) -> SubtitleSource:
+def _asr_then_upload(
+    cfg: AppConfig,
+    video_id: str,
+    video_remote_path: str,
+    asr_command: tuple[str, ...],
+    asr_device: str,
+    dry_run: bool,
+) -> SubtitleSource:
     local_video = _download_video(cfg, video_id, video_remote_path)
     paths = subtitle_remote_paths(video_remote_path)
     asr_remote = paths["asr"]
     local_asr = _local_sub_path_for_video(cfg.paths.local_cache_dir, video_id, asr_remote)
-    asr = AsrMcp(cfg.whisper.command, cfg.whisper.language)
+    asr = AsrMcp(
+        asr_command,
+        cfg.whisper.language,
+        asr_device,
+        cfg.whisper.model,
+        cfg.whisper.task,
+        cfg.whisper.temperature,
+        cfg.whisper.no_speech_threshold,
+        cfg.whisper.fallback_models,
+    )
     asr.transcribe_to_srt(local_video, local_asr)
     if not dry_run:
         with FtpMcp(cfg.ftp.host, cfg.ftp.port, cfg.ftp.username, cfg.ftp.password) as ftp:
@@ -170,27 +189,12 @@ def _migrate_task(
     dry_run: bool,
 ) -> tuple[bool, str | None]:
     try:
-        # Convert absolute to relative
         rel_video = video_remote_path
         if rel_video.startswith(root_path):
             rel_video = rel_video[len(root_path):].lstrip("/")
         
         log.info("migrate task start video=%s rel=%s", video_remote_path, rel_video)
-
-        # Find subtitles (re-scan directory using source_storage to be sure)
-        # dir_migrate scanner uses list_dir.
-        # We can just check the standard paths we know about.
-        paths = subtitle_remote_paths(video_remote_path)
-        # paths is {'ai': ..., 'eng': ...} absolute
-        
-        subs = []
-        for k, v in paths.items():
-            rel_sub = v
-            if rel_sub.startswith(root_path):
-                rel_sub = rel_sub[len(root_path):].lstrip("/")
-            if source_storage.exists(rel_sub):
-                subs.append(rel_sub)
-        
+        subs = _collect_related_subtitles_for_migration(source_storage, rel_video, migrate_cfg.subtitle.extensions)
         log.info("migrate found subs video=%s subs=%s", video_remote_path, subs)
 
         item = SourceFiles(
@@ -212,6 +216,26 @@ def _migrate_task(
     except Exception as e:
         log.exception("migrate task exception video=%s", video_remote_path)
         return False, str(e)
+
+
+def _collect_related_subtitles_for_migration(source_storage, rel_video_path: str, subtitle_exts: tuple[str, ...]) -> list[str]:
+    directory = posixpath.dirname(rel_video_path)
+    video_stem = posixpath.splitext(posixpath.basename(rel_video_path))[0]
+    stem_lower = video_stem.lower()
+    ext_set = {e.lower() for e in subtitle_exts}
+
+    subs: list[str] = []
+    for p, t, _size in source_storage.list_dir(directory):
+        if t != "file":
+            continue
+        name = posixpath.basename(p)
+        lower = name.lower()
+        _root, ext = posixpath.splitext(lower)
+        if ext not in ext_set:
+            continue
+        if lower == f"{stem_lower}{ext}" or lower.startswith(stem_lower + "."):
+            subs.append(p.lstrip("/"))
+    return sorted(set(subs))
 
 
 def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migrate_cfg=None) -> RunSummary:
@@ -308,6 +332,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
         meta[fut] = ("translate", video_id, remote_path, source.kind)
 
     def _schedule_asr(video_id: str, remote_path: str) -> None:
+        nonlocal failed_count
         log.info("asr queued video=%s", remote_path)
         store.upsert_task(
             TaskRecord(
@@ -318,12 +343,36 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                 updated_at=int(time.time()),
             )
         )
-        fut_asr: Future[object] = asr_pool.submit(_asr_then_upload, cfg, video_id, remote_path, dry_run)
+        try:
+            asr_cmd = resolve_whisper_command(cfg.whisper, cache_dir=cfg.paths.local_cache_dir)
+            asr_device = resolve_whisper_device(cfg.whisper)
+        except Exception as e:
+            failed_count += 1
+            store.upsert_task(
+                TaskRecord(
+                    video_id=video_id,
+                    video_path=remote_path,
+                    status="FAILED",
+                    payload={"error": str(e), "stage": "asr_bootstrap"},
+                    updated_at=int(time.time()),
+                )
+            )
+            log.error("asr bootstrap failed video=%s error=%s", remote_path, e)
+            return
+        fut_asr: Future[object] = asr_pool.submit(_asr_then_upload, cfg, video_id, remote_path, asr_cmd, asr_device, dry_run)
         pending.add(fut_asr)
         meta[fut_asr] = ("asr", video_id, remote_path, None)
 
     with FtpMcp(cfg.ftp.host, cfg.ftp.port, cfg.ftp.username, cfg.ftp.password) as ftp:
         media = MediaMcp()
+        pgs_ocr = None
+        if cfg.pgs_ocr.enabled:
+            pgs_ocr = PgsOcrMcp(
+                cache_dir=cfg.paths.local_cache_dir,
+                auto_install=cfg.pgs_ocr.auto_install,
+                languages=cfg.pgs_ocr.languages,
+                keep_temp_files=cfg.pgs_ocr.keep_temp_files,
+            )
         for v in videos:
             video_id = compute_video_id(v)
             paths = subtitle_remote_paths(v.remote_path)
@@ -356,6 +405,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
             source = choose_source_subtitle(
                 ftp=ftp,
                 media=None,
+                pgs_ocr=None,
                 cache_dir=cfg.paths.local_cache_dir / "work" / video_id,
                 video_remote_path=v.remote_path,
                 local_video_path=None,
@@ -373,6 +423,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                         try:
                             res = fut.result()
                         except Exception as e:
+                            log.error("task failed video=%s error=%s stage=%s", rpath, e, kind)
                             failed_count += 1
                             store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="FAILED", payload={"error": str(e), "stage": kind}, updated_at=int(time.time())))
                             continue
@@ -402,6 +453,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
             source = choose_source_subtitle(
                 ftp=ftp,
                 media=media,
+                pgs_ocr=pgs_ocr,
                 cache_dir=cfg.paths.local_cache_dir / "work" / video_id,
                 video_remote_path=v.remote_path,
                 local_video_path=local_video,
@@ -413,6 +465,38 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
 
             if cfg.whisper.enabled:
                 _schedule_asr(video_id, v.remote_path)
+                # Also wait if too many pending tasks
+                while len(pending) >= cfg.whisper.asr_workers + 2: # Keep queue small for ASR
+                     done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                     for fut in done:
+                        kind, vid, rpath, skind = meta.pop(fut, ("unknown", "", "", None))
+                        try:
+                            res = fut.result()
+                        except Exception as e:
+                            log.error("task failed video=%s error=%s stage=%s", rpath, e, kind)
+                            failed_count += 1
+                            store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="FAILED", payload={"error": str(e), "stage": kind}, updated_at=int(time.time())))
+                            continue
+                        if kind == "asr" and isinstance(res, SubtitleSource):
+                            _schedule_translation(vid, rpath, res)
+                        elif kind == "translate":
+                            done_count += 1
+                            store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="DONE", payload={"source_kind": skind}, updated_at=int(time.time())))
+                            if migrate_pool:
+                                _schedule_migration(vid, rpath)
+                        elif kind == "migrate":
+                            # res is (success, err)
+                            if isinstance(res, tuple) and len(res) >= 2:
+                                success = res[0]
+                                err = res[1]
+                                if success:
+                                    migrated_count += 1
+                                    store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="MIGRATED", payload={}, updated_at=int(time.time())))
+                                else:
+                                    # failed_count += 1
+                                    store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="MIGRATION_FAILED", payload={"error": err}, updated_at=int(time.time())))
+                            else:
+                                log.error("unexpected migrate result type: %s", type(res))
             else:
                 failed_count += 1
                 store.upsert_task(
@@ -433,6 +517,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                 try:
                     res = fut.result()
                 except Exception as e:
+                    log.error("task failed video=%s error=%s stage=%s", remote_path, e, kind)
                     failed_count += 1
                     store.upsert_task(
                         TaskRecord(

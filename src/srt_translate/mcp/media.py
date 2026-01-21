@@ -27,6 +27,11 @@ _TEXT_CODECS = {
     "text",
 }
 
+_PGS_CODECS = {
+    "hdmv_pgs_subtitle",
+    "pgs",
+}
+
 
 class MediaMcp:
     def __init__(self, ffprobe: str = "ffprobe", ffmpeg: str = "ffmpeg"):
@@ -69,6 +74,12 @@ class MediaMcp:
             )
         return tracks
 
+    @staticmethod
+    def is_pgs(track: SubtitleTrack) -> bool:
+        if not track.codec:
+            return False
+        return track.codec.lower() in _PGS_CODECS
+
     def extract_subtitle_track(self, video_path: Path, stream_index: int, out_srt_path: Path) -> Path:
         out_srt_path.parent.mkdir(parents=True, exist_ok=True)
         cmd = [
@@ -87,4 +98,3 @@ class MediaMcp:
         if p.returncode != 0:
             raise RuntimeError(f"ffmpeg extract subtitle failed: {p.stderr.strip()}")
         return out_srt_path
-

@@ -2,6 +2,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+import sys
+
+SRC = Path(__file__).resolve().parents[1] / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from dir_migrate.config import load_config
 
@@ -58,4 +63,3 @@ class TestDirMigrateConfig(unittest.TestCase):
         self.assertEqual(cfg.source.ftp.host, "h")
         self.assertEqual(cfg.source.ftp.root_path, "/Downloads")
         self.assertEqual(cfg.dest.ftp.root_path, "/")
-
