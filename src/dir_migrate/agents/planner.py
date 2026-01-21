@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import posixpath
 import re
 import threading
@@ -14,6 +15,8 @@ from ..mcp.storage import StorageMcp
 from ..naming import build_normalized_basename, subtitle_suffix
 from ..planning import dest_dir_for
 
+
+log = logging.getLogger("dir_migrate.agents.planner")
 
 _franchise_cache_lock = threading.Lock()
 _franchise_present_cache: dict[str, bool] = {}
@@ -79,7 +82,12 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
         imdb = ImdbMcp(cache_dir=cfg.paths.local_cache_dir, auto_install=cfg.imdb.auto_install, ttl_days=cfg.imdb.ttl_days)
         if fields.kind == "movie":
             imdb_title = imdb.lookup(kind="movie", title=fields.title, year=fields.year)
+            imdb_id = getattr(imdb_title, "imdb_id", None) if imdb_title is not None else None
+            imdb_rating = getattr(imdb_title, "rating", None) if imdb_title is not None else None
+            imdb_votes = getattr(imdb_title, "votes", None) if imdb_title is not None else None
+            imdb_franchise = getattr(imdb_title, "franchise_root", None) if imdb_title is not None else None
             force_keep = False
+            llm_franchise: str | None = None
             if dest_storage is not None:
                 candidates: list[str] = []
                 if imdb_title is not None and imdb_title.franchise_root:
@@ -87,13 +95,26 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
                 judge = FranchiseJudgeMcp(cache_dir=cfg.paths.local_cache_dir, ttl_days=cfg.imdb.ttl_days, ollama=llm.ollama, model=cfg.ollama.model)
                 decision = judge.judge(p.name, fields, imdb_title)
                 if decision is not None and decision.is_franchise and decision.franchise_root:
+                    llm_franchise = decision.franchise_root
                     candidates.append(decision.franchise_root)
                 for c in candidates:
                     if _franchise_present_in_dest(dest_storage, cfg, c):
                         force_keep = True
                         break
-            if imdb_title is None or imdb_title.rating is None:
+            if imdb_title is None or imdb_rating is None:
                 if (not force_keep) and cfg.imdb.skip_unrated:
+                    log.info(
+                        "imdb decision=low_imdb reason=unrated video=%s title=%s year=%s imdb_id=%s rating=%s votes=%s imdb_franchise=%s llm_franchise=%s force_keep=%s",
+                        item.video_path,
+                        fields.title,
+                        fields.year,
+                        imdb_id,
+                        imdb_rating,
+                        imdb_votes,
+                        imdb_franchise,
+                        llm_franchise,
+                        force_keep,
+                    )
                     dest_dir = "/Downloads/low_imdb"
                     dest_video_path = posixpath.join(dest_dir, p.name)
                     subtitle_moves = tuple((s, posixpath.join(dest_dir, PurePosixPath(s).name)) for s in item.subtitle_paths)
@@ -106,8 +127,20 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
                         skip_reason=None,
                     )
             else:
-                votes_ok = cfg.imdb.min_votes is None or (imdb_title.votes or 0) >= cfg.imdb.min_votes
-                if (not force_keep) and votes_ok and cfg.imdb.min_rating is not None and imdb_title.rating < cfg.imdb.min_rating:
+                votes_ok = cfg.imdb.min_votes is None or (imdb_votes or 0) >= cfg.imdb.min_votes
+                if (not force_keep) and votes_ok and cfg.imdb.min_rating is not None and imdb_rating < cfg.imdb.min_rating:
+                    log.info(
+                        "imdb decision=low_imdb reason=rating_below_threshold video=%s title=%s year=%s imdb_id=%s rating=%s votes=%s imdb_franchise=%s llm_franchise=%s force_keep=%s",
+                        item.video_path,
+                        fields.title,
+                        fields.year,
+                        imdb_id,
+                        imdb_rating,
+                        imdb_votes,
+                        imdb_franchise,
+                        llm_franchise,
+                        force_keep,
+                    )
                     dest_dir = "/Downloads/low_imdb"
                     dest_video_path = posixpath.join(dest_dir, p.name)
                     subtitle_moves = tuple((s, posixpath.join(dest_dir, PurePosixPath(s).name)) for s in item.subtitle_paths)
@@ -119,6 +152,18 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
                         subtitle_moves=subtitle_moves,
                         skip_reason=None,
                     )
+                log.info(
+                    "imdb decision=keep video=%s title=%s year=%s imdb_id=%s rating=%s votes=%s imdb_franchise=%s llm_franchise=%s force_keep=%s",
+                    item.video_path,
+                    fields.title,
+                    fields.year,
+                    imdb_id,
+                    imdb_rating,
+                    imdb_votes,
+                    imdb_franchise,
+                    llm_franchise,
+                    force_keep,
+                )
     normalized = build_normalized_basename(fields, p.stem)
     dest_dir = dest_dir_for(cfg.rules, fields, normalized)
     dest_video_path = posixpath.join(dest_dir, normalized + p.suffix)
