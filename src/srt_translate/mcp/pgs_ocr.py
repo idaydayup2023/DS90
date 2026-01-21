@@ -10,6 +10,41 @@ from ..pgs_bootstrap import resolve_pgsrip_command
 from ..subtitle_quality import validate_srt_diversity
 
 
+def _normalize_lang_code(code: str | None) -> str:
+    c = (code or "").strip().strip(".").lower()
+    if not c:
+        return "und"
+    mapping = {
+        "eng": "en",
+        "en-us": "en-us",
+        "en-gb": "en-gb",
+        "fre": "fr",
+        "fra": "fr",
+        "ger": "de",
+        "deu": "de",
+        "spa": "es",
+        "ita": "it",
+        "por": "pt",
+        "zho": "zh",
+        "chi": "zh",
+        "jpn": "ja",
+        "kor": "ko",
+        "rus": "ru",
+    }
+    return mapping.get(c, c)
+
+
+def _normalize_sup_filename(name: str) -> str:
+    p = Path(name)
+    if p.suffix.lower() != ".sup":
+        return name
+    stem = p.stem
+    if "." not in stem:
+        return f"{stem}.und.sup"
+    base, _, lang = stem.rpartition(".")
+    return f"{base}.{_normalize_lang_code(lang)}.sup"
+
+
 class PgsOcrMcp:
     def __init__(
         self,
@@ -35,14 +70,14 @@ class PgsOcrMcp:
         if self._keep_temp_files:
             work_dir = out_srt_path.parent / f".pgs_ocr_{sup_path.stem}"
             work_dir.mkdir(parents=True, exist_ok=True)
-            tmp_sup = work_dir / sup_path.name
+            tmp_sup = work_dir / _normalize_sup_filename(sup_path.name)
             tmp_sup.write_bytes(sup_path.read_bytes())
             srts = self._run_pgsrip(work_dir=work_dir, sup_path=tmp_sup)
             out_srt_path.write_bytes(srts[0].read_bytes())
         else:
             with tempfile.TemporaryDirectory(prefix="srt_translate_pgs_ocr_") as td:
                 work_dir = Path(td)
-                tmp_sup = work_dir / sup_path.name
+                tmp_sup = work_dir / _normalize_sup_filename(sup_path.name)
                 tmp_sup.write_bytes(sup_path.read_bytes())
                 srts = self._run_pgsrip(work_dir=work_dir, sup_path=tmp_sup)
                 out_srt_path.write_bytes(srts[0].read_bytes())
@@ -67,6 +102,8 @@ class PgsOcrMcp:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
                 env=env,
             )
@@ -77,6 +114,7 @@ class PgsOcrMcp:
         for lang in self._languages:
             if lang:
                 base_args += ["--language", str(lang)]
+        base_args += ["--tag", "default"]
         if self._keep_temp_files:
             base_args += ["--keep-temp-files"]
 
