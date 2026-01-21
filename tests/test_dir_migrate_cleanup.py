@@ -126,6 +126,30 @@ class TestDirMigrateCleanup(unittest.TestCase):
 
             self.assertFalse(d.exists())
 
+    def test_cleanup_sweep_removes_residual_dir(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            d = root / "MovieFolder"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "info.nfo").write_text("nfo", encoding="utf-8")
+            (d / "Screens").mkdir(parents=True, exist_ok=True)
+            (d / "Screens" / "screen0001.png").write_bytes(b"x")
+
+            cfg = self._cfg(root)
+            storage = LocalMcp(root=root)
+
+            old = cleaner._llm_decide_cleanup
+            try:
+                cleaner._llm_decide_cleanup = lambda _cfg, _moved, _dir, _dirs, _files: cleaner.CleanupDecision(
+                    decision="delete", confidence=0.99, reason="test"
+                )
+                removed = cleaner.cleanup_sweep(cfg, storage, root="", max_dirs=50)
+            finally:
+                cleaner._llm_decide_cleanup = old
+
+            self.assertGreaterEqual(removed, 1)
+            self.assertFalse(d.exists())
+
     def test_ai_srt_dedup_when_dest_exists(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td).resolve()

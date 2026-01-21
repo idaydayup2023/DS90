@@ -62,7 +62,8 @@ def _prompt(dir_path: str, moved_files: list[str], residual_dirs: list[str], res
         "3) Choose \"delete\" ONLY when the directory is clearly a per-title download folder or a season folder, and residual items are typical extras.\n"
         "4) Choose \"keep\" for generic folders (Downloads, Movies, TV, torrents, incomplete, temp) or anything that may hold other downloads.\n"
         "5) Never delete directories named torrent.files or low_imdb.\n"
-        "6) When in doubt: unknown.\n\n"
+        "6) Typical safe residuals include: NFO, images (jpg/png), SFV, small text, and folders like Screens/Proof/Sample.\n"
+        "7) When in doubt: unknown.\n\n"
         f"DIRECTORY: {dir_path}\n"
         "MOVED FILES (examples):\n"
         f"{moved or '- (none)'}\n\n"
@@ -157,13 +158,19 @@ def cleanup_sweep(cfg: AppConfig, source_storage: StorageMcp, root: str = "", ma
     if cfg.execution.dry_run or not cfg.execution.apply:
         return 0
     protected = {p.lower() for p in cfg.cleanup.protected_dirnames}
+    max_dirs = max(0, int(max_dirs))
     try:
         entries = source_storage.list_dir(root)
     except Exception:
         return 0
     dirs = [p for p, t, _sz in entries if t == "dir"]
     removed = 0
-    for d in dirs[: max(0, int(max_dirs))]:
+    video_exts = {e.lower() for e in cfg.video.extensions}
+    checked = 0
+    for d in dirs:
+        if checked >= max_dirs:
+            break
+        checked += 1
         base = posixpath.basename(d.rstrip("/")).lower()
         if base in protected:
             continue
@@ -173,8 +180,9 @@ def cleanup_sweep(cfg: AppConfig, source_storage: StorageMcp, root: str = "", ma
             continue
         residual_dirs = [posixpath.basename(p) for p, t, _sz in children if t == "dir"]
         residual_files = [(posixpath.basename(p), sz) for p, t, sz in children if t == "file"]
+        if not residual_dirs and not residual_files:
+            continue
 
-        video_exts = {e.lower() for e in cfg.video.extensions}
         has_real_video = False
         for name, _sz in residual_files:
             lower = name.lower()
@@ -183,9 +191,11 @@ def cleanup_sweep(cfg: AppConfig, source_storage: StorageMcp, root: str = "", ma
                 has_real_video = True
                 break
         if has_real_video:
+            log.info("cleanup sweep skip dir=%s reason=has_video", d)
             continue
 
         decision = _llm_decide_cleanup(cfg, [], d, residual_dirs, residual_files)
+        log.info("cleanup sweep decision=%s dir=%s confidence=%s reason=%s", decision.decision, d, decision.confidence, decision.reason)
         if decision.decision != "delete":
             continue
         if decision.confidence is not None and decision.confidence < cfg.cleanup.min_confidence:
