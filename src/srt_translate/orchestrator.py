@@ -289,7 +289,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
         for e in ftp.walk_files(cfg.ftp.root_path):
             p = e.path
             low_dir = posixpath.join(cfg.ftp.root_path.rstrip("/"), "low_imdb")
-            if p == low_dir or p.startswith(low_dir + "/"):
+            if ("/low_imdb/" in p) or p.rstrip("/").endswith("/low_imdb"):
                 continue
             lower = p.lower()
             if not any(lower.endswith(x) for x in exts):
@@ -439,7 +439,13 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
             video_id = compute_video_id(v)
             paths = subtitle_remote_paths(v.remote_path)
             ai_remote = paths["ai"]
-            if not force and ftp.exists(ai_remote):
+            ai_exists = False
+            if not force:
+                try:
+                    ai_exists = ftp.exists(ai_remote)
+                except Exception:
+                    ai_exists = False
+            if not force and ai_exists:
                 skipped += 1
                 store.upsert_task(
                     TaskRecord(
@@ -453,6 +459,8 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                 if migrate_pool:
                     _schedule_migration(video_id, v.remote_path)
                 continue
+            if (not force) and (not ai_exists):
+                log.info("ai missing video=%s ai=%s", v.remote_path, ai_remote)
 
             store.upsert_task(
                 TaskRecord(

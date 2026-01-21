@@ -70,8 +70,10 @@ class FtpMcp:
         parent, name = posixpath.split(path.rstrip("/"))
         if not parent:
             parent = "/"
+        name_lower = name.lower()
         for e in self.list(parent):
-            if posixpath.basename(e.path) == name:
+            b = posixpath.basename(e.path)
+            if b == name or b.lower() == name_lower:
                 return e
         return None
 
