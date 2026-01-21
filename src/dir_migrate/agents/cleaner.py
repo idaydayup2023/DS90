@@ -159,11 +159,15 @@ def cleanup_sweep(cfg: AppConfig, source_storage: StorageMcp, root: str = "", ma
         return 0
     protected = {p.lower() for p in cfg.cleanup.protected_dirnames}
     max_dirs = max(0, int(max_dirs))
+    root_label = root or "<storage_root>"
+    log.info("cleanup sweep scan start root=%s max_dirs=%d", root_label, max_dirs)
     try:
         entries = source_storage.list_dir(root)
     except Exception:
         return 0
     dirs = [p for p, t, _sz in entries if t == "dir"]
+    dir_names = [posixpath.basename(d.rstrip("/")) for d in dirs[:20]]
+    log.info("cleanup sweep scan discovered dirs=%d sample=%s", len(dirs), ",".join(dir_names))
     removed = 0
     video_exts = {e.lower() for e in cfg.video.extensions}
     checked = 0
@@ -173,6 +177,7 @@ def cleanup_sweep(cfg: AppConfig, source_storage: StorageMcp, root: str = "", ma
         checked += 1
         base = posixpath.basename(d.rstrip("/")).lower()
         if base in protected:
+            log.info("cleanup sweep skip dir=%s reason=protected", d)
             continue
         try:
             children = source_storage.list_dir(d)
@@ -181,6 +186,7 @@ def cleanup_sweep(cfg: AppConfig, source_storage: StorageMcp, root: str = "", ma
         residual_dirs = [posixpath.basename(p) for p, t, _sz in children if t == "dir"]
         residual_files = [(posixpath.basename(p), sz) for p, t, sz in children if t == "file"]
         if not residual_dirs and not residual_files:
+            log.info("cleanup sweep skip dir=%s reason=empty", d)
             continue
 
         has_real_video = False
@@ -195,11 +201,20 @@ def cleanup_sweep(cfg: AppConfig, source_storage: StorageMcp, root: str = "", ma
             continue
 
         decision = _llm_decide_cleanup(cfg, [], d, residual_dirs, residual_files)
-        log.info("cleanup sweep decision=%s dir=%s confidence=%s reason=%s", decision.decision, d, decision.confidence, decision.reason)
+        log.info(
+            "cleanup sweep decision=%s dir=%s confidence=%s reason=%s residual_dirs=%d residual_files=%d",
+            decision.decision,
+            d,
+            decision.confidence,
+            decision.reason,
+            len(residual_dirs),
+            len(residual_files),
+        )
         if decision.decision != "delete":
             continue
         if decision.confidence is not None and decision.confidence < cfg.cleanup.min_confidence:
             continue
         source_storage.delete_dir_tree(d)
         removed += 1
+    log.info("cleanup sweep scan done checked=%d removed=%d", checked, removed)
     return removed
