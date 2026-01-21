@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import sys
+from typing import Any, cast
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
@@ -36,15 +37,8 @@ class _FakeMedia:
         return (t.codec or "").lower() == "hdmv_pgs_subtitle"
 
 
-class _FakePgsOcr:
-    def track_to_srt(self, video_path: Path, stream_index: int, out_srt_path: Path, language_hint: str | None) -> Path:
-        out_srt_path.parent.mkdir(parents=True, exist_ok=True)
-        out_srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
-        return out_srt_path
-
-
 class TestPgsOcrSelection(unittest.TestCase):
-    def test_uses_pgs_ocr_when_no_text_tracks(self):
+    def test_choose_source_subtitle_does_not_run_pgs_ocr(self):
         with tempfile.TemporaryDirectory() as td:
             cache_dir = Path(td).resolve()
             video = cache_dir / "v.mkv"
@@ -61,15 +55,12 @@ class TestPgsOcrSelection(unittest.TestCase):
                 )
             ]
             source = choose_source_subtitle(
-                ftp=_FakeFtp(),
-                media=_FakeMedia(tracks),
-                pgs_ocr=_FakePgsOcr(),
+                ftp=cast(Any, _FakeFtp()),
+                media=cast(Any, _FakeMedia(tracks)),
+                pgs_ocr=object(),
                 cache_dir=cache_dir,
                 video_remote_path="/Downloads/Movie.mkv",
                 local_video_path=video,
                 dry_run=True,
             )
-            self.assertIsNotNone(source)
-            assert source is not None
-            self.assertEqual(source.kind, "emb")
-            self.assertTrue(source.meta.get("ocr"))
+            self.assertIsNone(source)

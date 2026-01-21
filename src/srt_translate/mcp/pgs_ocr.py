@@ -25,33 +25,26 @@ class PgsOcrMcp:
         self._keep_temp_files = keep_temp_files
         self._ffmpeg = ffmpeg
 
-    def track_to_srt(
-        self,
-        video_path: Path,
-        stream_index: int,
-        out_srt_path: Path,
-        language_hint: str | None,
-    ) -> Path:
+    def extract_track_to_sup(self, video_path: Path, stream_index: int, out_sup_path: Path) -> Path:
+        out_sup_path.parent.mkdir(parents=True, exist_ok=True)
+        self._extract_sup(video_path, stream_index, out_sup_path)
+        return out_sup_path
+
+    def sup_to_srt(self, sup_path: Path, out_srt_path: Path) -> Path:
         out_srt_path.parent.mkdir(parents=True, exist_ok=True)
         if self._keep_temp_files:
-            work_dir = out_srt_path.parent / f".pgs_ocr_track{stream_index}"
+            work_dir = out_srt_path.parent / f".pgs_ocr_{sup_path.stem}"
             work_dir.mkdir(parents=True, exist_ok=True)
-            lang = (language_hint or "und").strip().strip(".") or "und"
-            sup = work_dir / f"subtitle.{lang}.sup"
-            self._extract_sup(video_path, stream_index, sup)
-            srts = self._run_pgsrip(work_dir=work_dir, sup_path=sup)
+            tmp_sup = work_dir / sup_path.name
+            tmp_sup.write_bytes(sup_path.read_bytes())
+            srts = self._run_pgsrip(work_dir=work_dir, sup_path=tmp_sup)
             out_srt_path.write_bytes(srts[0].read_bytes())
         else:
             with tempfile.TemporaryDirectory(prefix="srt_translate_pgs_ocr_") as td:
                 work_dir = Path(td)
-                lang = (language_hint or "und").strip().strip(".") or "und"
-                sup = work_dir / f"subtitle.{lang}.sup"
-                self._extract_sup(video_path, stream_index, sup)
-                try:
-                    srts = self._run_pgsrip(work_dir=work_dir, sup_path=sup)
-                except Exception as e:
-                    debug_dir = self._persist_failure_artifacts(out_srt_path, sup)
-                    raise RuntimeError(f"{e} (pgs_ocr_debug_dir={debug_dir})") from e
+                tmp_sup = work_dir / sup_path.name
+                tmp_sup.write_bytes(sup_path.read_bytes())
+                srts = self._run_pgsrip(work_dir=work_dir, sup_path=tmp_sup)
                 out_srt_path.write_bytes(srts[0].read_bytes())
 
         ok, reason = validate_srt_diversity(out_srt_path.read_text(encoding="utf-8", errors="replace"))
