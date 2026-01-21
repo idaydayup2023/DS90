@@ -156,6 +156,7 @@ def choose_source_subtitle(
                         video_path=local_video_path,
                         stream_index=t.stream_index,
                         out_srt_path=local_try,
+                        language_hint=t.lang or "en",
                     )
                     q = score_srt_content(local_try.read_text(encoding="utf-8", errors="replace"))
                 except Exception as e:

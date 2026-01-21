@@ -29,19 +29,22 @@ class PgsOcrMcp:
         video_path: Path,
         stream_index: int,
         out_srt_path: Path,
+        language_hint: str | None,
     ) -> Path:
         out_srt_path.parent.mkdir(parents=True, exist_ok=True)
         if self._keep_temp_files:
             work_dir = out_srt_path.parent / f".pgs_ocr_track{stream_index}"
             work_dir.mkdir(parents=True, exist_ok=True)
-            sup = work_dir / "subtitle.sup"
+            lang = (language_hint or "und").strip().strip(".") or "und"
+            sup = work_dir / f"subtitle.{lang}.sup"
             self._extract_sup(video_path, stream_index, sup)
             srts = self._run_pgsrip(work_dir=work_dir, sup_path=sup)
             out_srt_path.write_bytes(srts[0].read_bytes())
         else:
             with tempfile.TemporaryDirectory(prefix="srt_translate_pgs_ocr_") as td:
                 work_dir = Path(td)
-                sup = work_dir / "subtitle.sup"
+                lang = (language_hint or "und").strip().strip(".") or "und"
+                sup = work_dir / f"subtitle.{lang}.sup"
                 self._extract_sup(video_path, stream_index, sup)
                 srts = self._run_pgsrip(work_dir=work_dir, sup_path=sup)
                 out_srt_path.write_bytes(srts[0].read_bytes())

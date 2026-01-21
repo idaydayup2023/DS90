@@ -37,7 +37,7 @@ class _FakeMedia:
 
 
 class _FakePgsOcr:
-    def track_to_srt(self, video_path: Path, stream_index: int, out_srt_path: Path) -> Path:
+    def track_to_srt(self, video_path: Path, stream_index: int, out_srt_path: Path, language_hint: str | None) -> Path:
         out_srt_path.parent.mkdir(parents=True, exist_ok=True)
         out_srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
         return out_srt_path
@@ -73,4 +73,3 @@ class TestPgsOcrSelection(unittest.TestCase):
             assert source is not None
             self.assertEqual(source.kind, "emb")
             self.assertTrue(source.meta.get("ocr"))
-
