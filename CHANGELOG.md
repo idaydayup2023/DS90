@@ -12,6 +12,7 @@
 - 新增 Whisper 自动安装与命令解析：遇到 PEP 668 时自动创建 venv 安装（避免系统环境受限）
 - 新增 ASR 质量校验与重试：对明显重复/水印式输出判定失败并重试（避免把坏字幕送去翻译）
 - 新增 PGS OCR（方案 A）：检测内置 PGS 位图字幕，抽取 `.sup` 并通过 OCR 生成 `*.emb.srt`（自动安装 `pgsrip`/`tesseract`）
+- 新增 PGS OCR 两阶段流水线：先将 PGS 轨抽取为同目录 `*.en.sup`，再异步 OCR 生成 `*.emb.srt` 并进入翻译队列
 - 新增迁移后清理智能体：大模型判定残留目录/残留文件是否可安全删除（不确定不清理，`torrent.files` 永不清理）
 - 新增 `killcron.sh`：根据锁文件 PID 递归中断 cron 任务进程树
 
@@ -26,6 +27,9 @@
 
 - `dir_migrate` CLI 异常处理：非 Ctrl-C 错误返回码 2，避免输出长堆栈影响使用
 - 修复：存在内置字幕时仍触发 ASR（改为优先下载视频并提取内置字幕/PGS OCR）
+- 修复 PGS OCR：规避 pgsrip 对 `eng/en` 语言码规范化导致的文件找不到问题（OCR 前统一临时命名为 `subtitle.<lang>.sup`）
+- 修复 PGS OCR：对外部工具输出进行容错解码（避免 `UnicodeDecodeError` 影响 OCR 任务）
+- 修复：PGS OCR 失败时自动回落到 ASR，避免单片卡住主流程
 
 ## [0.1.0] - 2026-01-18
 
