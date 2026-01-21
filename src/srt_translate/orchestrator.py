@@ -480,6 +480,20 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                         try:
                             res = fut.result()
                         except Exception as e:
+                            if kind == "pgs_ocr":
+                                log.warning("pgs ocr failed video=%s error=%s", rpath, e)
+                                store.upsert_task(
+                                    TaskRecord(
+                                        video_id=vid,
+                                        video_path=rpath,
+                                        status="PGS_OCR_FAILED",
+                                        payload={"error": str(e), "stage": kind},
+                                        updated_at=int(time.time()),
+                                    )
+                                )
+                                if cfg.whisper.enabled:
+                                    _schedule_asr(vid, rpath)
+                                continue
                             log.error("task failed video=%s error=%s stage=%s", rpath, e, kind)
                             failed_count += 1
                             store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="FAILED", payload={"error": str(e), "stage": kind}, updated_at=int(time.time())))
@@ -565,6 +579,20 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                         try:
                             res = fut.result()
                         except Exception as e:
+                            if kind == "pgs_ocr":
+                                log.warning("pgs ocr failed video=%s error=%s", rpath, e)
+                                store.upsert_task(
+                                    TaskRecord(
+                                        video_id=vid,
+                                        video_path=rpath,
+                                        status="PGS_OCR_FAILED",
+                                        payload={"error": str(e), "stage": kind},
+                                        updated_at=int(time.time()),
+                                    )
+                                )
+                                if cfg.whisper.enabled:
+                                    _schedule_asr(vid, rpath)
+                                continue
                             log.error("task failed video=%s error=%s stage=%s", rpath, e, kind)
                             failed_count += 1
                             store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="FAILED", payload={"error": str(e), "stage": kind}, updated_at=int(time.time())))
@@ -609,6 +637,20 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                 try:
                     res = fut.result()
                 except Exception as e:
+                    if kind == "pgs_ocr":
+                        log.warning("pgs ocr failed video=%s error=%s", remote_path, e)
+                        store.upsert_task(
+                            TaskRecord(
+                                video_id=video_id,
+                                video_path=remote_path,
+                                status="PGS_OCR_FAILED",
+                                payload={"error": str(e), "stage": kind},
+                                updated_at=int(time.time()),
+                            )
+                        )
+                        if cfg.whisper.enabled:
+                            _schedule_asr(video_id, remote_path)
+                        continue
                     log.error("task failed video=%s error=%s stage=%s", remote_path, e, kind)
                     failed_count += 1
                     store.upsert_task(
