@@ -240,7 +240,7 @@ def _migrate_task(
             video_size_bytes=None, # We can pass None if we don't have it handy or query it
         )
         
-        plan = plan_one(migrate_cfg, llm, item)
+        plan = plan_one(migrate_cfg, llm, item, dest_storage)
         log.info("migrate planned video=%s dest=%s", video_remote_path, plan.dest_video_path)
 
         success, result, error = apply_one(migrate_cfg, source_storage, dest_storage, plan)
@@ -286,6 +286,9 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
     with FtpMcp(cfg.ftp.host, cfg.ftp.port, cfg.ftp.username, cfg.ftp.password) as ftp:
         for e in ftp.walk_files(cfg.ftp.root_path):
             p = e.path
+            low_dir = posixpath.join(cfg.ftp.root_path.rstrip("/"), "low_imdb")
+            if p == low_dir or p.startswith(low_dir + "/"):
+                continue
             lower = p.lower()
             if not any(lower.endswith(x) for x in exts):
                 continue

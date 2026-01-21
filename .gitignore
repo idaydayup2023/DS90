@@ -7,5 +7,7 @@ __pycache__/
 logs/*.log
 logs/*.lock
 tests/out*.srt
+tests/*.sup
+tests/*.emb*.srt
 
 config.json

@@ -42,7 +42,7 @@ class SubtitleConfig:
 @dataclass(frozen=True)
 class CleanupConfig:
     enabled: bool = True
-    protected_dirnames: tuple[str, ...] = ("torrent.files",)
+    protected_dirnames: tuple[str, ...] = ("torrent.files", "low_imdb")
     min_confidence: float = 0.85
     delete_residual_files: bool = True
 
@@ -75,6 +75,17 @@ class ExecutionConfig:
 
 
 @dataclass(frozen=True)
+class ImdbConfig:
+    enabled: bool = False
+    auto_install: bool = True
+    ttl_days: int = 30
+    min_rating: float | None = 5.0
+    min_votes: int | None = None
+    skip_unrated: bool = True
+    use_llm_judge: bool = False
+
+
+@dataclass(frozen=True)
 class AppConfig:
     source: StorageConfig
     dest: StorageConfig
@@ -83,6 +94,7 @@ class AppConfig:
     subtitle: SubtitleConfig
     cleanup: CleanupConfig
     ollama: OllamaConfig
+    imdb: ImdbConfig
     rules: RulesConfig
     execution: ExecutionConfig
 
@@ -212,9 +224,12 @@ def load_config(path: str | Path) -> AppConfig:
     subtitle = SubtitleConfig(extensions=normalize_extensions(_as_tuple_str(sub_raw.get("extensions", [".srt", ".ass", ".ssa", ".vtt"]))))
 
     cleanup_raw = tool_raw.get("cleanup") or {}
-    protected = [str(x).strip() for x in cleanup_raw.get("protected_dirnames", ["torrent.files"]) if str(x).strip()]
-    if "torrent.files" not in {p.lower() for p in protected}:
+    protected = [str(x).strip() for x in cleanup_raw.get("protected_dirnames", ["torrent.files", "low_imdb"]) if str(x).strip()]
+    lower_set = {p.lower() for p in protected}
+    if "torrent.files" not in lower_set:
         protected.append("torrent.files")
+    if "low_imdb" not in lower_set:
+        protected.append("low_imdb")
     cleanup = CleanupConfig(
         enabled=bool(cleanup_raw.get("enabled", True)),
         protected_dirnames=tuple(dict.fromkeys(protected)),
@@ -230,6 +245,17 @@ def load_config(path: str | Path) -> AppConfig:
         model=str(_require(ollama_raw, "model")),
         timeout_seconds=int(ollama_raw.get("timeout_seconds", 120)),
         temperature=float(ollama_raw.get("temperature", 0.2)),
+    )
+
+    imdb_raw = tool_raw.get("imdb") or {}
+    imdb = ImdbConfig(
+        enabled=bool(imdb_raw.get("enabled", False)),
+        auto_install=bool(imdb_raw.get("auto_install", True)),
+        ttl_days=int(imdb_raw.get("ttl_days", 30)),
+        min_rating=float(imdb_raw["min_rating"]) if "min_rating" in imdb_raw and imdb_raw["min_rating"] is not None else None,
+        min_votes=int(imdb_raw["min_votes"]) if "min_votes" in imdb_raw and imdb_raw["min_votes"] is not None else None,
+        skip_unrated=bool(imdb_raw.get("skip_unrated", False)),
+        use_llm_judge=bool(imdb_raw.get("use_llm_judge", True)),
     )
 
     rules_raw = tool_raw.get("rules") or {}
@@ -259,6 +285,7 @@ def load_config(path: str | Path) -> AppConfig:
         subtitle=subtitle,
         cleanup=cleanup,
         ollama=ollama,
+        imdb=imdb,
         rules=rules,
         execution=execution,
     )

@@ -21,6 +21,8 @@ def scan_once(cfg: AppConfig, source_storage: StorageMcp) -> ScanResult:
     by_dir: dict[str, list[tuple[str, str, int | None]]] = {}
 
     for rel_path, size in all_files:
+        if rel_path == "/low_imdb" or rel_path.startswith("/low_imdb/"):
+            continue
         p = PurePosixPath(rel_path)
         if p.suffix.lower() not in exts:
             continue
@@ -73,4 +75,3 @@ def scan_once(cfg: AppConfig, source_storage: StorageMcp) -> ScanResult:
         if cfg.execution.limit is not None and len(out) >= cfg.execution.limit:
             break
     return ScanResult(videos=out)
-

@@ -12,6 +12,7 @@ from dir_migrate.config import (
     AppConfig,
     CleanupConfig,
     ExecutionConfig,
+    ImdbConfig,
     OllamaConfig,
     PathsConfig,
     RulesConfig,
@@ -34,6 +35,7 @@ class TestDirMigrateCleanup(unittest.TestCase):
             subtitle=SubtitleConfig(extensions=(".srt",)),
             cleanup=CleanupConfig(enabled=cleanup_enabled, protected_dirnames=("torrent.files",), min_confidence=0.85),
             ollama=OllamaConfig(base_url="http://localhost:11434", model="x", timeout_seconds=5, temperature=0.0),
+            imdb=ImdbConfig(),
             rules=RulesConfig(
                 movie_1080_root="X-Movie",
                 movie_4k_root="MOVIE",
@@ -80,19 +82,14 @@ class TestDirMigrateCleanup(unittest.TestCase):
                 subtitle_moves=(),
             )
 
-            old = cleaner._llm_decide_empty_dir
-            old_res = cleaner._llm_decide_residual_files
+            old = cleaner._llm_decide_cleanup
             try:
-                cleaner._llm_decide_empty_dir = lambda _cfg, _plan, _dir: cleaner.CleanupDecision(
-                    decision="delete", confidence=0.99, reason="test"
-                )
-                cleaner._llm_decide_residual_files = lambda _cfg, _plan, _dir, _files: cleaner.CleanupDecision(
-                    decision="keep", confidence=0.99, reason="test"
+                cleaner._llm_decide_cleanup = lambda _cfg, _plan, _dir, _dirs, _files: cleaner.CleanupDecision(
+                    decision=("delete" if _dir.endswith("/A/MovieFolder") else "keep"), confidence=0.99, reason="test"
                 )
                 cleaner.cleanup_source_residual_dirs(cfg, storage, plan)
             finally:
-                cleaner._llm_decide_empty_dir = old
-                cleaner._llm_decide_residual_files = old_res
+                cleaner._llm_decide_cleanup = old
 
             self.assertFalse(d.exists())
             self.assertTrue((root / "A").exists())
@@ -105,6 +102,8 @@ class TestDirMigrateCleanup(unittest.TestCase):
             (d / "poster.jpg").write_bytes(b"x")
             (d / "info.nfo").write_text("nfo", encoding="utf-8")
             (d / "sample.mkv").write_bytes(b"v")
+            (d / "Screens").mkdir(parents=True, exist_ok=True)
+            (d / "Screens" / "a.jpg").write_bytes(b"x")
 
             cfg = self._cfg(root)
             storage = LocalMcp(root=root)
@@ -116,19 +115,14 @@ class TestDirMigrateCleanup(unittest.TestCase):
                 subtitle_moves=(),
             )
 
-            old_empty = cleaner._llm_decide_empty_dir
-            old_res = cleaner._llm_decide_residual_files
+            old = cleaner._llm_decide_cleanup
             try:
-                cleaner._llm_decide_residual_files = lambda _cfg, _plan, _dir, _files: cleaner.CleanupDecision(
-                    decision="delete", confidence=0.99, reason="test"
-                )
-                cleaner._llm_decide_empty_dir = lambda _cfg, _plan, _dir: cleaner.CleanupDecision(
+                cleaner._llm_decide_cleanup = lambda _cfg, _plan, _dir, _dirs, _files: cleaner.CleanupDecision(
                     decision="delete", confidence=0.99, reason="test"
                 )
                 cleaner.cleanup_source_residual_dirs(cfg, storage, plan)
             finally:
-                cleaner._llm_decide_empty_dir = old_empty
-                cleaner._llm_decide_residual_files = old_res
+                cleaner._llm_decide_cleanup = old
 
             self.assertFalse(d.exists())
 

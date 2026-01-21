@@ -51,7 +51,7 @@ def run_once(cfg: AppConfig) -> RunSummary:
     pending: set[Future[object]] = set()
     meta: dict[Future[object], SourceFiles] = {}
     for v in videos:
-        fut: Future[object] = pool.submit(plan_one, cfg, llm, v)
+        fut: Future[object] = pool.submit(plan_one, cfg, llm, v, dest_storage)
         pending.add(fut)
         meta[fut] = v
 
@@ -84,6 +84,11 @@ def run_once(cfg: AppConfig) -> RunSummary:
     apply_failed = 0
 
     for plan in plans:
+        if getattr(plan, "skip_reason", None):
+            skipped += 1
+            if cfg.execution.dry_run or not cfg.execution.apply:
+                print(json.dumps(asdict(plan), ensure_ascii=False))
+            continue
         if cfg.execution.dry_run or not cfg.execution.apply:
             print(json.dumps(asdict(plan), ensure_ascii=False))
             continue
@@ -105,4 +110,3 @@ def run_once(cfg: AppConfig) -> RunSummary:
         conflicts=conflicts,
         failed=failed + apply_failed,
     )
-

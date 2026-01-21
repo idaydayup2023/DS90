@@ -113,9 +113,9 @@ def _prompt(filename: str) -> str:
 def _apply_franchise_rules(rules: RulesConfig, fields: LlmFields) -> LlmFields:
     series = fields.series or ""
     franchise_root = fields.franchise_root
-    if rules.franchise_map and series in rules.franchise_map:
+    if not franchise_root and rules.franchise_map and series in rules.franchise_map:
         franchise_root = rules.franchise_map[series]
-    if series.upper().startswith("NCIS"):
+    if not franchise_root and series.upper().startswith("NCIS"):
         franchise_root = "NCIS"
     return LlmFields(
         kind=fields.kind,
@@ -141,6 +141,18 @@ class LlmMcp:
         self._model = model
         self._temperature = temperature
         self._max_retries = max(0, int(max_retries))
+
+    @property
+    def ollama(self) -> OllamaMcp:
+        return self._ollama
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def temperature(self) -> float:
+        return self._temperature
 
     def infer(self, filename: str, rules: RulesConfig) -> LlmFields:
         fallback = _fallback_from_filename(filename)
@@ -190,4 +202,3 @@ class LlmMcp:
                 confidence=None,
             ),
         )
-

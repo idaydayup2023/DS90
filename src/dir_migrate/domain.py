@@ -35,6 +35,7 @@ class MovePlan:
     dest_dir: str
     dest_video_path: str
     subtitle_moves: tuple[tuple[str, str], ...]
+    skip_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -45,4 +46,3 @@ class RunSummary:
     skipped: int
     conflicts: int
     failed: int
-

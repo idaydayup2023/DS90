@@ -18,6 +18,7 @@ class StorageMcp(Protocol):
     def ensure_dir(self, rel_dir: str) -> None: ...
     def rename(self, src_rel: str, dst_rel: str, overwrite: bool) -> None: ...
     def delete_file(self, rel_path: str) -> None: ...
+    def delete_dir_tree(self, rel_dir: str) -> None: ...
     def rmdir_if_empty(self, rel_dir: str) -> bool: ...
 
 
@@ -162,6 +163,12 @@ class LocalMcp(StorageMcp):
         except Exception:
             return False
 
+    def delete_dir_tree(self, rel_dir: str) -> None:
+        p = self._abs(rel_dir)
+        if not p.exists() or not p.is_dir():
+            return
+        shutil.rmtree(p, ignore_errors=True)
+
 
 class FtpMcpStorage(StorageMcp):
     def __init__(self, cfg: FtpConnConfig):
@@ -216,6 +223,38 @@ class FtpMcpStorage(StorageMcp):
                 return ftp.rmdir_if_empty(_ftp_abs(self._cfg, rel_dir))
             except Exception:
                 return False
+
+    def delete_dir_tree(self, rel_dir: str) -> None:
+        base = rel_dir.rstrip("/") or "/"
+        if base == "/":
+            return
+        with FtpMcp(self._cfg.host, self._cfg.port, self._cfg.username, self._cfg.password, timeout=self._cfg.timeout_seconds) as ftp:
+            stack = [base]
+            while stack:
+                cur = stack.pop()
+                entries = ftp.list(_ftp_abs(self._cfg, cur))
+                dirs: list[str] = []
+                files: list[str] = []
+                for e in entries:
+                    rel = _ftp_strip_root(self._cfg, e.path)
+                    if e.type in ("dir", "cdir", "pdir"):
+                        if e.type == "dir":
+                            dirs.append(rel)
+                        continue
+                    files.append(rel)
+                if dirs:
+                    stack.append(cur)
+                    stack.extend(dirs)
+                    continue
+                for f in files:
+                    try:
+                        ftp.delete(_ftp_abs(self._cfg, f))
+                    except Exception:
+                        pass
+                try:
+                    ftp.rmdir(_ftp_abs(self._cfg, cur))
+                except Exception:
+                    pass
 
 
 def build_storage_mcp(cfg: StorageConfig) -> StorageMcp:

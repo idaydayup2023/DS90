@@ -76,6 +76,15 @@
       "workers": 2,
       "on_conflict": "skip"
     },
+    "imdb": {
+      "enabled": false,
+      "auto_install": true,
+      "ttl_days": 30,
+      "min_rating": 5.0,
+      "min_votes": null,
+      "skip_unrated": true,
+      "use_llm_judge": false
+    },
     "cleanup": {
       "enabled": true,
       "protected_dirnames": ["torrent.files"],

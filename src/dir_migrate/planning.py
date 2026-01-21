@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import posixpath
+import re
 
 from .config import RulesConfig
 from .domain import LlmFields
@@ -27,27 +28,23 @@ def _decade_bucket(year: int | None) -> str:
     return f"{decade}s"
 
 
+def _norm_folder_name(name: str | None, default: str) -> str:
+    s = (name or "").strip()
+    if not s:
+        return default
+    s = s.replace("/", ".").replace("\\", ".").replace(":", ".").replace(" ", ".")
+    s = re.sub(r"\\.+", ".", s).strip(".")
+    return s or default
+
+
 def series_bucket(fields: LlmFields) -> str:
-    # If franchise_root is present, use it as the main folder, 
-    # but put the specific series as a subfolder IF it's different from franchise_root.
-    # User requirement: "对于衍生剧应该迁移到剧名/衍生剧名.Sxx下"
-    # Example: franchise="Cosmos", series="Cosmos: A Spacetime Odyssey"
-    # Target: Cosmos/Cosmos.A.Spacetime.Odyssey/S01
-    
-    root_name = (fields.franchise_root or fields.series or "Unknown.Series").replace(" ", ".").replace(":", ".")
-    
-    # If we have a franchise root AND a specific series name that is different
+    root = _norm_folder_name(fields.franchise_root or fields.series, default="Unknown.Series")
     if fields.franchise_root and fields.series:
-        f_norm = fields.franchise_root.replace(" ", ".").replace(":", ".").lower()
-        s_norm = fields.series.replace(" ", ".").replace(":", ".").lower()
-        
-        # If the series name effectively contains the franchise name (like "Cosmos" vs "Cosmos: A Spacetime Odyssey")
-        # we still want the subfolder structure.
-        if f_norm != s_norm:
-             series_name = fields.series.replace(" ", ".").replace(":", ".")
-             return posixpath.join(root_name, series_name)
-             
-    return root_name
+        f = _norm_folder_name(fields.franchise_root, default="Unknown.Series")
+        s = _norm_folder_name(fields.series, default="Unknown.Series")
+        if f.lower() != s.lower():
+            return posixpath.join(f, s)
+    return root
 
 
 def dest_dir_for(rules: RulesConfig, fields: LlmFields, normalized_basename: str) -> str:
@@ -68,4 +65,3 @@ def dest_dir_for(rules: RulesConfig, fields: LlmFields, normalized_basename: str
     else:
         bucket = _year_bucket_movie_1080(fields.year, rules.year_split)
     return posixpath.join("/", root, bucket, normalized_basename)
-
