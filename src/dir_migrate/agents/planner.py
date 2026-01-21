@@ -22,6 +22,37 @@ _franchise_cache_lock = threading.Lock()
 _franchise_present_cache: dict[str, bool] = {}
 
 
+def _extract_tt_from_text(text: str) -> str | None:
+    if not text:
+        return None
+    m = re.search(r"tt\d{7,8}", text, flags=re.IGNORECASE)
+    if not m:
+        return None
+    return m.group(0).lower()
+
+
+def _extract_tt_from_sidecars(source_storage: StorageMcp, video_path: str) -> str | None:
+    d = posixpath.dirname(video_path.rstrip("/")) or ""
+    try:
+        entries = source_storage.list_dir(d)
+    except Exception:
+        return None
+    for p, t, _sz in entries:
+        if t != "file":
+            continue
+        name = posixpath.basename(p).lower()
+        if not (name.endswith(".nfo") or name.endswith(".txt") or name.endswith(".url")):
+            continue
+        try:
+            text = source_storage.read_text(p, max_bytes=262144)
+        except Exception:
+            continue
+        tt = _extract_tt_from_text(text)
+        if tt:
+            return tt
+    return None
+
+
 def _dotify(text: str) -> str:
     t = (text or "").strip()
     if not t:
@@ -75,13 +106,20 @@ def _franchise_present_in_dest(dest_storage: StorageMcp, cfg: AppConfig, franchi
     return found
 
 
-def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: StorageMcp | None = None) -> MovePlan:
+def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: StorageMcp | None = None, source_storage: StorageMcp | None = None) -> MovePlan:
     p = PurePosixPath(item.video_path)
     fields = llm.infer(p.name, cfg.rules)
     if cfg.imdb.enabled:
         imdb = ImdbMcp(cache_dir=cfg.paths.local_cache_dir, auto_install=cfg.imdb.auto_install, ttl_days=cfg.imdb.ttl_days)
         if fields.kind == "movie":
-            imdb_title, imdb_dbg = imdb.lookup_debug(kind="movie", title=fields.title, year=fields.year)
+            tt = None
+            if source_storage is not None:
+                tt = _extract_tt_from_sidecars(source_storage, item.video_path)
+            if tt:
+                imdb_title, imdb_dbg = imdb.lookup_by_id_debug(tt)
+                log.info("imdb tt_source=sidecar tt=%s video=%s", tt, item.video_path)
+            else:
+                imdb_title, imdb_dbg = imdb.lookup_debug(kind="movie", title=fields.title, year=fields.year)
             imdb_id = getattr(imdb_title, "imdb_id", None) if imdb_title is not None else None
             imdb_rating = getattr(imdb_title, "rating", None) if imdb_title is not None else None
             imdb_votes = getattr(imdb_title, "votes", None) if imdb_title is not None else None

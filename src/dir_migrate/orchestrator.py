@@ -52,7 +52,7 @@ def run_once(cfg: AppConfig) -> RunSummary:
     pending: set[Future[object]] = set()
     meta: dict[Future[object], SourceFiles] = {}
     for v in videos:
-        fut: Future[object] = pool.submit(plan_one, cfg, llm, v, dest_storage)
+        fut: Future[object] = pool.submit(plan_one, cfg, llm, v, dest_storage, source_storage)
         pending.add(fut)
         meta[fut] = v
 

@@ -242,7 +242,7 @@ def _migrate_task(
             video_size_bytes=None, # We can pass None if we don't have it handy or query it
         )
         
-        plan = plan_one(migrate_cfg, llm, item, dest_storage)
+        plan = plan_one(migrate_cfg, llm, item, dest_storage, source_storage=source_storage)
         log.info("migrate planned video=%s dest=%s", video_remote_path, plan.dest_video_path)
 
         success, result, error = apply_one(migrate_cfg, source_storage, dest_storage, plan)

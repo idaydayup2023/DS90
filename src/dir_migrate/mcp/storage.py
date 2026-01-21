@@ -17,6 +17,7 @@ class StorageMcp(Protocol):
     def exists(self, rel_path: str) -> bool: ...
     def ensure_dir(self, rel_dir: str) -> None: ...
     def rename(self, src_rel: str, dst_rel: str, overwrite: bool) -> None: ...
+    def read_text(self, rel_path: str, max_bytes: int = 262144) -> str: ...
     def delete_file(self, rel_path: str) -> None: ...
     def delete_dir_tree(self, rel_dir: str) -> None: ...
     def rmdir_if_empty(self, rel_dir: str) -> bool: ...
@@ -128,6 +129,13 @@ class LocalMcp(StorageMcp):
     def exists(self, rel_path: str) -> bool:
         return self._abs(rel_path).exists()
 
+    def read_text(self, rel_path: str, max_bytes: int = 262144) -> str:
+        p = self._abs(rel_path)
+        if not p.exists() or not p.is_file():
+            return ""
+        data = p.read_bytes()[: max(0, int(max_bytes))]
+        return data.decode("utf-8", errors="replace")
+
     def ensure_dir(self, rel_dir: str) -> None:
         self._abs(rel_dir).mkdir(parents=True, exist_ok=True)
 
@@ -194,6 +202,21 @@ class FtpMcpStorage(StorageMcp):
                 return ftp.exists(_ftp_abs(self._cfg, rel_path))
             except Exception:
                 return False
+
+    def read_text(self, rel_path: str, max_bytes: int = 262144) -> str:
+        import tempfile
+        abs_path = _ftp_abs(self._cfg, rel_path)
+        with FtpMcp(self._cfg.host, self._cfg.port, self._cfg.username, self._cfg.password, timeout=self._cfg.timeout_seconds) as ftp:
+            with tempfile.NamedTemporaryFile(delete=True) as tmp:
+                try:
+                    ftp.download(abs_path, Path(tmp.name))
+                except Exception:
+                    return ""
+                try:
+                    data = Path(tmp.name).read_bytes()[: max(0, int(max_bytes))]
+                except Exception:
+                    return ""
+        return data.decode("utf-8", errors="replace")
 
     def ensure_dir(self, rel_dir: str) -> None:
         with FtpMcp(self._cfg.host, self._cfg.port, self._cfg.username, self._cfg.password, timeout=self._cfg.timeout_seconds) as ftp:
