@@ -81,7 +81,7 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
     if cfg.imdb.enabled:
         imdb = ImdbMcp(cache_dir=cfg.paths.local_cache_dir, auto_install=cfg.imdb.auto_install, ttl_days=cfg.imdb.ttl_days)
         if fields.kind == "movie":
-            imdb_title = imdb.lookup(kind="movie", title=fields.title, year=fields.year)
+            imdb_title, imdb_dbg = imdb.lookup_debug(kind="movie", title=fields.title, year=fields.year)
             imdb_id = getattr(imdb_title, "imdb_id", None) if imdb_title is not None else None
             imdb_rating = getattr(imdb_title, "rating", None) if imdb_title is not None else None
             imdb_votes = getattr(imdb_title, "votes", None) if imdb_title is not None else None
@@ -101,10 +101,22 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
                     if _franchise_present_in_dest(dest_storage, cfg, c):
                         force_keep = True
                         break
-            if imdb_title is None or imdb_rating is None:
+            if imdb_dbg.status not in ("ok", "cached"):
+                log.info(
+                    "imdb status=%s decision=keep reason=%s video=%s title=%s year=%s error=%s candidates=%s",
+                    imdb_dbg.status,
+                    "imdb_error" if imdb_dbg.status == "error" else "imdb_not_found",
+                    item.video_path,
+                    fields.title,
+                    fields.year,
+                    imdb_dbg.error,
+                    ";".join(f"{c.get('title')}({c.get('year')})[{c.get('kind')}]" for c in imdb_dbg.candidates[:5]),
+                )
+            elif imdb_rating is None:
                 if (not force_keep) and cfg.imdb.skip_unrated:
                     log.info(
-                        "imdb decision=low_imdb reason=unrated video=%s title=%s year=%s imdb_id=%s rating=%s votes=%s imdb_franchise=%s llm_franchise=%s force_keep=%s",
+                        "imdb status=%s decision=low_imdb reason=unrated video=%s title=%s year=%s imdb_id=%s rating=%s votes=%s imdb_franchise=%s llm_franchise=%s force_keep=%s",
+                        imdb_dbg.status,
                         item.video_path,
                         fields.title,
                         fields.year,
@@ -126,11 +138,12 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
                         subtitle_moves=subtitle_moves,
                         skip_reason=None,
                     )
-            else:
+            elif imdb_rating is not None:
                 votes_ok = cfg.imdb.min_votes is None or (imdb_votes or 0) >= cfg.imdb.min_votes
                 if (not force_keep) and votes_ok and cfg.imdb.min_rating is not None and imdb_rating < cfg.imdb.min_rating:
                     log.info(
-                        "imdb decision=low_imdb reason=rating_below_threshold video=%s title=%s year=%s imdb_id=%s rating=%s votes=%s imdb_franchise=%s llm_franchise=%s force_keep=%s",
+                        "imdb status=%s decision=low_imdb reason=rating_below_threshold video=%s title=%s year=%s imdb_id=%s rating=%s votes=%s imdb_franchise=%s llm_franchise=%s force_keep=%s",
+                        imdb_dbg.status,
                         item.video_path,
                         fields.title,
                         fields.year,
@@ -153,7 +166,8 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
                         skip_reason=None,
                     )
                 log.info(
-                    "imdb decision=keep video=%s title=%s year=%s imdb_id=%s rating=%s votes=%s imdb_franchise=%s llm_franchise=%s force_keep=%s",
+                    "imdb status=%s decision=keep video=%s title=%s year=%s imdb_id=%s rating=%s votes=%s imdb_franchise=%s llm_franchise=%s force_keep=%s",
+                    imdb_dbg.status,
                     item.video_path,
                     fields.title,
                     fields.year,

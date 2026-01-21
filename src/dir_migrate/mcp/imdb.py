@@ -26,6 +26,13 @@ class ImdbTitle:
     franchise_root: str | None
 
 
+@dataclass(frozen=True)
+class ImdbLookupDebug:
+    status: str  # ok|not_found|error|cached|invalid
+    error: str | None
+    candidates: tuple[dict[str, Any], ...]
+
+
 def _cache_key(kind: str, title: str | None, year: int | None) -> str:
     h = hashlib.sha1()
     h.update((kind or "").encode("utf-8"))
@@ -80,11 +87,15 @@ class ImdbMcp:
         self._cache_path.mkdir(parents=True, exist_ok=True)
 
     def lookup(self, kind: str, title: str | None, year: int | None) -> ImdbTitle | None:
+        t, _dbg = self.lookup_debug(kind=kind, title=title, year=year)
+        return t
+
+    def lookup_debug(self, kind: str, title: str | None, year: int | None) -> tuple[ImdbTitle | None, ImdbLookupDebug]:
         kind = (kind or "").lower()
         if kind not in ("movie", "tv"):
-            return None
+            return None, ImdbLookupDebug(status="invalid", error="unsupported kind", candidates=())
         if not title:
-            return None
+            return None, ImdbLookupDebug(status="invalid", error="missing title", candidates=())
 
         key = _cache_key(kind, title, year)
         p = self._cache_path / f"{key}.json"
@@ -93,18 +104,25 @@ class ImdbMcp:
             try:
                 if now - int(p.stat().st_mtime) <= self._ttl_seconds:
                     obj = _safe_json_loads(p.read_text(encoding="utf-8", errors="replace"))
-                    return self._to_title(obj)
+                    return self._to_title(obj), ImdbLookupDebug(status="cached", error=None, candidates=())
             except Exception:
                 pass
 
-        obj = self._query(kind=kind, title=title, year=year)
-        if obj is None:
-            return None
+        out = self._query(kind=kind, title=title, year=year)
+        if out is None:
+            return None, ImdbLookupDebug(status="error", error="imdb query produced no output", candidates=())
+        if isinstance(out.get("error"), str) and out.get("error"):
+            return None, ImdbLookupDebug(status="error", error=str(out.get("error")), candidates=tuple(out.get("candidates") or ()))
+        best = out.get("best")
+        if best is None:
+            return None, ImdbLookupDebug(status="not_found", error=None, candidates=tuple(out.get("candidates") or ()))
+        if not isinstance(best, dict):
+            return None, ImdbLookupDebug(status="error", error="imdb output best is not object", candidates=tuple(out.get("candidates") or ()))
         try:
-            p.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+            p.write_text(json.dumps(best, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
-        return self._to_title(obj)
+        return self._to_title(best), ImdbLookupDebug(status="ok", error=None, candidates=tuple(out.get("candidates") or ()))
 
     def _query(self, kind: str, title: str, year: int | None) -> dict[str, Any] | None:
         py = resolve_imdbpy_python(cache_dir=self._cache_dir, auto_install=self._auto_install)
@@ -116,8 +134,15 @@ kind=sys.argv[1]
 title=sys.argv[2]
 year=int(sys.argv[3]) if sys.argv[3] != "None" else None
 
-ia=Cinemagoer()
-results=ia.search_movie(title)
+def safe_out(**kw):
+    print(json.dumps(kw, ensure_ascii=False))
+    raise SystemExit(0)
+
+try:
+    ia=Cinemagoer()
+    results=ia.search_movie(title)
+except Exception as e:
+    safe_out(error=f"search_movie failed: {type(e).__name__}: {e}", best=None, candidates=[])
 
 def norm(s):
     return ''.join(ch.lower() for ch in s if ch.isalnum() or ch.isspace()).strip()
@@ -144,10 +169,13 @@ def score(item):
 results=sorted(results, key=score, reverse=True)
 best=results[0] if results else None
 if not best:
-    print(json.dumps({\"best\": None, \"candidates\": []}, ensure_ascii=False))
-    raise SystemExit(0)
+    safe_out(best=None, candidates=[])
 
-movie=ia.get_movie(best.movieID)
+try:
+    movie=ia.get_movie(best.movieID)
+except Exception as e:
+    safe_out(error=f"get_movie failed: {type(e).__name__}: {e}", best=None, candidates=[{\"imdb_id\": str(r.movieID), \"kind\": str(r.get('kind') or ''), \"title\": str(r.get('title') or ''), \"year\": r.get('year')} for r in results[:5]])
+
 connections=None
 try:
     connections=ia.get_movie_connections(best.movieID)
@@ -199,13 +227,16 @@ print(json.dumps(out, ensure_ascii=False))
             env=os.environ.copy(),
             timeout=120,
         )
-        if p.returncode != 0 and not (p.stdout or "").strip():
-            return None
+        if not (p.stdout or "").strip():
+            err = (p.stderr or "").strip()
+            return {"error": err or f"imdb subprocess failed rc={p.returncode}", "best": None, "candidates": []}
         obj = _safe_json_loads(p.stdout or "")
-        best = obj.get("best")
-        if not isinstance(best, dict):
-            return None
-        return best
+        if p.returncode != 0 and "error" not in obj:
+            err = (p.stderr or "").strip()
+            obj["error"] = err or f"imdb subprocess failed rc={p.returncode}"
+        if "candidates" not in obj:
+            obj["candidates"] = []
+        return obj
 
     def _to_title(self, obj: dict[str, Any]) -> ImdbTitle:
         return ImdbTitle(
@@ -220,4 +251,3 @@ print(json.dumps(out, ensure_ascii=False))
             series_title=_as_str(obj.get("series_title")),
             franchise_root=_as_str(obj.get("franchise_root")),
         )
-
