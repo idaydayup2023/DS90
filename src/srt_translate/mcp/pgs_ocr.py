@@ -45,6 +45,17 @@ def _normalize_sup_filename(name: str) -> str:
     return f"{base}.{_normalize_lang_code(lang)}.sup"
 
 
+def _safe_tmp_sup_name(normalized_name: str) -> str:
+    p = Path(normalized_name)
+    if p.suffix.lower() != ".sup":
+        return "subtitle.und.sup"
+    stem = p.stem
+    if "." not in stem:
+        return "subtitle.und.sup"
+    _base, _, lang = stem.rpartition(".")
+    return f"subtitle.{_normalize_lang_code(lang)}.sup"
+
+
 class PgsOcrMcp:
     def __init__(
         self,
@@ -67,17 +78,19 @@ class PgsOcrMcp:
 
     def sup_to_srt(self, sup_path: Path, out_srt_path: Path) -> Path:
         out_srt_path.parent.mkdir(parents=True, exist_ok=True)
+        normalized_name = _normalize_sup_filename(sup_path.name)
+        tmp_name = _safe_tmp_sup_name(normalized_name)
         if self._keep_temp_files:
             work_dir = out_srt_path.parent / f".pgs_ocr_{sup_path.stem}"
             work_dir.mkdir(parents=True, exist_ok=True)
-            tmp_sup = work_dir / _normalize_sup_filename(sup_path.name)
+            tmp_sup = work_dir / tmp_name
             tmp_sup.write_bytes(sup_path.read_bytes())
             srts = self._run_pgsrip(work_dir=work_dir, sup_path=tmp_sup)
             out_srt_path.write_bytes(srts[0].read_bytes())
         else:
             with tempfile.TemporaryDirectory(prefix="srt_translate_pgs_ocr_") as td:
                 work_dir = Path(td)
-                tmp_sup = work_dir / _normalize_sup_filename(sup_path.name)
+                tmp_sup = work_dir / tmp_name
                 tmp_sup.write_bytes(sup_path.read_bytes())
                 srts = self._run_pgsrip(work_dir=work_dir, sup_path=tmp_sup)
                 out_srt_path.write_bytes(srts[0].read_bytes())
