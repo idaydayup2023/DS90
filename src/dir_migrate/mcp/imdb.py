@@ -174,7 +174,7 @@ if not best:
 try:
     movie=ia.get_movie(best.movieID)
 except Exception as e:
-    safe_out(error=f"get_movie failed: {type(e).__name__}: {e}", best=None, candidates=[{\"imdb_id\": str(r.movieID), \"kind\": str(r.get('kind') or ''), \"title\": str(r.get('title') or ''), \"year\": r.get('year')} for r in results[:5]])
+    safe_out(error=f"get_movie failed: {type(e).__name__}: {e}", best=None, candidates=[{"imdb_id": str(r.movieID), "kind": str(r.get("kind") or ""), "title": str(r.get("title") or ""), "year": r.get("year")} for r in results[:5]])
 
 connections=None
 try:
@@ -196,20 +196,20 @@ def pick_franchise_root(connections_obj):
     return None
 
 out={
-  \"best\": {
-    \"imdb_id\": str(best.movieID),
-    \"kind\": str(movie.get('kind') or best.get('kind') or ''),
-    \"title\": str(movie.get('title') or best.get('title') or ''),
-    \"year\": movie.get('year'),
-    \"rating\": movie.get('rating'),
-    \"votes\": movie.get('votes'),
-    \"canonical_title\": str(movie.get('title') or best.get('title') or ''),
-    \"canonical_year\": movie.get('year'),
-    \"series_title\": str(movie.get('title') or best.get('title') or '') if kind=='tv' else None,
-    \"franchise_root\": pick_franchise_root(connections),
+  "best": {
+    "imdb_id": str(best.movieID),
+    "kind": str(movie.get('kind') or best.get('kind') or ''),
+    "title": str(movie.get('title') or best.get('title') or ''),
+    "year": movie.get('year'),
+    "rating": movie.get('rating'),
+    "votes": movie.get('votes'),
+    "canonical_title": str(movie.get('title') or best.get('title') or ''),
+    "canonical_year": movie.get('year'),
+    "series_title": str(movie.get('title') or best.get('title') or '') if kind=='tv' else None,
+    "franchise_root": pick_franchise_root(connections),
   },
-  \"candidates\": [
-    {\"imdb_id\": str(r.movieID), \"kind\": str(r.get('kind') or ''), \"title\": str(r.get('title') or ''), \"year\": r.get('year')}
+  "candidates": [
+    {"imdb_id": str(r.movieID), "kind": str(r.get('kind') or ''), "title": str(r.get('title') or ''), "year": r.get('year')}
     for r in results[:5]
   ],
 }
