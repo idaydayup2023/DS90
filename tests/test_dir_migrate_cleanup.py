@@ -84,7 +84,7 @@ class TestDirMigrateCleanup(unittest.TestCase):
 
             old = cleaner._llm_decide_cleanup
             try:
-                cleaner._llm_decide_cleanup = lambda _cfg, _plan, _dir, _dirs, _files: cleaner.CleanupDecision(
+                cleaner._llm_decide_cleanup = lambda _cfg, _moved, _dir, _dirs, _files: cleaner.CleanupDecision(
                     decision=("delete" if _dir.endswith("/A/MovieFolder") else "keep"), confidence=0.99, reason="test"
                 )
                 cleaner.cleanup_source_residual_dirs(cfg, storage, plan)
@@ -117,7 +117,7 @@ class TestDirMigrateCleanup(unittest.TestCase):
 
             old = cleaner._llm_decide_cleanup
             try:
-                cleaner._llm_decide_cleanup = lambda _cfg, _plan, _dir, _dirs, _files: cleaner.CleanupDecision(
+                cleaner._llm_decide_cleanup = lambda _cfg, _moved, _dir, _dirs, _files: cleaner.CleanupDecision(
                     decision="delete", confidence=0.99, reason="test"
                 )
                 cleaner.cleanup_source_residual_dirs(cfg, storage, plan)

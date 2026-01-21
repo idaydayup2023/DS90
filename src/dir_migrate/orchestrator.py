@@ -9,6 +9,7 @@ from srt_translate.daemon_executor import DaemonExecutor
 from srt_translate.mcp.ollama import OllamaMcp
 
 from .agents.executor import apply_one
+from .agents.cleaner import cleanup_sweep
 from .agents.planner import plan_one
 from .agents.scanner import scan_once
 from .config import AppConfig
@@ -101,6 +102,12 @@ def run_once(cfg: AppConfig) -> RunSummary:
             continue
         apply_failed += 1
         log.error("apply failed video=%s error=%s", plan.source.video_path, err)
+
+    if cfg.cleanup.enabled and cfg.execution.apply and (not cfg.execution.dry_run):
+        try:
+            cleanup_sweep(cfg, source_storage, root="", max_dirs=200)
+        except Exception as e:
+            log.warning("cleanup sweep failed error=%s", e)
 
     return RunSummary(
         videos=len(videos),

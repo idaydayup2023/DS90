@@ -65,7 +65,7 @@ def _prompt(dir_path: str, moved_files: list[str], residual_dirs: list[str], res
         "6) When in doubt: unknown.\n\n"
         f"DIRECTORY: {dir_path}\n"
         "MOVED FILES (examples):\n"
-        f"{moved}\n\n"
+        f"{moved or '- (none)'}\n\n"
         "RESIDUAL DIRS:\n"
         f"{dirs or '- (none)'}\n\n"
         "RESIDUAL FILES:\n"
@@ -79,9 +79,8 @@ def _prompt(dir_path: str, moved_files: list[str], residual_dirs: list[str], res
     )
 
 
-def _llm_decide_cleanup(cfg: AppConfig, plan: MovePlan, dir_path: str, residual_dirs: list[str], residual_files: list[tuple[str, int | None]]) -> CleanupDecision:
+def _llm_decide_cleanup(cfg: AppConfig, moved_files: list[str], dir_path: str, residual_dirs: list[str], residual_files: list[tuple[str, int | None]]) -> CleanupDecision:
     ollama = OllamaMcp(cfg.ollama.base_url, timeout_seconds=cfg.ollama.timeout_seconds)
-    moved_files = [plan.source.video_path, *plan.source.subtitle_paths]
     text = ollama.generate(model=cfg.ollama.model, prompt=_prompt(dir_path, moved_files, residual_dirs, residual_files), temperature=0.0).text
     obj = _extract_json(text)
     decision = str(obj.get("decision") or "unknown").strip().lower()
@@ -125,7 +124,8 @@ def cleanup_source_residual_dirs(cfg: AppConfig, source_storage: StorageMcp, pla
                 if ext in video_exts and name not in moved_names and "sample" not in name:
                     return
 
-            decision = _llm_decide_cleanup(cfg, plan, cur, [posixpath.basename(d) for d in dirs], [(posixpath.basename(p), sz) for p, sz in files])
+            moved_files = [plan.source.video_path, *plan.source.subtitle_paths]
+            decision = _llm_decide_cleanup(cfg, moved_files, cur, [posixpath.basename(d) for d in dirs], [(posixpath.basename(p), sz) for p, sz in files])
             if decision.decision != "delete":
                 log.info("cleanup keep dir=%s decision=%s confidence=%s reason=%s", cur, decision.decision, decision.confidence, decision.reason)
                 return
@@ -149,3 +149,47 @@ def cleanup_source_residual_dirs(cfg: AppConfig, source_storage: StorageMcp, pla
         if parent == cur:
             return
         cur = parent
+
+
+def cleanup_sweep(cfg: AppConfig, source_storage: StorageMcp, root: str = "", max_dirs: int = 200) -> int:
+    if not cfg.cleanup.enabled:
+        return 0
+    if cfg.execution.dry_run or not cfg.execution.apply:
+        return 0
+    protected = {p.lower() for p in cfg.cleanup.protected_dirnames}
+    try:
+        entries = source_storage.list_dir(root)
+    except Exception:
+        return 0
+    dirs = [p for p, t, _sz in entries if t == "dir"]
+    removed = 0
+    for d in dirs[: max(0, int(max_dirs))]:
+        base = posixpath.basename(d.rstrip("/")).lower()
+        if base in protected:
+            continue
+        try:
+            children = source_storage.list_dir(d)
+        except Exception:
+            continue
+        residual_dirs = [posixpath.basename(p) for p, t, _sz in children if t == "dir"]
+        residual_files = [(posixpath.basename(p), sz) for p, t, sz in children if t == "file"]
+
+        video_exts = {e.lower() for e in cfg.video.extensions}
+        has_real_video = False
+        for name, _sz in residual_files:
+            lower = name.lower()
+            _stem, ext = posixpath.splitext(lower)
+            if ext in video_exts and "sample" not in lower:
+                has_real_video = True
+                break
+        if has_real_video:
+            continue
+
+        decision = _llm_decide_cleanup(cfg, [], d, residual_dirs, residual_files)
+        if decision.decision != "delete":
+            continue
+        if decision.confidence is not None and decision.confidence < cfg.cleanup.min_confidence:
+            continue
+        source_storage.delete_dir_tree(d)
+        removed += 1
+    return removed

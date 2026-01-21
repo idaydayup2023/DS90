@@ -26,12 +26,14 @@ from .translation import to_ai_srt_content, translate_srt_to_bilingual
 try:
     from dir_migrate.agents.planner import plan_one
     from dir_migrate.agents.executor import apply_one
+    from dir_migrate.agents.cleaner import cleanup_sweep
     from dir_migrate.domain import SourceFiles
     from dir_migrate.mcp.llm import LlmMcp
     from dir_migrate.mcp.storage import build_storage_mcp
 except ImportError:
     plan_one = None
     apply_one = None
+    cleanup_sweep = None
     SourceFiles = None
     LlmMcp = None
     build_storage_mcp = None
@@ -707,6 +709,13 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                             store.upsert_task(TaskRecord(video_id=video_id, video_path=remote_path, status="MIGRATION_FAILED", payload={"error": err}, updated_at=int(time.time())))
                     else:
                         log.error("unexpected migrate result type: %s", type(res))
+        if migrate_cfg and source_storage and cleanup_sweep and migrate_cfg.cleanup.enabled and migrate_cfg.execution.apply and (not dry_run):
+            try:
+                removed = cleanup_sweep(migrate_cfg, source_storage, root="", max_dirs=200)
+                if removed:
+                    log.info("migrate cleanup sweep removed=%d", removed)
+            except Exception as e:
+                log.warning("migrate cleanup sweep failed error=%s", e)
     except KeyboardInterrupt:
         for fut in list(pending):
             fut.cancel()
