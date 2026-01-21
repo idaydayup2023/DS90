@@ -102,13 +102,13 @@ def cleanup_source_residual_dirs(cfg: AppConfig, source_storage: StorageMcp, pla
         return
     if cfg.execution.dry_run or not cfg.execution.apply:
         return
-    start_dir = posixpath.dirname(plan.source.video_path.rstrip("/")) or "/"
-    if start_dir == "/":
+    start_dir = posixpath.dirname(plan.source.video_path.rstrip("/")) or ""
+    if start_dir in ("", "/"):
         return
 
     protected = {p.lower() for p in cfg.cleanup.protected_dirnames}
     cur = start_dir
-    while cur and cur != "/":
+    while cur:
         base = posixpath.basename(cur.rstrip("/")).lower()
         if base in protected:
             return
@@ -146,7 +146,7 @@ def cleanup_source_residual_dirs(cfg: AppConfig, source_storage: StorageMcp, pla
         if not removed:
             return
         log.info("cleanup removed dir=%s", cur)
-        parent = posixpath.dirname(cur.rstrip("/")) or "/"
+        parent = posixpath.dirname(cur.rstrip("/")) or ""
         if parent == cur:
             return
         cur = parent

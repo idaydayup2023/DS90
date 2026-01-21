@@ -709,13 +709,21 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                             store.upsert_task(TaskRecord(video_id=video_id, video_path=remote_path, status="MIGRATION_FAILED", payload={"error": err}, updated_at=int(time.time())))
                     else:
                         log.error("unexpected migrate result type: %s", type(res))
-        if migrate_cfg and source_storage and cleanup_sweep and migrate_cfg.cleanup.enabled and migrate_cfg.execution.apply and (not dry_run):
-            try:
-                removed = cleanup_sweep(migrate_cfg, source_storage, root="", max_dirs=200)
-                if removed:
-                    log.info("migrate cleanup sweep removed=%d", removed)
-            except Exception as e:
-                log.warning("migrate cleanup sweep failed error=%s", e)
+        if migrate_cfg and source_storage and cleanup_sweep:
+            if migrate_cfg.cleanup.enabled and migrate_cfg.execution.apply and (not dry_run):
+                log.info("migrate cleanup sweep start root=/Downloads max_dirs=%d", 200)
+                try:
+                    removed = cleanup_sweep(migrate_cfg, source_storage, root="", max_dirs=200)
+                    log.info("migrate cleanup sweep done removed=%d", removed)
+                except Exception as e:
+                    log.warning("migrate cleanup sweep failed error=%s", e)
+            else:
+                log.info(
+                    "migrate cleanup sweep skipped enabled=%s apply=%s dry_run=%s",
+                    migrate_cfg.cleanup.enabled,
+                    migrate_cfg.execution.apply,
+                    dry_run,
+                )
     except KeyboardInterrupt:
         for fut in list(pending):
             fut.cancel()

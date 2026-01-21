@@ -104,10 +104,19 @@ def run_once(cfg: AppConfig) -> RunSummary:
         log.error("apply failed video=%s error=%s", plan.source.video_path, err)
 
     if cfg.cleanup.enabled and cfg.execution.apply and (not cfg.execution.dry_run):
+        log.info("cleanup sweep start root=/Downloads max_dirs=%d", 200)
         try:
-            cleanup_sweep(cfg, source_storage, root="", max_dirs=200)
+            removed = cleanup_sweep(cfg, source_storage, root="", max_dirs=200)
+            log.info("cleanup sweep done removed=%d", removed)
         except Exception as e:
             log.warning("cleanup sweep failed error=%s", e)
+    else:
+        log.info(
+            "cleanup sweep skipped enabled=%s apply=%s dry_run=%s",
+            cfg.cleanup.enabled,
+            cfg.execution.apply,
+            cfg.execution.dry_run,
+        )
 
     return RunSummary(
         videos=len(videos),

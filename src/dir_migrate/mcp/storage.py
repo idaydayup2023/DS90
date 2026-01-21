@@ -76,10 +76,8 @@ def _ftp_abs(cfg: FtpConnConfig, rel_path: str) -> str:
     # We need to override root_path for destination if it's meant to be root-relative.
     # But let's look at _ftp_abs logic again.
     
-    # If we want to support absolute paths regardless of configured root:
     if rel_path.startswith("/"):
         return rel_path
-        
     rel_path = rel_path.strip("/")
     root = cfg.root_path.rstrip("/") or "/"
     return posixpath.join(root, rel_path) if rel_path else root
@@ -87,10 +85,12 @@ def _ftp_abs(cfg: FtpConnConfig, rel_path: str) -> str:
 
 def _ftp_strip_root(cfg: FtpConnConfig, abs_path: str) -> str:
     root = cfg.root_path.rstrip("/") or "/"
+    if root == "/":
+        return abs_path
     if abs_path == root:
-        return "/"
+        return ""
     if abs_path.startswith(root + "/"):
-        return "/" + abs_path[len(root) + 1 :]
+        return abs_path[len(root) + 1 :]
     return abs_path
 
 
@@ -109,7 +109,7 @@ class LocalMcp(StorageMcp):
         for p in base.rglob("*"):
             if not p.is_file():
                 continue
-            rel = "/" + str(p.relative_to(self.root)).replace("\\", "/")
+            rel = str(p.relative_to(self.root)).replace("\\", "/")
             out.append((rel, p.stat().st_size))
         return out
 
@@ -119,7 +119,7 @@ class LocalMcp(StorageMcp):
         if not d.exists():
             return out
         for p in d.iterdir():
-            rel = "/" + str(p.relative_to(self.root)).replace("\\", "/")
+            rel = str(p.relative_to(self.root)).replace("\\", "/")
             t = "dir" if p.is_dir() else "file"
             size = p.stat().st_size if p.is_file() else None
             out.append((rel, t, size))

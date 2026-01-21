@@ -16,12 +16,12 @@ class ScanResult:
 def scan_once(cfg: AppConfig, source_storage: StorageMcp) -> ScanResult:
     exts = set(cfg.video.extensions)
     sub_exts = set(cfg.subtitle.extensions)
-    all_files = source_storage.walk_files("/")
+    all_files = source_storage.walk_files("")
     out: list[SourceFiles] = []
     by_dir: dict[str, list[tuple[str, str, int | None]]] = {}
 
     for rel_path, size in all_files:
-        if rel_path == "/low_imdb" or rel_path.startswith("/low_imdb/"):
+        if rel_path == "low_imdb" or rel_path.startswith("low_imdb/"):
             continue
         p = PurePosixPath(rel_path)
         if p.suffix.lower() not in exts:
@@ -30,7 +30,7 @@ def scan_once(cfg: AppConfig, source_storage: StorageMcp) -> ScanResult:
             continue
         dir_path = str(p.parent)
         if dir_path == ".":
-            dir_path = "/"
+            dir_path = ""
         if dir_path not in by_dir:
             by_dir[dir_path] = source_storage.list_dir(dir_path)
         entries = by_dir[dir_path]
