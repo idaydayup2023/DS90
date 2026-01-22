@@ -16,6 +16,8 @@
 - 新增迁移后清理智能体：大模型判定残留目录/残留文件是否可安全删除（不确定不清理，`torrent.files` 永不清理）
 - 新增 `killcron.sh`：根据锁文件 PID 递归中断 cron 任务进程树
 - 新增 IMDb 查询兜底链路：支持从 `.nfo/.txt/.url` 提取 `tt` 号并直查；当 imdbpy 无结果时回退到 IMDb suggestion + 页面 `ld+json` 抽取评分
+- 新增 LLM IMDb 知识增强：优先询问 LLM 获取影片评分/ID/票数，LLM 不知晓时才回退到 IMDb 接口查询（解决老片/冷门片查不到评分被误判问题）
+- 新增 PGS OCR 失败现场保护：发生异常（如 utf8 解码错误）时保留 `.sup` 与错误日志，便于排查
 
 ### Changed
 
@@ -25,6 +27,7 @@
 - 迁移冲突策略增强：当目标已存在 `.ai.srt` 且非 overwrite 时，源 `.ai.srt` 会被清理以避免残留
 - IMDb 低分归集判定更保守：仅在 IMDb 查询成功时才按“无评分/低分”归集到 `low_imdb`，查询失败/未命中默认 keep
 - `srt_translate` 跳过已生成字幕：当远端已存在 `.ai.srt` 时不再重复翻译（FTP exists 对大小写不敏感）
+- PGS OCR 策略优化：7 天内失败过（`PGS_OCR_FAILED`）则不再重试 OCR，直接回落 ASR
 
 ### Fixed
 
@@ -34,6 +37,7 @@
 - 修复 PGS OCR：对外部工具输出进行容错解码（避免 `UnicodeDecodeError` 影响 OCR 任务）
 - 修复：PGS OCR 失败时自动回落到 ASR，避免单片卡住主流程
 - 修复目录路径拼接不一致导致的 `/Downloads/Downloads` 嵌套与清理误判
+- 修复 IMDb 查询标题污染：查询前归一化标题（去除年份与 `REMASTERED/UNRATED` 等标签），避免因标题太长导致查询未命中
 
 ## [0.1.0] - 2026-01-18
 
