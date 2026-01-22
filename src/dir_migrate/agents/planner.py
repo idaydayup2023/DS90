@@ -53,6 +53,25 @@ def _extract_tt_from_sidecars(source_storage: StorageMcp, video_path: str) -> st
     return None
 
 
+def _normalize_imdb_query_title(title: str | None, year: int | None) -> str | None:
+    if not title:
+        return None
+    t = str(title).strip()
+    if not t:
+        return None
+    if year and isinstance(year, int):
+        t = re.sub(rf"(?<!\d){year}(?!\d)", " ", t)
+    t = re.sub(r"\b(19|20)\d{2}\b", " ", t)
+    t = re.sub(
+        r"\b(remastered|unrated|extended|director'?s\s+cut|dc|final\s+cut|ultimate\s+edition|special\s+edition|repack|proper|limited|internal)\b",
+        " ",
+        t,
+        flags=re.IGNORECASE,
+    )
+    t = re.sub(r"\s+", " ", t).strip()
+    return t or None
+
+
 def _dotify(text: str) -> str:
     t = (text or "").strip()
     if not t:
@@ -119,7 +138,10 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
                 imdb_title, imdb_dbg = imdb.lookup_by_id_debug(tt)
                 log.info("imdb tt_source=sidecar tt=%s video=%s", tt, item.video_path)
             else:
-                imdb_title, imdb_dbg = imdb.lookup_debug(kind="movie", title=fields.title, year=fields.year)
+                qtitle = _normalize_imdb_query_title(fields.title, fields.year)
+                if qtitle and fields.title and qtitle.strip() != str(fields.title).strip():
+                    log.info("imdb title normalized from=%s to=%s video=%s", fields.title, qtitle, item.video_path)
+                imdb_title, imdb_dbg = imdb.lookup_debug(kind="movie", title=qtitle or fields.title, year=fields.year)
             imdb_id = getattr(imdb_title, "imdb_id", None) if imdb_title is not None else None
             imdb_rating = getattr(imdb_title, "rating", None) if imdb_title is not None else None
             imdb_votes = getattr(imdb_title, "votes", None) if imdb_title is not None else None
