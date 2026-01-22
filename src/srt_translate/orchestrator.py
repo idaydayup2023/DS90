@@ -548,6 +548,17 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                 continue
 
             if pgs_ocr_pool and pgs_ocr:
+                prev = store.get_task(video_id)
+                if (
+                    prev is not None
+                    and prev.status == "PGS_OCR_FAILED"
+                    and (not force)
+                    and (cfg.whisper.enabled)
+                    and (int(time.time()) - int(prev.updated_at) <= 7 * 86400)
+                ):
+                    log.info("pgs ocr skipped due to previous failure video=%s", v.remote_path)
+                    _schedule_asr(video_id, v.remote_path)
+                    continue
                 try:
                     tracks = media.probe_subtitles(local_video)
                 except Exception:
