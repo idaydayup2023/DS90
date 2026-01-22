@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import dataclasses
+import json
 import logging
 import posixpath
 import re
@@ -146,6 +148,23 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
             imdb_rating = getattr(imdb_title, "rating", None) if imdb_title is not None else None
             imdb_votes = getattr(imdb_title, "votes", None) if imdb_title is not None else None
             imdb_franchise = getattr(imdb_title, "franchise_root", None) if imdb_title is not None else None
+
+            if imdb_rating is None and fields.year and fields.year <= 2023:
+                log.info(
+                    "imdb rating missing for older title, querying llm knowledge video=%s title=%s year=%s",
+                    item.video_path,
+                    fields.title,
+                    fields.year,
+                )
+                know = llm.query_imdb(fields.title or p.name, fields.year)
+                if know.imdb_rating is not None:
+                    log.info("llm knowledge provided rating=%s for %s", know.imdb_rating, fields.title)
+                    imdb_rating = know.imdb_rating
+                try:
+                    log.info("llm knowledge result: %s", json.dumps(dataclasses.asdict(know), default=str))
+                except Exception:
+                    pass
+
             force_keep = False
             llm_franchise: str | None = None
             if dest_storage is not None:
@@ -161,44 +180,7 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
                     if _franchise_present_in_dest(dest_storage, cfg, c):
                         force_keep = True
                         break
-            if imdb_dbg.status not in ("ok", "cached"):
-                log.info(
-                    "imdb status=%s decision=keep reason=%s video=%s title=%s year=%s error=%s candidates=%s",
-                    imdb_dbg.status,
-                    "imdb_error" if imdb_dbg.status == "error" else "imdb_not_found",
-                    item.video_path,
-                    fields.title,
-                    fields.year,
-                    imdb_dbg.error,
-                    ";".join(f"{c.get('title')}({c.get('year')})[{c.get('kind')}]" for c in imdb_dbg.candidates[:5]),
-                )
-            elif imdb_rating is None:
-                if (not force_keep) and cfg.imdb.skip_unrated:
-                    log.info(
-                        "imdb status=%s decision=low_imdb reason=unrated video=%s title=%s year=%s imdb_id=%s rating=%s votes=%s imdb_franchise=%s llm_franchise=%s force_keep=%s",
-                        imdb_dbg.status,
-                        item.video_path,
-                        fields.title,
-                        fields.year,
-                        imdb_id,
-                        imdb_rating,
-                        imdb_votes,
-                        imdb_franchise,
-                        llm_franchise,
-                        force_keep,
-                    )
-                    dest_dir = "/Downloads/low_imdb"
-                    dest_video_path = posixpath.join(dest_dir, p.name)
-                    subtitle_moves = tuple((s, posixpath.join(dest_dir, PurePosixPath(s).name)) for s in item.subtitle_paths)
-                    return MovePlan(
-                        source=item,
-                        normalized_basename=p.stem,
-                        dest_dir=dest_dir,
-                        dest_video_path=dest_video_path,
-                        subtitle_moves=subtitle_moves,
-                        skip_reason=None,
-                    )
-            elif imdb_rating is not None:
+            if imdb_rating is not None:
                 votes_ok = cfg.imdb.min_votes is None or (imdb_votes or 0) >= cfg.imdb.min_votes
                 if (not force_keep) and votes_ok and cfg.imdb.min_rating is not None and imdb_rating < cfg.imdb.min_rating:
                     log.info(
@@ -238,6 +220,43 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
                     llm_franchise,
                     force_keep,
                 )
+            elif imdb_dbg.status not in ("ok", "cached"):
+                log.info(
+                    "imdb status=%s decision=keep reason=%s video=%s title=%s year=%s error=%s candidates=%s",
+                    imdb_dbg.status,
+                    "imdb_error" if imdb_dbg.status == "error" else "imdb_not_found",
+                    item.video_path,
+                    fields.title,
+                    fields.year,
+                    imdb_dbg.error,
+                    ";".join(f"{c.get('title')}({c.get('year')})[{c.get('kind')}]" for c in imdb_dbg.candidates[:5]),
+                )
+            elif imdb_rating is None:
+                if (not force_keep) and cfg.imdb.skip_unrated:
+                    log.info(
+                        "imdb status=%s decision=low_imdb reason=unrated video=%s title=%s year=%s imdb_id=%s rating=%s votes=%s imdb_franchise=%s llm_franchise=%s force_keep=%s",
+                        imdb_dbg.status,
+                        item.video_path,
+                        fields.title,
+                        fields.year,
+                        imdb_id,
+                        imdb_rating,
+                        imdb_votes,
+                        imdb_franchise,
+                        llm_franchise,
+                        force_keep,
+                    )
+                    dest_dir = "/Downloads/low_imdb"
+                    dest_video_path = posixpath.join(dest_dir, p.name)
+                    subtitle_moves = tuple((s, posixpath.join(dest_dir, PurePosixPath(s).name)) for s in item.subtitle_paths)
+                    return MovePlan(
+                        source=item,
+                        normalized_basename=p.stem,
+                        dest_dir=dest_dir,
+                        dest_video_path=dest_video_path,
+                        subtitle_moves=subtitle_moves,
+                        skip_reason=None,
+                    )
     normalized = build_normalized_basename(fields, p.stem)
     dest_dir = dest_dir_for(cfg.rules, fields, normalized)
     dest_video_path = posixpath.join(dest_dir, normalized + p.suffix)

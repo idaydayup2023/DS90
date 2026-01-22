@@ -29,6 +29,21 @@ class LlmFields:
 
 
 @dataclass(frozen=True)
+class ImdbRelatedMovie:
+    title: str
+    year: int | None
+    imdb_rating: float | None
+
+
+@dataclass(frozen=True)
+class ImdbKnowledge:
+    title: str | None
+    year: int | None
+    imdb_rating: float | None
+    related_movies: tuple[ImdbRelatedMovie, ...]
+
+
+@dataclass(frozen=True)
 class MovePlan:
     source: SourceFiles
     normalized_basename: str

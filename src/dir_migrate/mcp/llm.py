@@ -8,7 +8,7 @@ from typing import Any
 from srt_translate.mcp.ollama import OllamaMcp
 
 from ..config import RulesConfig
-from ..domain import LlmFields
+from ..domain import ImdbKnowledge, ImdbRelatedMovie, LlmFields
 
 
 log = logging.getLogger("dir_migrate.mcp.llm")
@@ -110,6 +110,32 @@ def _prompt(filename: str) -> str:
     )
 
 
+def _prompt_imdb_knowledge(title: str, year: int | None) -> str:
+    year_str = f" {year}" if year else ""
+    return (
+        f'Provide IMDb information for the movie/TV show: "{title}{year_str}".\n'
+        "If it is part of a franchise/collection, list related movies/shows.\n"
+        "Output a SINGLE JSON object.\n"
+        "Rules:\n"
+        "1) Output JSON only. No explanations.\n"
+        "2) Use null if unknown.\n"
+        "3) imdb_rating should be a float (e.g. 6.8).\n\n"
+        "OUTPUT JSON SCHEMA:\n"
+        "{\n"
+        '  "title": string,\n'
+        '  "year": number,\n'
+        '  "imdb_rating": number|null,\n'
+        '  "related_movies": [\n'
+        '    {\n'
+        '      "title": string,\n'
+        '      "year": number,\n'
+        '      "imdb_rating": number|null\n'
+        '    }\n'
+        '  ]\n'
+        "}\n"
+    )
+
+
 def _apply_franchise_rules(rules: RulesConfig, fields: LlmFields) -> LlmFields:
     series = fields.series or ""
     franchise_root = fields.franchise_root
@@ -202,3 +228,31 @@ class LlmMcp:
                 confidence=None,
             ),
         )
+
+    def query_imdb(self, title: str, year: int | None) -> ImdbKnowledge:
+        for _attempt in range(self._max_retries + 1):
+            try:
+                prompt = _prompt_imdb_knowledge(title, year)
+                resp = self._ollama.generate(model=self._model, prompt=prompt, temperature=self._temperature).text
+                obj = _extract_json(resp)
+                related_raw = obj.get("related_movies")
+                related: list[ImdbRelatedMovie] = []
+                if isinstance(related_raw, list):
+                    for r in related_raw:
+                        if isinstance(r, dict):
+                            related.append(
+                                ImdbRelatedMovie(
+                                    title=str(r.get("title") or "").strip(),
+                                    year=_as_int(r.get("year")),
+                                    imdb_rating=_as_float(r.get("imdb_rating")),
+                                )
+                            )
+                return ImdbKnowledge(
+                    title=_as_str(obj.get("title")),
+                    year=_as_int(obj.get("year")),
+                    imdb_rating=_as_float(obj.get("imdb_rating")),
+                    related_movies=tuple(related),
+                )
+            except Exception:
+                continue
+        return ImdbKnowledge(title=None, year=None, imdb_rating=None, related_movies=())
