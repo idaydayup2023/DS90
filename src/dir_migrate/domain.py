@@ -39,7 +39,9 @@ class ImdbRelatedMovie:
 class ImdbKnowledge:
     title: str | None
     year: int | None
+    imdb_id: str | None
     imdb_rating: float | None
+    imdb_votes: int | None
     related_movies: tuple[ImdbRelatedMovie, ...]
 
 

@@ -11,7 +11,7 @@ from pathlib import PurePosixPath
 from ..config import AppConfig
 from ..domain import MovePlan, SourceFiles
 from ..mcp.franchise_judge import FranchiseJudgeMcp
-from ..mcp.imdb import ImdbMcp
+from ..mcp.imdb import ImdbMcp, ImdbLookupDebug
 from ..mcp.llm import LlmMcp
 from ..mcp.storage import StorageMcp
 from ..naming import build_normalized_basename, subtitle_suffix
@@ -133,37 +133,45 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
     if cfg.imdb.enabled:
         imdb = ImdbMcp(cache_dir=cfg.paths.local_cache_dir, auto_install=cfg.imdb.auto_install, ttl_days=cfg.imdb.ttl_days)
         if fields.kind == "movie":
-            tt = None
-            if source_storage is not None:
-                tt = _extract_tt_from_sidecars(source_storage, item.video_path)
-            if tt:
-                imdb_title, imdb_dbg = imdb.lookup_by_id_debug(tt)
-                log.info("imdb tt_source=sidecar tt=%s video=%s", tt, item.video_path)
-            else:
-                qtitle = _normalize_imdb_query_title(fields.title, fields.year)
-                if qtitle and fields.title and qtitle.strip() != str(fields.title).strip():
-                    log.info("imdb title normalized from=%s to=%s video=%s", fields.title, qtitle, item.video_path)
-                imdb_title, imdb_dbg = imdb.lookup_debug(kind="movie", title=qtitle or fields.title, year=fields.year)
-            imdb_id = getattr(imdb_title, "imdb_id", None) if imdb_title is not None else None
-            imdb_rating = getattr(imdb_title, "rating", None) if imdb_title is not None else None
-            imdb_votes = getattr(imdb_title, "votes", None) if imdb_title is not None else None
-            imdb_franchise = getattr(imdb_title, "franchise_root", None) if imdb_title is not None else None
+            imdb_id = None
+            imdb_rating = None
+            imdb_votes = None
+            imdb_franchise = None
+            imdb_title = None
+            imdb_dbg = None
 
-            if imdb_rating is None and fields.year and fields.year <= 2023:
-                log.info(
-                    "imdb rating missing for older title, querying llm knowledge video=%s title=%s year=%s",
-                    item.video_path,
-                    fields.title,
-                    fields.year,
-                )
-                know = llm.query_imdb(fields.title or p.name, fields.year)
-                if know.imdb_rating is not None:
-                    log.info("llm knowledge provided rating=%s for %s", know.imdb_rating, fields.title)
-                    imdb_rating = know.imdb_rating
+            # 1. Try LLM first (Preferred)
+            know = llm.query_imdb(fields.title or p.name, fields.year)
+            if know.imdb_rating is not None:
+                log.info("using llm provided rating=%s for %s", know.imdb_rating, fields.title)
+                imdb_rating = know.imdb_rating
+                imdb_votes = know.imdb_votes
+                imdb_id = know.imdb_id
+                # Fake a debug info for logging
+                imdb_dbg = ImdbLookupDebug(status="ok_llm", error=None, candidates=())
                 try:
                     log.info("llm knowledge result: %s", json.dumps(dataclasses.asdict(know), default=str))
                 except Exception:
                     pass
+
+            # 2. Fallback to standard IMDb lookup if LLM failed
+            if imdb_rating is None:
+                tt = None
+                if source_storage is not None:
+                    tt = _extract_tt_from_sidecars(source_storage, item.video_path)
+                if tt:
+                    imdb_title, imdb_dbg = imdb.lookup_by_id_debug(tt)
+                    log.info("imdb tt_source=sidecar tt=%s video=%s", tt, item.video_path)
+                else:
+                    qtitle = _normalize_imdb_query_title(fields.title, fields.year)
+                    if qtitle and fields.title and qtitle.strip() != str(fields.title).strip():
+                        log.info("imdb title normalized from=%s to=%s video=%s", fields.title, qtitle, item.video_path)
+                    imdb_title, imdb_dbg = imdb.lookup_debug(kind="movie", title=qtitle or fields.title, year=fields.year)
+                
+                imdb_id = getattr(imdb_title, "imdb_id", None) if imdb_title is not None else None
+                imdb_rating = getattr(imdb_title, "rating", None) if imdb_title is not None else None
+                imdb_votes = getattr(imdb_title, "votes", None) if imdb_title is not None else None
+                imdb_franchise = getattr(imdb_title, "franchise_root", None) if imdb_title is not None else None
 
             force_keep = False
             llm_franchise: str | None = None

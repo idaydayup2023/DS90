@@ -20,7 +20,7 @@ from dir_migrate.config import (
     SubtitleConfig,
     VideoConfig,
 )
-from dir_migrate.domain import LlmFields, SourceFiles
+from dir_migrate.domain import ImdbKnowledge, LlmFields, SourceFiles
 from dir_migrate.mcp.imdb import ImdbTitle
 from dir_migrate.mcp.storage import LocalMcp
 
@@ -31,6 +31,10 @@ class _FakeLlm:
 
     def infer(self, _filename: str, _rules: RulesConfig) -> LlmFields:
         return self._fields
+    
+    def query_imdb(self, title: str, year: int | None) -> ImdbKnowledge:
+        # Default mock: no knowledge
+        return ImdbKnowledge(title=None, year=None, imdb_id=None, imdb_rating=None, imdb_votes=None, related_movies=())
 
     @property
     def ollama(self):

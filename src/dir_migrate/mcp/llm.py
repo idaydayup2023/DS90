@@ -119,12 +119,16 @@ def _prompt_imdb_knowledge(title: str, year: int | None) -> str:
         "Rules:\n"
         "1) Output JSON only. No explanations.\n"
         "2) Use null if unknown.\n"
-        "3) imdb_rating should be a float (e.g. 6.8).\n\n"
+        "3) imdb_rating should be a float (e.g. 6.8).\n"
+        "4) imdb_votes should be an integer (approximate number of votes).\n"
+        "5) imdb_id should be the tt-id (e.g. tt0120737).\n\n"
         "OUTPUT JSON SCHEMA:\n"
         "{\n"
         '  "title": string,\n'
         '  "year": number,\n'
+        '  "imdb_id": string|null,\n'
         '  "imdb_rating": number|null,\n'
+        '  "imdb_votes": number|null,\n'
         '  "related_movies": [\n'
         '    {\n'
         '      "title": string,\n'
@@ -250,9 +254,11 @@ class LlmMcp:
                 return ImdbKnowledge(
                     title=_as_str(obj.get("title")),
                     year=_as_int(obj.get("year")),
+                    imdb_id=_as_str(obj.get("imdb_id")),
                     imdb_rating=_as_float(obj.get("imdb_rating")),
+                    imdb_votes=_as_int(obj.get("imdb_votes")),
                     related_movies=tuple(related),
                 )
             except Exception:
                 continue
-        return ImdbKnowledge(title=None, year=None, imdb_rating=None, related_movies=())
+        return ImdbKnowledge(title=None, year=None, imdb_id=None, imdb_rating=None, imdb_votes=None, related_movies=())

@@ -34,36 +34,51 @@ class TestPlannerLlmFallback(unittest.TestCase):
         )
 
     @patch("src.dir_migrate.agents.planner.ImdbMcp")
-    def test_llm_fallback_used(self, MockImdbMcp):
-        # Mock IMDb returning NO rating (unrated)
-        mock_imdb = MockImdbMcp.return_value
-        mock_imdb.lookup_debug.return_value = (None, ImdbLookupDebug(status="not_found", error=None, candidates=()))
-        mock_imdb.lookup_by_id_debug.return_value = (None, ImdbLookupDebug(status="not_found", error=None, candidates=()))
-
-        # Mock LLM knowledge providing rating
+    def test_llm_priority(self, MockImdbMcp):
+        # Mock LLM providing rating (Priority)
         self.llm.query_imdb.return_value = ImdbKnowledge(
-            title="Joe Dirt 2", year=2015, imdb_rating=5.7, related_movies=()
+            title="Joe Dirt 2", year=2015, imdb_id="tt123", imdb_rating=5.7, imdb_votes=1000, related_movies=()
         )
+        
+        # Mock IMDb returning DIFFERENT rating (e.g. 7.0) - should NOT be called/used
+        mock_imdb = MockImdbMcp.return_value
+        mock_imdb.lookup_debug.return_value = (None, ImdbLookupDebug(status="ok", error=None, candidates=()))
 
         plan = plan_one(self.cfg, self.llm, self.item)
 
         # Verify LLM query called
         self.llm.query_imdb.assert_called_with("Joe Dirt 2", 2015)
         
-        # Verify decision: rating 5.7 < 6.0 => low_imdb
-        # If fallback worked, rating=5.7, min_rating=6.0 => should go to low_imdb
+        # Verify IMDb lookup NOT called (short-circuit)
+        mock_imdb.lookup_debug.assert_not_called()
+        mock_imdb.lookup_by_id_debug.assert_not_called()
+        
+        # Verify decision: rating 5.7 (from LLM) < 6.0 => low_imdb
         self.assertEqual(plan.dest_dir, "/Downloads/low_imdb")
-        
+
     @patch("src.dir_migrate.agents.planner.ImdbMcp")
-    def test_llm_fallback_skipped_for_new_movies(self, MockImdbMcp):
-        # Change year to 2025
-        self.llm.infer.return_value = dataclasses.replace(self.llm.infer.return_value, year=2025)
-        self.item = dataclasses.replace(self.item, video_path="/Downloads/New.Movie.2025.mkv")
+    def test_llm_fallback_to_imdb(self, MockImdbMcp):
+        # Mock LLM failing (no rating)
+        self.llm.query_imdb.return_value = ImdbKnowledge(
+            title=None, year=None, imdb_id=None, imdb_rating=None, imdb_votes=None, related_movies=()
+        )
         
+        # Mock IMDb returning valid rating (7.0)
+        from src.dir_migrate.mcp.imdb import ImdbTitle
         mock_imdb = MockImdbMcp.return_value
-        mock_imdb.lookup_debug.return_value = (None, ImdbLookupDebug(status="not_found", error=None, candidates=()))
+        fake_title = ImdbTitle(
+            imdb_id="tt123", kind="movie", title="Joe Dirt 2", year=2015, rating=7.0, votes=2000,
+            canonical_title="Joe Dirt 2", canonical_year=2015, series_title=None, franchise_root=None
+        )
+        mock_imdb.lookup_debug.return_value = (fake_title, ImdbLookupDebug(status="ok", error=None, candidates=()))
 
         plan = plan_one(self.cfg, self.llm, self.item)
 
-        # Verify LLM query NOT called (too new)
-        self.llm.query_imdb.assert_not_called()
+        # Verify LLM query called
+        self.llm.query_imdb.assert_called_with("Joe Dirt 2", 2015)
+        
+        # Verify IMDb lookup CALLED (fallback)
+        mock_imdb.lookup_debug.assert_called()
+        
+        # Verify decision: rating 7.0 (from IMDb) >= 6.0 => keep (Movies dir)
+        self.assertTrue(plan.dest_dir.startswith("/Movies/"))
