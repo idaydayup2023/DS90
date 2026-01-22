@@ -80,24 +80,29 @@ class PgsOcrMcp:
         out_srt_path.parent.mkdir(parents=True, exist_ok=True)
         normalized_name = _normalize_sup_filename(sup_path.name)
         tmp_name = _safe_tmp_sup_name(normalized_name)
-        if self._keep_temp_files:
-            work_dir = out_srt_path.parent / f".pgs_ocr_{sup_path.stem}"
-            work_dir.mkdir(parents=True, exist_ok=True)
-            tmp_sup = work_dir / tmp_name
-            tmp_sup.write_bytes(sup_path.read_bytes())
-            srts = self._run_pgsrip(work_dir=work_dir, sup_path=tmp_sup)
-            out_srt_path.write_bytes(srts[0].read_bytes())
-        else:
-            with tempfile.TemporaryDirectory(prefix="srt_translate_pgs_ocr_") as td:
-                work_dir = Path(td)
+        try:
+            if self._keep_temp_files:
+                work_dir = out_srt_path.parent / f".pgs_ocr_{sup_path.stem}"
+                work_dir.mkdir(parents=True, exist_ok=True)
                 tmp_sup = work_dir / tmp_name
                 tmp_sup.write_bytes(sup_path.read_bytes())
                 srts = self._run_pgsrip(work_dir=work_dir, sup_path=tmp_sup)
                 out_srt_path.write_bytes(srts[0].read_bytes())
+            else:
+                with tempfile.TemporaryDirectory(prefix="srt_translate_pgs_ocr_") as td:
+                    work_dir = Path(td)
+                    tmp_sup = work_dir / tmp_name
+                    tmp_sup.write_bytes(sup_path.read_bytes())
+                    srts = self._run_pgsrip(work_dir=work_dir, sup_path=tmp_sup)
+                    out_srt_path.write_bytes(srts[0].read_bytes())
+        except Exception as e:
+            artifacts = self._persist_failure_artifacts(out_srt_path=out_srt_path, sup_path=sup_path, extra_text=str(e))
+            raise RuntimeError(f"{e}. artifacts={artifacts}") from e
 
         ok, reason = validate_srt_diversity(out_srt_path.read_text(encoding="utf-8", errors="replace"))
         if not ok:
-            raise RuntimeError(f"pgs ocr produced low-quality srt: {reason}")
+            artifacts = self._persist_failure_artifacts(out_srt_path=out_srt_path, sup_path=sup_path, extra_text=reason)
+            raise RuntimeError(f"pgs ocr produced low-quality srt: {reason}. artifacts={artifacts}")
         return out_srt_path
 
     def _run_pgsrip(self, work_dir: Path, sup_path: Path) -> list[Path]:
@@ -170,7 +175,7 @@ class PgsOcrMcp:
         if sup_path.stat().st_size <= 0:
             raise RuntimeError("ffmpeg extracted sup is empty")
 
-    def _persist_failure_artifacts(self, out_srt_path: Path, sup_path: Path) -> Path:
+    def _persist_failure_artifacts(self, out_srt_path: Path, sup_path: Path, extra_text: str | None = None) -> Path:
         base = self._cache_dir / "work" / "pgs_ocr_failures"
         base.mkdir(parents=True, exist_ok=True)
         ts = int(time.time())
@@ -180,4 +185,9 @@ class PgsOcrMcp:
             (d / sup_path.name).write_bytes(sup_path.read_bytes())
         except Exception:
             pass
+        if extra_text:
+            try:
+                (d / "error.txt").write_text(str(extra_text), encoding="utf-8", errors="replace")
+            except Exception:
+                pass
         return d
