@@ -26,6 +26,7 @@
 
 - 需求与规范： [srt_translate.PRD](srt_translate.PRD)
 - 目录迁移工具 PRD： [dir_migrate.PRD](dir_migrate.PRD)
+- 架构设计文档：[ARCHITECTURE.md](ARCHITECTURE.md)
 - 对话记录（过程回顾）：[srt_translate.conversation.md](srt_translate.conversation.md)
 - Trae Skills（架构/提示词/MCP 契约）：
   - [.trae/skills/srt-translate-architecture/SKILL.md](.trae/skills/srt-translate-architecture/SKILL.md)
