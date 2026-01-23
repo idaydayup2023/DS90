@@ -24,6 +24,84 @@ _franchise_cache_lock = threading.Lock()
 _franchise_present_cache: dict[str, bool] = {}
 
 
+def _extract_imdb_from_json(source_storage: StorageMcp, video_path: str) -> tuple[str | None, float | None, int | None]:
+    """Extract imdb_id, rating, votes from a sidecar .json file if present."""
+    try:
+        d = posixpath.dirname(video_path.rstrip("/")) or ""
+        basename = posixpath.splitext(posixpath.basename(video_path))[0]
+        json_path = posixpath.join(d, f"{basename}.json")
+        
+        # Check if file exists in source storage listing
+        # Since we don't have a direct 'exists' method on StorageMcp, we list dir
+        # or just try to read it. Listing is safer to avoid exceptions if not exists.
+        # But for performance, if we already listed dir in caller, we could reuse it.
+        # Here we just try to read it, assuming StorageMcp.read_text raises if not found.
+        # However, to be safe and consistent with _extract_tt_from_sidecars:
+        try:
+            entries = source_storage.list_dir(d)
+        except Exception:
+            return None, None, None
+            
+        has_json = False
+        for p, t, _sz in entries:
+            if t == "file" and p == json_path:
+                has_json = True
+                break
+        
+        if not has_json:
+            return None, None, None
+
+        text = source_storage.read_text(json_path, max_bytes=1048576) # 1MB limit
+        data = json.loads(text)
+        
+        # Try to find imdb info in common structures
+        # Structure 1: {"imdb": {"id": "tt...", "rating": 6.4, "rating_count": ...}}
+        # Structure 2: {"imdb_id": "tt...", "imdb_rating": 6.4, ...}
+        
+        imdb_id = None
+        rating = None
+        votes = None
+
+        if "imdb" in data and isinstance(data["imdb"], dict):
+            imdb_obj = data["imdb"]
+            imdb_id = imdb_obj.get("id")
+            rating = imdb_obj.get("rating")
+            votes = imdb_obj.get("rating_count")
+        
+        # Fallback/Override if top level keys exist
+        if not imdb_id:
+            imdb_id = data.get("imdb_id") or data.get("imdb") # sometimes "imdb": "tt..."
+            if isinstance(imdb_id, dict): imdb_id = None # safety
+        if rating is None:
+            rating = data.get("imdb_rating")
+        if votes is None:
+            votes = data.get("imdb_votes") or data.get("imdb_rating_count")
+
+        # Normalize
+        if isinstance(imdb_id, str) and not imdb_id.startswith("tt"):
+            # Check if it looks like an ID
+            if re.match(r"^\d{7,8}$", imdb_id):
+                imdb_id = f"tt{imdb_id}"
+            else:
+                imdb_id = None
+        
+        if rating is not None:
+            try:
+                rating = float(rating)
+            except (ValueError, TypeError):
+                rating = None
+        
+        if votes is not None:
+            try:
+                votes = int(votes)
+            except (ValueError, TypeError):
+                votes = None
+                
+        return imdb_id, rating, votes
+    except Exception:
+        return None, None, None
+
+
 def _extract_tt_from_text(text: str) -> str | None:
     if not text:
         return None
@@ -140,21 +218,32 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
             imdb_title = None
             imdb_dbg = None
 
-            # 1. Try LLM first (Preferred)
-            know = llm.query_imdb(fields.title or p.name, fields.year)
-            if know.imdb_rating is not None:
-                log.info("using llm provided rating=%s for %s", know.imdb_rating, fields.title)
-                imdb_rating = know.imdb_rating
-                imdb_votes = know.imdb_votes
-                imdb_id = know.imdb_id
-                # Fake a debug info for logging
-                imdb_dbg = ImdbLookupDebug(status="ok_llm", error=None, candidates=())
-                try:
-                    log.info("llm knowledge result: %s", json.dumps(dataclasses.asdict(know), default=str))
-                except Exception:
-                    pass
+            # 0. Try local json sidecar first (Highest Priority)
+            if source_storage:
+                jid, jrate, jvotes = _extract_imdb_from_json(source_storage, item.video_path)
+                if jid or jrate is not None:
+                    log.info("using sidecar json imdb info id=%s rating=%s votes=%s video=%s", jid, jrate, jvotes, item.video_path)
+                    imdb_id = jid
+                    imdb_rating = jrate
+                    imdb_votes = jvotes
+                    imdb_dbg = ImdbLookupDebug(status="ok_json", error=None, candidates=())
 
-            # 2. Fallback to standard IMDb lookup if LLM failed
+            # 1. Try LLM first (Preferred if no json)
+            if imdb_rating is None:
+                know = llm.query_imdb(fields.title or p.name, fields.year)
+                if know.imdb_rating is not None:
+                    log.info("using llm provided rating=%s for %s", know.imdb_rating, fields.title)
+                    imdb_rating = know.imdb_rating
+                    imdb_votes = know.imdb_votes
+                    imdb_id = know.imdb_id
+                    # Fake a debug info for logging
+                    imdb_dbg = ImdbLookupDebug(status="ok_llm", error=None, candidates=())
+                    try:
+                        log.info("llm knowledge result: %s", json.dumps(dataclasses.asdict(know), default=str))
+                    except Exception:
+                        pass
+
+            # 2. Fallback to standard IMDb lookup if LLM failed and no json
             if imdb_rating is None:
                 tt = None
                 if source_storage is not None:
@@ -274,6 +363,29 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
         suffix = subtitle_suffix(p.stem, sp.stem)
         dest_sub = posixpath.join(dest_dir, normalized + suffix + sp.suffix)
         moves.append((s, dest_sub))
+    
+    # Also migrate related json file if present
+    # We can detect it from item.subtitle_paths? No, that's just subs.
+    # But we can check source_storage for .json file with same stem
+    if source_storage:
+        try:
+            d = posixpath.dirname(item.video_path.rstrip("/")) or ""
+            json_name = f"{p.stem}.json"
+            json_path = posixpath.join(d, json_name)
+            
+            # Re-list or just try? We need to know if it exists to add to moves.
+            # We can't easily re-use existing logic without listing again.
+            # But wait, we can just check if we extracted metadata from it earlier?
+            # Or just check existence now.
+            entries = source_storage.list_dir(d)
+            for path, t, _sz in entries:
+                if t == "file" and path == json_path:
+                    dest_json = posixpath.join(dest_dir, normalized + ".json")
+                    moves.append((json_path, dest_json))
+                    break
+        except Exception:
+            pass
+
     return MovePlan(
         source=item,
         normalized_basename=normalized,
