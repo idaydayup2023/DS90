@@ -57,8 +57,8 @@ class RunSummary:
 
 
 def _locked_translate_and_upload(*args, **kwargs):
-    with _OLLAMA_LOCK:
-        return _translate_and_upload(*args, **kwargs)
+    # Deprecated: locking inside function now
+    return _translate_and_upload(*args, **kwargs)
 
 
 def _locked_generate_summary(*args, **kwargs):
@@ -67,11 +67,7 @@ def _locked_generate_summary(*args, **kwargs):
 
 
 def _locked_migrate_task(*args, **kwargs):
-    # Migration also uses LLM, so we lock it too.
-    # Note: migrate task also does file moves, but usually plan_one (LLM) is the first major step.
-    # We lock the whole task for simplicity and safety.
-    with _OLLAMA_LOCK:
-        return _migrate_task(*args, **kwargs)
+    return _migrate_task(*args, **kwargs)
 
 
 def _local_video_path(cache_dir: Path, video_id: str, remote_path: str) -> Path:
@@ -119,14 +115,18 @@ def _translate_and_upload(
         srt_content = source.local_path.read_text(encoding="utf-8", errors="replace")
         ollama = OllamaMcp(cfg.ollama.base_url, timeout_seconds=cfg.ollama.timeout_seconds)
         model = resolve_ollama_model(ollama, cfg.ollama.model)
-        result = translate_srt_to_bilingual(
-            ollama=ollama,
-            model=model,
-            srt_content=srt_content,
-            batch_size=cfg.translation.batch_size,
-            max_retries=cfg.translation.max_retries,
-            temperature=cfg.ollama.temperature,
-        )
+        
+        # LOCK HERE: Only lock the heavy LLM inference part
+        with _OLLAMA_LOCK:
+            result = translate_srt_to_bilingual(
+                ollama=ollama,
+                model=model,
+                srt_content=srt_content,
+                batch_size=cfg.translation.batch_size,
+                max_retries=cfg.translation.max_retries,
+                temperature=cfg.ollama.temperature,
+            )
+            
         ai_content = to_ai_srt_content(result)
         local_ai.parent.mkdir(parents=True, exist_ok=True)
         local_ai.write_text(ai_content, encoding="utf-8")
@@ -225,7 +225,10 @@ def _migrate_task(
             video_size_bytes=None, # We can pass None if we don't have it handy or query it
         )
         
-        plan = plan_one(migrate_cfg, llm, item, dest_storage, source_storage=source_storage)
+        # LOCK HERE: Only lock the heavy LLM planning part
+        with _OLLAMA_LOCK:
+            plan = plan_one(migrate_cfg, llm, item, dest_storage, source_storage=source_storage)
+            
         log.info("migrate planned video=%s dest=%s", video_remote_path, plan.dest_video_path)
 
         success, result, error = apply_one(migrate_cfg, source_storage, dest_storage, plan)
