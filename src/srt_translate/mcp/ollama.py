@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -36,7 +37,7 @@ class OllamaMcp:
                 out.append(str(name))
         return out
 
-    def generate(self, model: str, prompt: str, temperature: float = 0.2) -> OllamaResponse:
+    def generate(self, model: str, prompt: str, temperature: float = 0.2, system: str | None = None) -> OllamaResponse:
         url = f"{self._base_url}/api/generate"
         body = {
             "model": model,
@@ -44,6 +45,8 @@ class OllamaMcp:
             "stream": False,
             "options": {"temperature": temperature},
         }
+        if system:
+            body["system"] = system
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
         try:
@@ -55,3 +58,42 @@ class OllamaMcp:
         except Exception as e:
             raise RuntimeError(f"ollama request failed: {e}") from e
         return OllamaResponse(text=str(payload.get("response", "")), model=payload.get("model"))
+
+
+def normalize_model_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", name.lower())
+
+
+def suggest_model(preferred: str, available: list[str]) -> str | None:
+    pref_norm = normalize_model_name(preferred)
+    if not available:
+        return None
+    for m in available:
+        if normalize_model_name(m) == pref_norm:
+            return m
+    candidates = [
+        preferred,
+        preferred + ":latest" if ":" not in preferred else preferred,
+        preferred.replace("tranlate", "translate"),
+        preferred.replace("tranlategemma", "translategemma"),
+        preferred.replace("translate-gemma", "translategemma"),
+        preferred.replace("translategemma", "translategemma:latest"),
+    ]
+    candidates = [c for c in candidates if c and c != preferred]
+    for c in candidates:
+        c_norm = normalize_model_name(c)
+        for m in available:
+            if normalize_model_name(m) == c_norm:
+                return m
+    for m in available:
+        if "translategemma" in normalize_model_name(m):
+            return m
+    return None
+
+
+def resolve_ollama_model(ollama: OllamaMcp, preferred: str) -> str:
+    try:
+        available = ollama.tags()
+    except Exception:
+        return preferred
+    return suggest_model(preferred, available) or preferred

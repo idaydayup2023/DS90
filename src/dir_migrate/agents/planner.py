@@ -3,10 +3,11 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import posixpath
 import re
 import threading
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from ..config import AppConfig
 from ..domain import MovePlan, SourceFiles
@@ -14,6 +15,7 @@ from ..mcp.franchise_judge import FranchiseJudgeMcp
 from ..mcp.imdb import ImdbMcp, ImdbLookupDebug
 from ..mcp.llm import LlmMcp
 from ..mcp.storage import StorageMcp
+from ..mcp.media import MediaMcp
 from ..naming import build_normalized_basename, subtitle_suffix
 from ..planning import dest_dir_for
 
@@ -208,6 +210,50 @@ def _franchise_present_in_dest(dest_storage: StorageMcp, cfg: AppConfig, franchi
 def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: StorageMcp | None = None, source_storage: StorageMcp | None = None) -> MovePlan:
     p = PurePosixPath(item.video_path)
     fields = llm.infer(p.name, cfg.rules)
+
+    local_probe_path: str | None = None
+    if cfg.source.kind == "local" and cfg.source.local_root:
+        local_probe_path = os.path.join(cfg.source.local_root, item.video_path.lstrip("/"))
+    
+    if local_probe_path:
+        try:
+            # We need to import MediaMcp
+            media = MediaMcp() # assumes ffprobe in path
+            # We need Path object
+            info = media.probe_media_info(Path(local_probe_path))
+            
+            # Update fields if missing
+            if info.video:
+                if not fields.resolution and info.video.resolution_label:
+                    log.info("enriched resolution=%s for %s", info.video.resolution_label, item.video_path)
+                    fields = dataclasses.replace(fields, resolution=info.video.resolution_label)
+                if not fields.codec and info.video.codec:
+                    c = info.video.codec.lower()
+                    if c in ("h264", "avc1"):
+                        c = "x264"
+                    elif c in ("hevc", "h265", "hev1"):
+                        c = "x265"
+                    elif c == "vp9":
+                        c = "vp9"
+                    elif c == "av1":
+                        c = "av1"
+                    log.info("enriched codec=%s for %s", c, item.video_path)
+                    fields = dataclasses.replace(fields, codec=c)
+            
+            if info.audio and not fields.audio:
+                best_audio = next((a for a in info.audio if a.is_default), info.audio[0] if info.audio else None)
+                if best_audio and best_audio.codec:
+                    ac = best_audio.codec.upper()
+                    if best_audio.channels:
+                        ch_map = {1: "1.0", 2: "2.0", 6: "5.1", 8: "7.1"}
+                        ch_str = ch_map.get(best_audio.channels, f"{best_audio.channels}ch")
+                        ac = f"{ac}.{ch_str}"
+                    log.info("enriched audio=%s for %s", ac, item.video_path)
+                    fields = dataclasses.replace(fields, audio=ac)
+
+        except Exception as e:
+            log.warning("failed to probe media info for %s: %s", item.video_path, e)
+
     if cfg.imdb.enabled:
         imdb = ImdbMcp(cache_dir=cfg.paths.local_cache_dir, auto_install=cfg.imdb.auto_install, ttl_days=cfg.imdb.ttl_days)
         if fields.kind == "movie":
@@ -261,6 +307,11 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
                 imdb_rating = getattr(imdb_title, "rating", None) if imdb_title is not None else None
                 imdb_votes = getattr(imdb_title, "votes", None) if imdb_title is not None else None
                 imdb_franchise = getattr(imdb_title, "franchise_root", None) if imdb_title is not None else None
+            
+            # Ensure imdb_dbg is not None before accessing its attributes
+            if imdb_dbg is None:
+                # Should normally not happen if logic above is correct, but for safety
+                imdb_dbg = ImdbLookupDebug(status="unknown", error=None, candidates=())
 
             force_keep = False
             llm_franchise: str | None = None
@@ -364,25 +415,27 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
         dest_sub = posixpath.join(dest_dir, normalized + suffix + sp.suffix)
         moves.append((s, dest_sub))
     
-    # Also migrate related json file if present
+    # Also migrate related json and md files if present
     # We can detect it from item.subtitle_paths? No, that's just subs.
-    # But we can check source_storage for .json file with same stem
+    # But we can check source_storage for .json/.md file with same stem
     if source_storage:
         try:
             d = posixpath.dirname(item.video_path.rstrip("/")) or ""
             json_name = f"{p.stem}.json"
             json_path = posixpath.join(d, json_name)
+            md_name = f"{p.stem}.md"
+            md_path = posixpath.join(d, md_name)
             
-            # Re-list or just try? We need to know if it exists to add to moves.
-            # We can't easily re-use existing logic without listing again.
-            # But wait, we can just check if we extracted metadata from it earlier?
-            # Or just check existence now.
             entries = source_storage.list_dir(d)
             for path, t, _sz in entries:
-                if t == "file" and path == json_path:
+                if t != "file":
+                    continue
+                if path == json_path:
                     dest_json = posixpath.join(dest_dir, normalized + ".json")
                     moves.append((json_path, dest_json))
-                    break
+                elif path == md_path:
+                    dest_md = posixpath.join(dest_dir, normalized + ".md")
+                    moves.append((md_path, dest_md))
         except Exception:
             pass
 

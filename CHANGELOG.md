@@ -31,6 +31,12 @@
 
 ### Fixed
 
+- `srt_translate` 剧情总结：强制 System Prompt 指定输出简体中文，解决偶尔输出英文的问题
+- `dir_migrate` 元数据增强：利用 `ffprobe` 探测本地视频流信息（分辨率/Codec/音频），回填 LLM 缺失的字段
+- `dir_migrate` 命名修复：
+  - 修复文件名中 Codec/Source 重复出现的问题（如 `x265.x265`）
+  - 优化压制组（Group）连接符为 `-`（如 `...-ELiTE`）
+  - 增强 LLM 对 TV 剧集名与压制组的回退推断逻辑，防止字段错位
 - `dir_migrate` CLI 异常处理：非 Ctrl-C 错误返回码 2，避免输出长堆栈影响使用
 - 修复：存在内置字幕时仍触发 ASR（改为优先下载视频并提取内置字幕/PGS OCR）
 - 修复 PGS OCR：规避 pgsrip 对 `eng/en` 语言码规范化导致的文件找不到问题（OCR 前统一临时命名为 `subtitle.<lang>.sup`）

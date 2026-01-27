@@ -14,13 +14,14 @@ from .daemon_executor import DaemonExecutor
 from .logging_util import setup_logging
 from .mcp.ftp import FtpMcp
 from .mcp.media import MediaMcp
-from .mcp.ollama import OllamaMcp
+from .mcp.ollama import OllamaMcp, resolve_ollama_model
 from .mcp.asr import AsrMcp
 from .mcp.pgs_ocr import PgsOcrMcp
 from .store import StateStore, TaskRecord
 from .subtitle_acquisition import SubtitleSource, choose_source_subtitle
 from .subtitle_quality import score_srt_content
 from .translation import to_ai_srt_content, translate_srt_to_bilingual
+from .summary import generate_summary
 
 # dir_migrate imports
 try:
@@ -48,47 +49,6 @@ class RunSummary:
     done: int
     failed: int
     elapsed_seconds: float
-
-
-def _normalize_model_name(name: str) -> str:
-    import re
-
-    return re.sub(r"[^a-z0-9]+", "", name.lower())
-
-
-def _suggest_model(preferred: str, available: list[str]) -> str | None:
-    pref_norm = _normalize_model_name(preferred)
-    if not available:
-        return None
-    for m in available:
-        if _normalize_model_name(m) == pref_norm:
-            return m
-    candidates = [
-        preferred,
-        preferred + ":latest" if ":" not in preferred else preferred,
-        preferred.replace("tranlate", "translate"),
-        preferred.replace("tranlategemma", "translategemma"),
-        preferred.replace("translate-gemma", "translategemma"),
-        preferred.replace("translategemma", "translategemma:latest"),
-    ]
-    candidates = [c for c in candidates if c and c != preferred]
-    for c in candidates:
-        c_norm = _normalize_model_name(c)
-        for m in available:
-            if _normalize_model_name(m) == c_norm:
-                return m
-    for m in available:
-        if "translategemma" in _normalize_model_name(m):
-            return m
-    return None
-
-
-def _resolve_ollama_model(ollama: OllamaMcp, preferred: str) -> str:
-    try:
-        available = ollama.tags()
-    except Exception:
-        return preferred
-    return _suggest_model(preferred, available) or preferred
 
 
 def _local_video_path(cache_dir: Path, video_id: str, remote_path: str) -> Path:
@@ -135,7 +95,7 @@ def _translate_and_upload(
     else:
         srt_content = source.local_path.read_text(encoding="utf-8", errors="replace")
         ollama = OllamaMcp(cfg.ollama.base_url, timeout_seconds=cfg.ollama.timeout_seconds)
-        model = _resolve_ollama_model(ollama, cfg.ollama.model)
+        model = resolve_ollama_model(ollama, cfg.ollama.model)
         result = translate_srt_to_bilingual(
             ollama=ollama,
             model=model,
@@ -306,6 +266,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
 
     now = int(time.time())
     translation_pool = DaemonExecutor(max_workers=max(1, cfg.translation.workers), thread_name_prefix="translate")
+    summary_pool = DaemonExecutor(max_workers=max(1, cfg.translation.workers), thread_name_prefix="summary")
     asr_pool = DaemonExecutor(max_workers=max(1, cfg.whisper.asr_workers), thread_name_prefix="asr")
     pgs_ocr_pool = DaemonExecutor(max_workers=max(1, cfg.pgs_ocr.max_workers), thread_name_prefix="pgs_ocr") if cfg.pgs_ocr.enabled else None
     
@@ -322,6 +283,8 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
         dest_storage = build_storage_mcp(migrate_cfg.dest)
 
     pending: set[Future[object]] = set()
+    pending_ops: dict[str, set[str]] = {}
+    translation_success: set[str] = set()
     meta: dict[Future[object], tuple[str, str, str, str | None]] = {}
     skipped = 0
     done_count = 0
@@ -359,8 +322,34 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
         
         meta[fut] = ("migrate", video_id, remote_path, None)
 
+    def _schedule_summary(video_id: str, remote_path: str, source: SubtitleSource) -> None:
+        log.info("summary queued video=%s", remote_path)
+        if video_id not in pending_ops:
+            pending_ops[video_id] = set()
+        pending_ops[video_id].add("summary")
+        
+        store.upsert_task(
+            TaskRecord(
+                video_id=video_id,
+                video_path=remote_path,
+                status="SUMMARY_QUEUED",
+                payload={"source_kind": source.kind},
+                updated_at=int(time.time()),
+            )
+        )
+        fut: Future[object] = summary_pool.submit(generate_summary, cfg, video_id, remote_path, source, force, dry_run)
+        pending.add(fut)
+        meta[fut] = ("summary", video_id, remote_path, None)
+
     def _schedule_translation(video_id: str, remote_path: str, source: SubtitleSource) -> None:
         log.info("translate queued video=%s source=%s", remote_path, source.kind)
+        if video_id not in pending_ops:
+            pending_ops[video_id] = set()
+        pending_ops[video_id].add("translate")
+
+        # Also schedule summary in parallel
+        _schedule_summary(video_id, remote_path, source)
+
         store.upsert_task(
             TaskRecord(
                 video_id=video_id,
@@ -509,6 +498,10 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                                 continue
                             log.error("task failed video=%s error=%s stage=%s", rpath, e, kind)
                             failed_count += 1
+                            if vid in pending_ops:
+                                pending_ops[vid].discard(kind)
+                            if kind == "summary" and migrate_pool and (vid in translation_success) and (vid not in pending_ops or not pending_ops[vid]):
+                                _schedule_migration(vid, rpath)
                             store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="FAILED", payload={"error": str(e), "stage": kind}, updated_at=int(time.time())))
                             continue
                         if kind in ("asr", "pgs_ocr") and isinstance(res, SubtitleSource):
@@ -516,7 +509,16 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                         elif kind == "translate":
                             done_count += 1
                             store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="DONE", payload={"source_kind": skind}, updated_at=int(time.time())))
-                            if migrate_pool:
+                            if vid in pending_ops:
+                                pending_ops[vid].discard("translate")
+                            translation_success.add(vid)
+                            if migrate_pool and (vid not in pending_ops or not pending_ops[vid]):
+                                _schedule_migration(vid, rpath)
+                        elif kind == "summary":
+                            store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="SUMMARY_DONE", payload={}, updated_at=int(time.time())))
+                            if vid in pending_ops:
+                                pending_ops[vid].discard("summary")
+                            if migrate_pool and (vid in translation_success) and (vid not in pending_ops or not pending_ops[vid]):
                                 _schedule_migration(vid, rpath)
                         elif kind == "migrate":
                             # res is (success, err)
@@ -677,6 +679,10 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                         continue
                     log.error("task failed video=%s error=%s stage=%s", remote_path, e, kind)
                     failed_count += 1
+                    if video_id in pending_ops:
+                        pending_ops[video_id].discard(kind)
+                    if kind == "summary" and migrate_pool and (video_id in translation_success) and (video_id not in pending_ops or not pending_ops[video_id]):
+                        _schedule_migration(video_id, remote_path)
                     store.upsert_task(
                         TaskRecord(
                             video_id=video_id,
@@ -713,7 +719,24 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                             updated_at=int(time.time()),
                         )
                     )
-                    if migrate_pool:
+                    if video_id in pending_ops:
+                        pending_ops[video_id].discard("translate")
+                    translation_success.add(video_id)
+                    if migrate_pool and (video_id not in pending_ops or not pending_ops[video_id]):
+                        _schedule_migration(video_id, remote_path)
+                elif kind == "summary":
+                    store.upsert_task(
+                        TaskRecord(
+                            video_id=video_id,
+                            video_path=remote_path,
+                            status="SUMMARY_DONE",
+                            payload={},
+                            updated_at=int(time.time()),
+                        )
+                    )
+                    if video_id in pending_ops:
+                        pending_ops[video_id].discard("summary")
+                    if migrate_pool and (video_id in translation_success) and (video_id not in pending_ops or not pending_ops[video_id]):
                         _schedule_migration(video_id, remote_path)
                 elif kind == "migrate":
                     # res is (success, err)
