@@ -18,7 +18,7 @@
   "ollama": {
     "base_url": "http://localhost:11434",
     "model": "translategemma:latest",
-    "timeout_seconds": 120,
+    "timeout_seconds": 300,
     "temperature": 0.2
   },
   "whisper": {
@@ -42,7 +42,7 @@
     "keep_temp_files": false
   },
   "translation": {
-    "workers": 2,
+    "workers": 1,
     "batch_size": 20,
     "max_retries": 2
   },
