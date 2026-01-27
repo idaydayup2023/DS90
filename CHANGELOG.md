@@ -21,7 +21,7 @@
 
 ### Changed
 
-- 稳定性优化：在 `orchestrator` 层面引入全局 Ollama 锁，严格串行化所有 heavy LLM 任务（翻译、总结、迁移判定），彻底解决因并发请求导致的 Ollama 服务超时/卡死问题
+- 稳定性优化：修复 `orchestrator` 调度逻辑中的 JSON 序列化错误和资源竞争死锁；移除全局锁，通过细粒度调度（翻译后串行生成总结）解决并发卡死问题；增加任务等待超时监控与日志。
 - 性能优化：降低 `srt_translate` 默认并发数（workers=1）并增加 Ollama 超时时间（300s），避免高负载下请求超时
 - `srt_translate` 剧情总结提示词增强：采用“影视剧深度解说”角色，输出 JSON 元数据、Mermaid 关系图/时间轴及视频脚本素材，提升剧情介绍的专业度与结构化
 - 合并配置：支持用同一个 `config.json` 同时配置 `srt_translate` 与 `dir_migrate`，并复用顶层 `ftp/ollama/video/paths`
@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- `srt_translate` 调度修复：解决因全局锁范围过大导致的 FTP IO 阻塞问题；修复 TaskRecord 序列化异常；增加任务状态的超时监控。
 - `srt_translate` 剧情总结：强制 System Prompt 指定输出简体中文，解决偶尔输出英文的问题
 - `dir_migrate` 元数据增强：利用 `ffprobe` 探测本地视频流信息（分辨率/Codec/音频），回填 LLM 缺失的字段
 - `dir_migrate` 命名修复：

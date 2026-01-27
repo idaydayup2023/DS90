@@ -3,10 +3,11 @@ from __future__ import annotations
 import logging
 import posixpath
 import time
-import threading
 from concurrent.futures import FIRST_COMPLETED, Future, wait
 from pathlib import Path
 from dataclasses import dataclass
+
+from typing import Any
 
 from .config import AppConfig, normalize_extensions
 from .bootstrap import resolve_whisper_command, resolve_whisper_device
@@ -43,8 +44,8 @@ except ImportError:
 
 log = logging.getLogger("srt_translate.orchestrator")
 
-# Global lock for Ollama to prevent concurrent requests overloading the system
-_OLLAMA_LOCK = threading.Lock()
+# Global lock for Ollama removed as per user request
+# _OLLAMA_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -62,8 +63,7 @@ def _locked_translate_and_upload(*args, **kwargs):
 
 
 def _locked_generate_summary(*args, **kwargs):
-    with _OLLAMA_LOCK:
-        return generate_summary(*args, **kwargs)
+    return generate_summary(*args, **kwargs)
 
 
 def _locked_migrate_task(*args, **kwargs):
@@ -116,16 +116,15 @@ def _translate_and_upload(
         ollama = OllamaMcp(cfg.ollama.base_url, timeout_seconds=cfg.ollama.timeout_seconds)
         model = resolve_ollama_model(ollama, cfg.ollama.model)
         
-        # LOCK HERE: Only lock the heavy LLM inference part
-        with _OLLAMA_LOCK:
-            result = translate_srt_to_bilingual(
-                ollama=ollama,
-                model=model,
-                srt_content=srt_content,
-                batch_size=cfg.translation.batch_size,
-                max_retries=cfg.translation.max_retries,
-                temperature=cfg.ollama.temperature,
-            )
+        # Lock removed as per user request
+        result = translate_srt_to_bilingual(
+            ollama=ollama,
+            model=model,
+            srt_content=srt_content,
+            batch_size=cfg.translation.batch_size,
+            max_retries=cfg.translation.max_retries,
+            temperature=cfg.ollama.temperature,
+        )
             
         ai_content = to_ai_srt_content(result)
         local_ai.parent.mkdir(parents=True, exist_ok=True)
@@ -225,9 +224,8 @@ def _migrate_task(
             video_size_bytes=None, # We can pass None if we don't have it handy or query it
         )
         
-        # LOCK HERE: Only lock the heavy LLM planning part
-        with _OLLAMA_LOCK:
-            plan = plan_one(migrate_cfg, llm, item, dest_storage, source_storage=source_storage)
+        # Lock removed as per user request
+        plan = plan_one(migrate_cfg, llm, item, dest_storage, source_storage=source_storage)
             
         log.info("migrate planned video=%s dest=%s", video_remote_path, plan.dest_video_path)
 
@@ -261,6 +259,123 @@ def _collect_related_subtitles_for_migration(source_storage, rel_video_path: str
         if lower == f"{stem_lower}{ext}" or lower.startswith(stem_lower + "."):
             subs.append(p.lstrip("/"))
     return sorted(set(subs))
+
+
+def _handle_future_result(
+    fut: Future[object],
+    meta: dict[Future[object], tuple[str, str, str, Any]],
+    store: StateStore,
+    cfg: AppConfig,
+    pending_ops: dict[str, set[str]],
+    translation_success: set[str],
+    migrate_pool: DaemonExecutor | None,
+    _schedule_asr: Any,
+    _schedule_translation: Any,
+    _schedule_summary: Any,
+    _schedule_migration: Any,
+    _schedule_pgs_ocr: Any,
+) -> tuple[int, int, int]:
+    """Returns (done_delta, failed_delta, migrated_delta)"""
+    done_delta = 0
+    failed_delta = 0
+    migrated_delta = 0
+
+    kind, vid, rpath, extra = meta.pop(fut, ("unknown", "", "", None))
+    try:
+        res = fut.result()
+    except Exception as e:
+        if kind == "pgs_ocr":
+            log.warning("pgs ocr failed video=%s error=%s", rpath, e)
+            store.upsert_task(
+                TaskRecord(
+                    video_id=vid,
+                    video_path=rpath,
+                    status="PGS_OCR_FAILED",
+                    payload={"error": str(e), "stage": kind},
+                    updated_at=int(time.time()),
+                )
+            )
+            if cfg.whisper.enabled:
+                _schedule_asr(vid, rpath)
+            return 0, 0, 0
+        
+        log.error("task failed video=%s error=%s stage=%s", rpath, e, kind)
+        failed_delta = 1
+        if vid in pending_ops:
+            pending_ops[vid].discard(kind)
+        
+        # Even if summary fails, we might still want to migrate if translation succeeded
+        if kind == "summary" and migrate_pool and (vid in translation_success) and (vid not in pending_ops or not pending_ops[vid]):
+            _schedule_migration(vid, rpath)
+            
+        store.upsert_task(
+            TaskRecord(
+                video_id=vid,
+                video_path=rpath,
+                status="FAILED",
+                payload={"error": str(e), "stage": kind},
+                updated_at=int(time.time()),
+            )
+        )
+        return 0, 1, 0
+
+    if kind in ("asr", "pgs_ocr"):
+        if isinstance(res, SubtitleSource):
+            _schedule_translation(vid, rpath, res)
+        else:
+            log.error("invalid %s result type: %s", kind, type(res))
+            store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="FAILED", payload={"error": f"invalid {kind} result"}, updated_at=int(time.time())))
+            return 0, 1, 0
+    elif kind == "translate":
+        done_delta = 1
+        source_obj = extra
+        actual_kind_str = source_obj.kind if hasattr(source_obj, "kind") else str(source_obj)
+        
+        store.upsert_task(
+            TaskRecord(
+                video_id=vid,
+                video_path=rpath,
+                status="DONE",
+                payload={"source_kind": actual_kind_str},
+                updated_at=int(time.time()),
+            )
+        )
+        if vid in pending_ops:
+            pending_ops[vid].discard("translate")
+        translation_success.add(vid)
+
+        # Schedule summary serially after translation
+        if isinstance(source_obj, SubtitleSource):
+            _schedule_summary(vid, rpath, source_obj)
+
+        if migrate_pool and (vid not in pending_ops or not pending_ops[vid]):
+            _schedule_migration(vid, rpath)
+    elif kind == "summary":
+        store.upsert_task(
+            TaskRecord(
+                video_id=vid,
+                video_path=rpath,
+                status="SUMMARY_DONE",
+                payload={},
+                updated_at=int(time.time()),
+            )
+        )
+        if vid in pending_ops:
+            pending_ops[vid].discard("summary")
+        if migrate_pool and (vid in translation_success) and (vid not in pending_ops or not pending_ops[vid]):
+            _schedule_migration(vid, rpath)
+    elif kind == "migrate":
+        if isinstance(res, tuple) and len(res) >= 2:
+            success, err = res[0], res[1]
+            if success:
+                migrated_delta = 1
+                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="MIGRATED", payload={}, updated_at=int(time.time())))
+            else:
+                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="MIGRATION_FAILED", payload={"error": err}, updated_at=int(time.time())))
+        else:
+            log.error("unexpected migrate result type: %s", type(res))
+            
+    return done_delta, failed_delta, migrated_delta
 
 
 def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migrate_cfg=None) -> RunSummary:
@@ -311,7 +426,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
     pending: set[Future[object]] = set()
     pending_ops: dict[str, set[str]] = {}
     translation_success: set[str] = set()
-    meta: dict[Future[object], tuple[str, str, str, str | None]] = {}
+    meta: dict[Future[object], tuple[str, str, str, Any]] = {}
     skipped = 0
     done_count = 0
     failed_count = 0
@@ -341,11 +456,6 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
             dry_run
         )
         pending.add(fut)
-        # Ensure we wait if pending tasks grow too large, 
-        # BUT for migration we usually want it to just run in background.
-        # However, the main loop `while pending:` only waits when loop iterates.
-        # If we just add tasks here and return, they will run.
-        
         meta[fut] = ("migrate", video_id, remote_path, None)
 
     def _schedule_summary(video_id: str, remote_path: str, source: SubtitleSource) -> None:
@@ -373,9 +483,6 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
             pending_ops[video_id] = set()
         pending_ops[video_id].add("translate")
 
-        # Also schedule summary in parallel
-        _schedule_summary(video_id, remote_path, source)
-
         store.upsert_task(
             TaskRecord(
                 video_id=video_id,
@@ -387,7 +494,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
         )
         fut: Future[object] = translation_pool.submit(_locked_translate_and_upload, cfg, video_id, remote_path, source, force, dry_run)
         pending.add(fut)
-        meta[fut] = ("translate", video_id, remote_path, source.kind)
+        meta[fut] = ("translate", video_id, remote_path, source)
 
     def _schedule_asr(video_id: str, remote_path: str) -> None:
         nonlocal failed_count
@@ -501,64 +608,18 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                 # If we scheduled a translation, and concurrency is high, wait a bit
                 # to avoid overwhelming the system if we have too many pending tasks
                 while len(pending) >= cfg.translation.workers * 2:
-                     done, pending = wait(pending, return_when=FIRST_COMPLETED)
-                     # Process finished tasks (same logic as main loop)
+                     done, pending = wait(pending, return_when=FIRST_COMPLETED, timeout=60)
+                     if not done:
+                         log.info("discovery loop: still waiting for %d tasks: %s", len(pending), [meta[f][0] for f in pending if f in meta])
+                         continue
                      for fut in done:
-                        kind, vid, rpath, skind = meta.pop(fut, ("unknown", "", "", None))
-                        try:
-                            res = fut.result()
-                        except Exception as e:
-                            if kind == "pgs_ocr":
-                                log.warning("pgs ocr failed video=%s error=%s", rpath, e)
-                                store.upsert_task(
-                                    TaskRecord(
-                                        video_id=vid,
-                                        video_path=rpath,
-                                        status="PGS_OCR_FAILED",
-                                        payload={"error": str(e), "stage": kind},
-                                        updated_at=int(time.time()),
-                                    )
-                                )
-                                if cfg.whisper.enabled:
-                                    _schedule_asr(vid, rpath)
-                                continue
-                            log.error("task failed video=%s error=%s stage=%s", rpath, e, kind)
-                            failed_count += 1
-                            if vid in pending_ops:
-                                pending_ops[vid].discard(kind)
-                            if kind == "summary" and migrate_pool and (vid in translation_success) and (vid not in pending_ops or not pending_ops[vid]):
-                                _schedule_migration(vid, rpath)
-                            store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="FAILED", payload={"error": str(e), "stage": kind}, updated_at=int(time.time())))
-                            continue
-                        if kind in ("asr", "pgs_ocr") and isinstance(res, SubtitleSource):
-                            _schedule_translation(vid, rpath, res)
-                        elif kind == "translate":
-                            done_count += 1
-                            store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="DONE", payload={"source_kind": skind}, updated_at=int(time.time())))
-                            if vid in pending_ops:
-                                pending_ops[vid].discard("translate")
-                            translation_success.add(vid)
-                            if migrate_pool and (vid not in pending_ops or not pending_ops[vid]):
-                                _schedule_migration(vid, rpath)
-                        elif kind == "summary":
-                            store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="SUMMARY_DONE", payload={}, updated_at=int(time.time())))
-                            if vid in pending_ops:
-                                pending_ops[vid].discard("summary")
-                            if migrate_pool and (vid in translation_success) and (vid not in pending_ops or not pending_ops[vid]):
-                                _schedule_migration(vid, rpath)
-                        elif kind == "migrate":
-                            # res is (success, err)
-                            if isinstance(res, tuple) and len(res) >= 2:
-                                success = res[0]
-                                err = res[1]
-                                if success:
-                                    migrated_count += 1
-                                    store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="MIGRATED", payload={}, updated_at=int(time.time())))
-                                else:
-                                    # failed_count += 1 # Migration failure does not fail the whole run
-                                    store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="MIGRATION_FAILED", payload={"error": err}, updated_at=int(time.time())))
-                            else:
-                                log.error("unexpected migrate result type: %s", type(res))
+                        dd, fd, md = _handle_future_result(
+                            fut, meta, store, cfg, pending_ops, translation_success, migrate_pool,
+                            _schedule_asr, _schedule_translation, _schedule_summary, _schedule_migration, _schedule_pgs_ocr
+                        )
+                        done_count += dd
+                        failed_count += fd
+                        migrated_count += md
                 continue
 
             local_video = _download_video(cfg, video_id, v.remote_path)
@@ -625,50 +686,18 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                 _schedule_asr(video_id, v.remote_path)
                 # Also wait if too many pending tasks
                 while len(pending) >= cfg.whisper.asr_workers + 2: # Keep queue small for ASR
-                     done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                     done, pending = wait(pending, return_when=FIRST_COMPLETED, timeout=60)
+                     if not done:
+                         log.info("whisper check: still waiting for %d tasks: %s", len(pending), [meta[f][0] for f in pending if f in meta])
+                         continue
                      for fut in done:
-                        kind, vid, rpath, skind = meta.pop(fut, ("unknown", "", "", None))
-                        try:
-                            res = fut.result()
-                        except Exception as e:
-                            if kind == "pgs_ocr":
-                                log.warning("pgs ocr failed video=%s error=%s", rpath, e)
-                                store.upsert_task(
-                                    TaskRecord(
-                                        video_id=vid,
-                                        video_path=rpath,
-                                        status="PGS_OCR_FAILED",
-                                        payload={"error": str(e), "stage": kind},
-                                        updated_at=int(time.time()),
-                                    )
-                                )
-                                if cfg.whisper.enabled:
-                                    _schedule_asr(vid, rpath)
-                                continue
-                            log.error("task failed video=%s error=%s stage=%s", rpath, e, kind)
-                            failed_count += 1
-                            store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="FAILED", payload={"error": str(e), "stage": kind}, updated_at=int(time.time())))
-                            continue
-                        if kind in ("asr", "pgs_ocr") and isinstance(res, SubtitleSource):
-                            _schedule_translation(vid, rpath, res)
-                        elif kind == "translate":
-                            done_count += 1
-                            store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="DONE", payload={"source_kind": skind}, updated_at=int(time.time())))
-                            if migrate_pool:
-                                _schedule_migration(vid, rpath)
-                        elif kind == "migrate":
-                            # res is (success, err)
-                            if isinstance(res, tuple) and len(res) >= 2:
-                                success = res[0]
-                                err = res[1]
-                                if success:
-                                    migrated_count += 1
-                                    store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="MIGRATED", payload={}, updated_at=int(time.time())))
-                                else:
-                                    # failed_count += 1
-                                    store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="MIGRATION_FAILED", payload={"error": err}, updated_at=int(time.time())))
-                            else:
-                                log.error("unexpected migrate result type: %s", type(res))
+                        dd, fd, md = _handle_future_result(
+                            fut, meta, store, cfg, pending_ops, translation_success, migrate_pool,
+                            _schedule_asr, _schedule_translation, _schedule_summary, _schedule_migration, _schedule_pgs_ocr
+                        )
+                        done_count += dd
+                        failed_count += fd
+                        migrated_count += md
             else:
                 failed_count += 1
                 store.upsert_task(
@@ -683,100 +712,20 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
 
     try:
         while pending:
-            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            # Add a timeout to wait so we can log progress or check for hangs
+            done, pending = wait(pending, return_when=FIRST_COMPLETED, timeout=60)
+            if not done:
+                log.info("still waiting for %d tasks: %s", len(pending), [meta[f][0] for f in pending if f in meta])
+                continue
+            
             for fut in done:
-                kind, video_id, remote_path, source_kind = meta.pop(fut, ("unknown", "", "", None))
-                try:
-                    res = fut.result()
-                except Exception as e:
-                    if kind == "pgs_ocr":
-                        log.warning("pgs ocr failed video=%s error=%s", remote_path, e)
-                        store.upsert_task(
-                            TaskRecord(
-                                video_id=video_id,
-                                video_path=remote_path,
-                                status="PGS_OCR_FAILED",
-                                payload={"error": str(e), "stage": kind},
-                                updated_at=int(time.time()),
-                            )
-                        )
-                        if cfg.whisper.enabled:
-                            _schedule_asr(video_id, remote_path)
-                        continue
-                    log.error("task failed video=%s error=%s stage=%s", remote_path, e, kind)
-                    failed_count += 1
-                    if video_id in pending_ops:
-                        pending_ops[video_id].discard(kind)
-                    if kind == "summary" and migrate_pool and (video_id in translation_success) and (video_id not in pending_ops or not pending_ops[video_id]):
-                        _schedule_migration(video_id, remote_path)
-                    store.upsert_task(
-                        TaskRecord(
-                            video_id=video_id,
-                            video_path=remote_path,
-                            status="FAILED",
-                            payload={"error": str(e), "stage": kind},
-                            updated_at=int(time.time()),
-                        )
-                    )
-                    continue
-                if kind in ("asr", "pgs_ocr"):
-                    source = res
-                    if isinstance(source, SubtitleSource):
-                        _schedule_translation(video_id, remote_path, source)
-                    else:
-                        failed_count += 1
-                        store.upsert_task(
-                            TaskRecord(
-                                video_id=video_id,
-                                video_path=remote_path,
-                                status="FAILED",
-                                payload={"error": f"invalid {kind} result"},
-                                updated_at=int(time.time()),
-                            )
-                        )
-                elif kind == "translate":
-                    done_count += 1
-                    store.upsert_task(
-                        TaskRecord(
-                            video_id=video_id,
-                            video_path=remote_path,
-                            status="DONE",
-                            payload={"source_kind": source_kind},
-                            updated_at=int(time.time()),
-                        )
-                    )
-                    if video_id in pending_ops:
-                        pending_ops[video_id].discard("translate")
-                    translation_success.add(video_id)
-                    if migrate_pool and (video_id not in pending_ops or not pending_ops[video_id]):
-                        _schedule_migration(video_id, remote_path)
-                elif kind == "summary":
-                    store.upsert_task(
-                        TaskRecord(
-                            video_id=video_id,
-                            video_path=remote_path,
-                            status="SUMMARY_DONE",
-                            payload={},
-                            updated_at=int(time.time()),
-                        )
-                    )
-                    if video_id in pending_ops:
-                        pending_ops[video_id].discard("summary")
-                    if migrate_pool and (video_id in translation_success) and (video_id not in pending_ops or not pending_ops[video_id]):
-                        _schedule_migration(video_id, remote_path)
-                elif kind == "migrate":
-                    # res is (success, err)
-                    if isinstance(res, tuple) and len(res) >= 2:
-                        success = res[0]
-                        err = res[1]
-                        if success:
-                            migrated_count += 1
-                            store.upsert_task(TaskRecord(video_id=video_id, video_path=remote_path, status="MIGRATED", payload={}, updated_at=int(time.time())))
-                        else:
-                            # failed_count += 1
-                            store.upsert_task(TaskRecord(video_id=video_id, video_path=remote_path, status="MIGRATION_FAILED", payload={"error": err}, updated_at=int(time.time())))
-                    else:
-                        log.error("unexpected migrate result type: %s", type(res))
+                dd, fd, md = _handle_future_result(
+                    fut, meta, store, cfg, pending_ops, translation_success, migrate_pool,
+                    _schedule_asr, _schedule_translation, _schedule_summary, _schedule_migration, _schedule_pgs_ocr
+                )
+                done_count += dd
+                failed_count += fd
+                migrated_count += md
         if migrate_cfg and source_storage and cleanup_sweep:
             if migrate_cfg.cleanup.enabled and migrate_cfg.execution.apply and (not dry_run):
                 log.info("migrate cleanup sweep start root=/Downloads max_dirs=%d", 200)

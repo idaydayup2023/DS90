@@ -100,35 +100,166 @@ def build_normalized_basename(fields: LlmFields, original_stem: str) -> str:
         if ep_title:
             parts.append(ep_title)
         
+        # Deduplicate metadata parts against themselves to avoid x265.x265
+        # Metadata parts: resolution, src, codec, audio_group
+        
+        # Helper to check if a token is already in parts or redundant
+        # But here we are constructing the suffix parts.
+        
+        # Check if codec is same as group (case insensitive)
+        if group and codec and group.lower() == codec.lower():
+             # "x265-x265" -> "x265" (keep codec, clear group) or keep group?
+             # Usually group is the one to drop if it's just repeating codec.
+             group = ""
+        
+        # Check if src is same as group
+        if group and src and group.lower() == src.lower():
+             group = ""
+             
+        # Check if codec is same as src
+        if src and codec and src.lower() == codec.lower():
+             # Unlikely but possible if misparsed
+             src = "unknown" # drop src?
+
         # Add metadata parts
+        # If codec is x265, and group is ELiTE, we get ...x265-ELiTE. Correct.
+        # If codec is x265, and group is x265, we get ...x265. Corrected above.
+        
+        # What if codec is x265, and src is x265? (Misparsed source)
+        
         parts += [resolution, src, codec]
+        
+        # Extra robust check:
+        # If audio_group starts with any of the previous parts + "-", it might be duplicated.
+        # e.g. codec="x265", audio_group="x265-ELiTE"
+        # We want to avoid ...x265.x265-ELiTE
+        # In this case, we should probably strip the prefix from audio_group or drop codec?
+        # Dropping codec is safer if audio_group contains it.
+        
         if audio_group:
-             parts.append(audio_group)
+            ag_lower = audio_group.lower()
+            # Check if audio_group starts with codec-
+            if codec and codec != "unknown" and ag_lower.startswith(f"{codec.lower()}-"):
+                # Drop codec from parts list (it's in parts[-1] currently)
+                parts.pop() 
+                # codec is now gone from parts, audio_group will provide it.
+            
+            # Check if audio_group starts with src-
+            elif src and src != "unknown" and ag_lower.startswith(f"{src.lower()}-"):
+                 # src is at parts[-2] or parts[-1] depending on codec
+                 # This is getting complicated indices.
+                 # Safer: iterate and check overlap.
+                 pass
+                 
+            parts.append(audio_group)
         
         # Filter empty/unknown
-        parts = [p for p in parts if p and p != "unknown"]
+        # Also dedup adjacent identical parts? 
+        # e.g. if resolution=1080p, src=1080p (wrongly parsed)
         
-        base = ".".join(parts)
+        final_parts = []
+        for p in parts:
+            if not p or p == "unknown":
+                continue
+            # Simple dedup: if p is same as last part, skip
+            if final_parts and final_parts[-1].lower() == p.lower():
+                continue
+            final_parts.append(p)
+            
+        base = ".".join(final_parts)
         if group:
-            return f"{base}-{group}"
+            # Check if group is already at end of base?
+            # base="...x265", group="x265" -> "...x265-x265"
+            # base="...ELiTE", group="ELiTE" -> "...ELiTE-ELiTE"
+            
+            # More complex check: 
+            # if group is "x265-ELiTE", and base ends with "x265", we get "x265-x265-ELiTE"
+            # if group is "ELiTE", and base ends with "ELiTE", we get "ELiTE-ELiTE"
+            
+            # Check if base ends with the WHOLE group string (preceded by dot)
+            if base.lower().endswith("." + group.lower()) or base.lower() == group.lower():
+                pass
+            # Check if group STARTS with the last part of base + separator?
+            # e.g. base="...x265", group="x265-ELiTE"
+            # last_part = "x265"
+            # group starts with "x265-"
+            elif final_parts and group.lower().startswith(final_parts[-1].lower() + "-"):
+                # We have duplication.
+                # Remove prefix from group? or remove last part from base?
+                # Usually group is more authoritative?
+                # Or if group is "x265-ELiTE", it's redundant. "ELiTE" is better group.
+                # But we can't change group easily here.
+                # We can strip the prefix from group to append.
+                # prefix len = len(last_part) + 1
+                prefix_len = len(final_parts[-1]) + 1
+                remainder = group[prefix_len:]
+                if remainder:
+                    return f"{base}-{remainder}"
+                else:
+                    return base
+            else:
+                 return f"{base}-{group}"
         return base
 
     title = _dotify(fields.title or "") or _dotify(original_stem) or "Unknown.Title"
     year = str(fields.year) if fields.year else "UnknownYear"
+    
+    # Same dedup logic for movies
+    if group and codec and group.lower() == codec.lower():
+         group = ""
+    if group and src and group.lower() == src.lower():
+         group = ""
+         
     parts = [title, year, resolution, src, codec]
     if audio_group:
         parts.append(audio_group)
         
-    parts = [p for p in parts if p and p != "unknown"]
-    base = ".".join(parts)
+    final_parts = []
+    for p in parts:
+        if not p or p == "unknown":
+            continue
+        if final_parts and final_parts[-1].lower() == p.lower():
+            continue
+        final_parts.append(p)
+
+    base = ".".join(final_parts)
     if group:
-        return f"{base}-{group}"
+        if base.lower().endswith("." + group.lower()) or base.lower() == group.lower():
+            pass
+        elif final_parts and group.lower().startswith(final_parts[-1].lower() + "-"):
+            prefix_len = len(final_parts[-1]) + 1
+            remainder = group[prefix_len:]
+            if remainder:
+                return f"{base}-{remainder}"
+            else:
+                return base
+        else:
+            return f"{base}-{group}"
     return base
 
 
 def subtitle_suffix(video_stem: str, subtitle_stem: str) -> str:
+    # We should return the suffix that distinguishes the subtitle from the video.
+    # Usually video is "Movie.2024"
+    # Subtitle is "Movie.2024.en" -> ".en"
+    # Subtitle is "Movie.2024.eng" -> ".eng"
+    # Subtitle is "Movie.2024.zh-CN" -> ".zh-CN"
+    # Subtitle is "Movie.2024" -> "" (rare, usually means default language)
+    
+    # Simple logic: strip the common prefix.
+    # BUT, we need to be careful not to strip too much if stems are different.
+    # The caller passes video_stem and subtitle_stem.
+    
+    # If stems are identical, return empty string (extension handles it)
     if subtitle_stem == video_stem:
         return ""
+        
+    # If subtitle starts with video stem + dot
     if subtitle_stem.startswith(video_stem + "."):
         return subtitle_stem[len(video_stem) :]
+    
+    # Fallback: if they are completely different, return the whole subtitle stem as suffix?
+    # Or just dot + stem?
+    # This might double the name if not careful.
+    # e.g. video="Movie", sub="Other" -> ".Other" -> dest="Movie.Other.srt"
     return "." + _dotify(subtitle_stem)

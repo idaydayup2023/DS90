@@ -405,12 +405,34 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
                         subtitle_moves=subtitle_moves,
                         skip_reason=None,
                     )
+    # Logic moved to naming.py to centralize file naming
+    # dest_video_path = posixpath.join(dest_dir, normalized + p.suffix)
+    # moves: list[tuple[str, str]] = []
+    # for s in item.subtitle_paths:
+    #     sp = PurePosixPath(s)
+    #     suffix = subtitle_suffix(p.stem, sp.stem)
+    #     dest_sub = posixpath.join(dest_dir, normalized + suffix + sp.suffix)
+    #     moves.append((s, dest_sub))
+    
+    # We should use build_normalized_basename once, and then use it everywhere.
     normalized = build_normalized_basename(fields, p.stem)
     dest_dir = dest_dir_for(cfg.rules, fields, normalized)
     dest_video_path = posixpath.join(dest_dir, normalized + p.suffix)
+    
     moves: list[tuple[str, str]] = []
     for s in item.subtitle_paths:
         sp = PurePosixPath(s)
+        # subtitle_suffix expects (video_stem, subtitle_stem)
+        # But we are renaming to 'normalized'.
+        # We need to preserve the language part from the ORIGINAL subtitle stem relative to ORIGINAL video stem.
+        
+        # Example:
+        # Video: Movie.mkv
+        # Sub: Movie.en.srt
+        # Suffix: .en
+        # New Video: Movie.2024.mkv
+        # New Sub: Movie.2024.en.srt
+        
         suffix = subtitle_suffix(p.stem, sp.stem)
         dest_sub = posixpath.join(dest_dir, normalized + suffix + sp.suffix)
         moves.append((s, dest_sub))

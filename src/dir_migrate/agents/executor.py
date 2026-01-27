@@ -26,15 +26,46 @@ def _pick_non_conflicting(cfg: AppConfig, dest_storage: StorageMcp, plan: MovePl
     base = plan.normalized_basename
     p = PurePosixPath(plan.source.video_path)
     for i in range(1, 1000):
+        # Suffix logic for conflict resolution
+        # We append -1, -2 etc. to the normalized basename
         nb = f"{base}-{i}"
+        
+        # We need to re-construct paths with new basename
+        # dest_dir might depend on basename if it's a folder-per-video structure?
+        # dest_dir in plan is usually ".../Movie (Year)" or ".../Series/Season"
+        # If it's movie folder, renaming movie file doesn't change folder name usually,
+        # UNLESS the folder name itself is derived from basename?
+        # dest_dir_for uses fields, not basename. So folder is stable.
+        
+        # But wait, logic in executor.py line 30:
+        # d = posixpath.join(posixpath.dirname(plan.dest_dir), nb)
+        # This implies it changes the PARENT FOLDER name too?
+        # If dest_dir is ".../Movie (2024)", dirname is ".../".
+        # So it creates ".../Movie (2024)-1/Movie (2024)-1.mkv"?
+        # This seems to assume folder structure matches filename.
+        
+        # If we just want to rename the file inside the SAME directory:
+        # d = plan.dest_dir
+        # But if folder already exists and has content, maybe we want separate folder?
+        
+        # Current logic:
+        # nb = f"{base}-{i}"
+        # d = posixpath.join(posixpath.dirname(plan.dest_dir), nb)
+        # dv = posixpath.join(d, nb + p.suffix)
+        
+        # This creates a new directory for the conflict.
+        
         d = posixpath.join(posixpath.dirname(plan.dest_dir), nb)
         dv = posixpath.join(d, nb + p.suffix)
         if dest_storage.exists(dv):
             continue
         moves = []
         for src_sub, _dst_sub in plan.subtitle_moves:
+            # Re-calculate subtitle destination
             sp = PurePosixPath(src_sub)
-            suffix = subtitle_suffix(p.stem, sp.stem)
+            video_stem = PurePosixPath(plan.source.video_path).stem
+            suffix = subtitle_suffix(video_stem, sp.stem)
+            
             moves.append((src_sub, posixpath.join(d, nb + suffix + sp.suffix)))
         return MovePlan(
             source=plan.source,
