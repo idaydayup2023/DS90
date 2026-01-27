@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import posixpath
 import time
+import threading
 from concurrent.futures import FIRST_COMPLETED, Future, wait
 from pathlib import Path
 from dataclasses import dataclass
@@ -42,6 +43,10 @@ except ImportError:
 
 log = logging.getLogger("srt_translate.orchestrator")
 
+# Global lock for Ollama to prevent concurrent requests overloading the system
+_OLLAMA_LOCK = threading.Lock()
+
+
 @dataclass(frozen=True)
 class RunSummary:
     videos: int
@@ -49,6 +54,24 @@ class RunSummary:
     done: int
     failed: int
     elapsed_seconds: float
+
+
+def _locked_translate_and_upload(*args, **kwargs):
+    with _OLLAMA_LOCK:
+        return _translate_and_upload(*args, **kwargs)
+
+
+def _locked_generate_summary(*args, **kwargs):
+    with _OLLAMA_LOCK:
+        return generate_summary(*args, **kwargs)
+
+
+def _locked_migrate_task(*args, **kwargs):
+    # Migration also uses LLM, so we lock it too.
+    # Note: migrate task also does file moves, but usually plan_one (LLM) is the first major step.
+    # We lock the whole task for simplicity and safety.
+    with _OLLAMA_LOCK:
+        return _migrate_task(*args, **kwargs)
 
 
 def _local_video_path(cache_dir: Path, video_id: str, remote_path: str) -> Path:
@@ -305,7 +328,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
             )
         )
         fut = migrate_pool.submit(
-            _migrate_task, 
+            _locked_migrate_task, 
             migrate_cfg, 
             migrate_llm, 
             source_storage, 
@@ -337,7 +360,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                 updated_at=int(time.time()),
             )
         )
-        fut: Future[object] = summary_pool.submit(generate_summary, cfg, video_id, remote_path, source, force, dry_run)
+        fut: Future[object] = summary_pool.submit(_locked_generate_summary, cfg, video_id, remote_path, source, force, dry_run)
         pending.add(fut)
         meta[fut] = ("summary", video_id, remote_path, None)
 
@@ -359,7 +382,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                 updated_at=int(time.time()),
             )
         )
-        fut: Future[object] = translation_pool.submit(_translate_and_upload, cfg, video_id, remote_path, source, force, dry_run)
+        fut: Future[object] = translation_pool.submit(_locked_translate_and_upload, cfg, video_id, remote_path, source, force, dry_run)
         pending.add(fut)
         meta[fut] = ("translate", video_id, remote_path, source.kind)
 
