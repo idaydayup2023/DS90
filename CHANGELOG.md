@@ -21,6 +21,7 @@
 
 ### Changed
 
+- `srt_translate` 剧情总结提示词增强：采用“影视剧深度解说”角色，输出 JSON 元数据、Mermaid 关系图/时间轴及视频脚本素材，提升剧情介绍的专业度与结构化
 - 合并配置：支持用同一个 `config.json` 同时配置 `srt_translate` 与 `dir_migrate`，并复用顶层 `ftp/ollama/video/paths`
 - README 更新：新增 `dir_migrate` 使用说明，并改为统一配置文件
 - 目录迁移字幕收集：迁移同目录字幕时包含 `.en.srt/.zh.srt` 等 sidecar 文件

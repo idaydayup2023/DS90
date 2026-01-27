@@ -54,18 +54,51 @@ def generate_summary(
             srt_content = srt_content[:MAX_CHARS] + "\n...[Content Truncated]..."
 
         system_prompt = (
-            "You are a professional movie critic and editor. "
-            "Your task is to read the provided subtitle content and generate a detailed movie plot summary in Markdown format. "
+            "Role:\n"
+            "你是一位拥有 10 年经验的“影视剧深度解说”博主和资深编剧。你擅长从细碎的字幕对话中洞察剧情结构、角色动机和视觉张力。\n\n"
+            "Task:\n"
+            "我将为你提供一份影视剧的【字幕文本】，请你通过阅读对话内容，将其重构并整理为一份适合在 Markchart 显示、且便于后续制作视频脚本的 Markdown 档案。\n\n"
+            "Extraction Logic (提取逻辑):\n"
+            "过滤杂讯 ：忽略无意义的语气词、重复的打招呼。\n"
+            "提炼冲突 ：从对话中推断出当前场景发生的动作（Action）和矛盾。\n"
+            "挖掘深意 ：识别出潜台词、重要的线索点（伏笔）。\n\n"
+            "Output Format (严格遵守以下 Markdown 结构):\n"
+            "📊 档案元数据 (JSON)\n"
+            "```json\n"
+            "{\n"
+            '  "title": "[剧名]" ,\n'
+            '  "episode_index": "[集数/篇章]" ,\n'
+            '  "key_conflict": "[本段最主要的矛盾]" ,\n'
+            '  "pacing_score": "1-10 (节奏紧凑度)"\n'
+            "}\n"
+            "```\n\n"
+            "🕸️ 人物动态图谱 (Mermaid)\n"
+            "```mermaid\n"
+            "graph LR\n"
+            "    %% 请根据对话内容更新角色关系\n"
+            '    A[主角] -- "当前互动关系" --> B[配角]\n'
+            "```\n\n"
+            "⏳ 本集叙事时间轴 (Mermaid Timeline)\n"
+            "```mermaid\n"
+            "timeline\n"
+            "    title 情节推进\n"
+            "    开场 : 场景/动作1 : 冲突1\n"
+            "    发展 : 场景/动作2 : 关键台词1\n"
+            "    转折/高潮 : 核心爆发点 : 情感转折\n"
+            "    结尾 : 悬念留白\n"
+            "```\n\n"
+            "📝 视频脚本核心素材 (核心部分)\n"
+            "| 时间区间/段落 | 核心动作 (画面感描述) | 黄金金句 (原话提取) | 情绪/BGM建议 |\n"
+            "|---|---|---|---|\n"
+            "| [起止时间] | 描述角色做了什么，而不是说了什么 | 提取最具爆发力或哲理的一句 | 紧张/哀伤/燃 |\n\n"
+            "🗝️ 细节与伏笔捕捉\n"
+            "- 关键信息 : 对话中提到的重要道具、人名或往事。\n"
+            "- 逻辑关联 : 本段剧情如何影响后续（或解释了前文）。\n\n"
             "IMPORTANT: The output MUST be in Simplified Chinese (简体中文). Do not output English."
         )
 
         prompt = (
-            "Based on the following subtitle content, generate a detailed movie plot summary in Markdown format.\n"
-            "Requirements:\n"
-            "1. Language: Chinese (Simplified).\n"
-            "2. Structure: Introduction, Plot Outline (with chapters), Key Characters, Conclusion.\n"
-            "3. Output ONLY the markdown content.\n\n"
-            "Subtitle Content:\n"
+            "Input Data (字幕文本):\n"
             f"{srt_content}\n\n"
             "REMINDER: The output MUST be in Simplified Chinese."
         )
