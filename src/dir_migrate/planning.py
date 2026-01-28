@@ -32,8 +32,12 @@ def _norm_folder_name(name: str | None, default: str) -> str:
     s = (name or "").strip()
     if not s:
         return default
-    s = s.replace("/", ".").replace("\\", ".").replace(":", ".").replace(" ", ".")
-    s = re.sub(r"\\.+", ".", s).strip(".")
+    # 1. Replace spaces with dots
+    s = s.replace(" ", ".")
+    # 2. Replace path-unsafe characters with dots
+    s = re.sub(r"[\\/\\:*?\"<>|]+", ".", s)
+    # 3. Clean up multiple dots
+    s = re.sub(r"\.+", ".", s).strip(".")
     return s or default
 
 
