@@ -29,31 +29,33 @@ _franchise_present_cache: dict[str, bool] = {}
 def _extract_imdb_from_json(source_storage: StorageMcp, video_path: str) -> tuple[str | None, float | None, int | None]:
     """Extract imdb_id, rating, votes from a sidecar .json file if present."""
     try:
-        d = posixpath.dirname(video_path.rstrip("/")) or ""
+        video_dir = posixpath.dirname(video_path.rstrip("/")) or ""
         basename = posixpath.splitext(posixpath.basename(video_path))[0]
-        json_path = posixpath.join(d, f"{basename}.json")
+        json_name = f"{basename}.json"
         
-        # Check if file exists in source storage listing
-        # Since we don't have a direct 'exists' method on StorageMcp, we list dir
-        # or just try to read it. Listing is safer to avoid exceptions if not exists.
-        # But for performance, if we already listed dir in caller, we could reuse it.
-        # Here we just try to read it, assuming StorageMcp.read_text raises if not found.
-        # However, to be safe and consistent with _extract_tt_from_sidecars:
-        try:
-            entries = source_storage.list_dir(d)
-        except Exception:
-            return None, None, None
-            
-        has_json = False
-        for p, t, _sz in entries:
-            if t == "file" and p == json_path:
-                has_json = True
-                break
+        # Candidate locations: 
+        # 1. Same directory as video
+        # 2. Source root directory (usually /Downloads)
+        candidates = [
+            posixpath.join(video_dir, json_name),
+            json_name # relative to root
+        ]
         
-        if not has_json:
+        found_path = None
+        for cp in candidates:
+            cdir = posixpath.dirname(cp)
+            try:
+                entries = source_storage.list_dir(cdir)
+                if any(t == "file" and p == cp for p, t, _sz in entries):
+                    found_path = cp
+                    break
+            except Exception:
+                continue
+        
+        if not found_path:
             return None, None, None
 
-        text = source_storage.read_text(json_path, max_bytes=1048576) # 1MB limit
+        text = source_storage.read_text(found_path, max_bytes=1048576) # 1MB limit
         data = json.loads(text)
         
         # Try to find imdb info in common structures
@@ -438,26 +440,28 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
         moves.append((s, dest_sub))
     
     # Also migrate related json and md files if present
-    # We can detect it from item.subtitle_paths? No, that's just subs.
-    # But we can check source_storage for .json/.md file with same stem
     if source_storage:
         try:
-            d = posixpath.dirname(item.video_path.rstrip("/")) or ""
-            json_name = f"{p.stem}.json"
-            json_path = posixpath.join(d, json_name)
-            md_name = f"{p.stem}.md"
-            md_path = posixpath.join(d, md_name)
+            video_dir = posixpath.dirname(item.video_path.rstrip("/")) or ""
             
-            entries = source_storage.list_dir(d)
-            for path, t, _sz in entries:
-                if t != "file":
-                    continue
-                if path == json_path:
-                    dest_json = posixpath.join(dest_dir, normalized + ".json")
-                    moves.append((json_path, dest_json))
-                elif path == md_path:
-                    dest_md = posixpath.join(dest_dir, normalized + ".md")
-                    moves.append((md_path, dest_md))
+            # Check both video directory and root directory for .json and .md
+            for ext in (".json", ".md"):
+                file_name = f"{p.stem}{ext}"
+                candidates = [
+                    posixpath.join(video_dir, file_name),
+                    file_name # root
+                ]
+                
+                for cp in candidates:
+                    cdir = posixpath.dirname(cp)
+                    try:
+                        entries = source_storage.list_dir(cdir)
+                        if any(t == "file" and p_entry == cp for p_entry, t, _sz in entries):
+                            dest_file = posixpath.join(dest_dir, normalized + ext)
+                            moves.append((cp, dest_file))
+                            break # Found this extension, move to next extension
+                    except Exception:
+                        continue
         except Exception:
             pass
 
