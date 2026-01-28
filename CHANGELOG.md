@@ -41,6 +41,10 @@
   - 新增 `[...]` 内容自动识别并去除逻辑（针对转发 group）。
   - 限制兜底逻辑：仅在缺失时补全分辨率和编码信息，不得修改剧集核心名称。
   - 元数据读取与迁移增强：支持从源根目录（如 `/Downloads`）读取视频对应的 `.json` 元数据，并确保迁移时同步移动根目录下的 `.json` 和 `.md` 文件。
+- 本地大模型支持增强：
+  - 新增对 **LM Studio** (OpenAI 兼容接口) 的支持。
+  - 统一 LLM 配置结构，支持在 `llm` 下设置 `provider` (ollama/lm-studio) 和 `base_url`。
+  - 默认大模型调整为 `Translategemma`，并实现自动匹配最合适的可用模型。
 - `srt_translate` 调度修复：解决因全局锁范围过大导致的 FTP IO 阻塞问题；修复 TaskRecord 序列化异常；增加任务状态的超时监控。
 - `srt_translate` 剧情总结：强制 System Prompt 指定输出简体中文，解决偶尔输出英文的问题
 - `dir_migrate` 元数据增强：利用 `ffprobe` 探测本地视频流信息（分辨率/Codec/音频），回填 LLM 缺失的字段

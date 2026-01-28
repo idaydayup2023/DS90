@@ -48,7 +48,8 @@ class CleanupConfig:
 
 
 @dataclass(frozen=True)
-class OllamaConfig:
+class LlmConfig:
+    provider: str  # "ollama" or "lm-studio"
     base_url: str
     model: str
     timeout_seconds: int = 120
@@ -93,7 +94,7 @@ class AppConfig:
     video: VideoConfig
     subtitle: SubtitleConfig
     cleanup: CleanupConfig
-    ollama: OllamaConfig
+    llm: LlmConfig
     imdb: ImdbConfig
     rules: RulesConfig
     execution: ExecutionConfig
@@ -237,14 +238,17 @@ def load_config(path: str | Path) -> AppConfig:
         delete_residual_files=bool(cleanup_raw.get("delete_residual_files", True)),
     )
 
-    ollama_raw = tool_raw.get("ollama") or common_ollama_raw
-    if ollama_raw is None:
-        raise KeyError("missing config key: ollama")
-    ollama = OllamaConfig(
-        base_url=str(_require(ollama_raw, "base_url")),
-        model=str(_require(ollama_raw, "model")),
-        timeout_seconds=int(ollama_raw.get("timeout_seconds", 120)),
-        temperature=float(ollama_raw.get("temperature", 0.2)),
+    # Support both "llm" and "ollama" keys for backward compatibility
+    llm_raw = tool_raw.get("llm") or tool_raw.get("ollama") or common_ollama_raw
+    if llm_raw is None:
+        raise KeyError("missing config key: llm (or ollama)")
+    
+    llm = LlmConfig(
+        provider=str(llm_raw.get("provider", "ollama")),
+        base_url=str(_require(llm_raw, "base_url")),
+        model=str(llm_raw.get("model", "translategemma")),
+        timeout_seconds=int(llm_raw.get("timeout_seconds", 120)),
+        temperature=float(llm_raw.get("temperature", 0.2)),
     )
 
     imdb_raw = tool_raw.get("imdb") or {}
@@ -284,7 +288,7 @@ def load_config(path: str | Path) -> AppConfig:
         video=video,
         subtitle=subtitle,
         cleanup=cleanup,
-        ollama=ollama,
+        llm=llm,
         imdb=imdb,
         rules=rules,
         execution=execution,

@@ -8,7 +8,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from srt_translate.config import ensure_dirs, load_config
-from srt_translate.mcp.ollama import OllamaMcp
+from srt_translate.mcp.llm_mcp import build_llm_mcp
 from srt_translate.translation import to_ai_srt_content, translate_srt_to_bilingual
 
 
@@ -23,14 +23,14 @@ def main() -> int:
     ensure_dirs(cfg)
 
     srt_content = Path(args.in_path).read_text(encoding="utf-8", errors="replace")
-    ollama = OllamaMcp(cfg.ollama.base_url, timeout_seconds=cfg.ollama.timeout_seconds)
+    llm = build_llm_mcp(cfg.llm.provider, cfg.llm.base_url, timeout_seconds=cfg.llm.timeout_seconds)
     result = translate_srt_to_bilingual(
-        ollama=ollama,
-        model=cfg.ollama.model,
+        llm=llm,
+        model=cfg.llm.model,
         srt_content=srt_content,
         batch_size=cfg.translation.batch_size,
         max_retries=cfg.translation.max_retries,
-        temperature=cfg.ollama.temperature,
+        temperature=cfg.llm.temperature,
     )
     Path(args.out_path).write_text(to_ai_srt_content(result), encoding="utf-8")
     if result.failed_indices:

@@ -16,7 +16,7 @@ from .daemon_executor import DaemonExecutor
 from .logging_util import setup_logging
 from .mcp.ftp import FtpMcp
 from .mcp.media import MediaMcp
-from .mcp.ollama import OllamaMcp, resolve_ollama_model
+from .mcp.llm_mcp import build_llm_mcp, resolve_llm_model
 from .mcp.asr import AsrMcp
 from .mcp.pgs_ocr import PgsOcrMcp
 from .store import StateStore, TaskRecord
@@ -113,17 +113,17 @@ def _translate_and_upload(
         ai_content = local_ai.read_text(encoding="utf-8")
     else:
         srt_content = source.local_path.read_text(encoding="utf-8", errors="replace")
-        ollama = OllamaMcp(cfg.ollama.base_url, timeout_seconds=cfg.ollama.timeout_seconds)
-        model = resolve_ollama_model(ollama, cfg.ollama.model)
+        llm = build_llm_mcp(cfg.llm.provider, cfg.llm.base_url, timeout_seconds=cfg.llm.timeout_seconds)
+        model = resolve_llm_model(llm, cfg.llm.model)
         
         # Lock removed as per user request
         result = translate_srt_to_bilingual(
-            ollama=ollama,
+            ollama=llm,
             model=model,
             srt_content=srt_content,
             batch_size=cfg.translation.batch_size,
             max_retries=cfg.translation.max_retries,
-            temperature=cfg.ollama.temperature,
+            temperature=cfg.llm.temperature,
         )
             
         ai_content = to_ai_srt_content(result)

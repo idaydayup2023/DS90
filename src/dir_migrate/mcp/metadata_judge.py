@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict
 from typing import Any
 
-from srt_translate.mcp.ollama import OllamaMcp
+from srt_translate.mcp.llm_mcp import LlmMcp
 
 from ..domain import LlmFields
 from .imdb import ImdbTitle
@@ -84,8 +84,8 @@ def _prompt(filename: str, parsed: LlmFields, imdb: ImdbTitle) -> str:
 
 
 class MetadataJudgeMcp:
-    def __init__(self, ollama: OllamaMcp, model: str, temperature: float, max_retries: int = 1):
-        self._ollama = ollama
+    def __init__(self, llm: LlmMcp, model: str, temperature: float, max_retries: int = 1):
+        self._llm = llm
         self._model = model
         self._temperature = temperature
         self._max_retries = max(0, int(max_retries))
@@ -94,7 +94,7 @@ class MetadataJudgeMcp:
         last_err: Exception | None = None
         for _attempt in range(self._max_retries + 1):
             try:
-                resp = self._ollama.generate(model=self._model, prompt=_prompt(filename, parsed, imdb), temperature=self._temperature).text
+                resp = self._llm.generate(model=self._model, prompt=_prompt(filename, parsed, imdb), temperature=self._temperature).text
                 obj = _extract_json(resp)
                 kind = _as_str(obj.get("kind")) or parsed.kind
                 out = LlmFields(

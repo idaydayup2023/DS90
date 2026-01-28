@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from srt_translate.mcp.ollama import OllamaMcp
+from srt_translate.mcp.llm_mcp import LlmMcp
 
 from ..domain import LlmFields
 from .imdb import ImdbTitle
@@ -94,14 +94,15 @@ def _cache_key(title: str | None, year: int | None) -> str:
 
 
 class FranchiseJudgeMcp:
-    def __init__(self, cache_dir: Path, ttl_days: int, ollama: OllamaMcp, model: str):
+    def __init__(self, cache_dir: Path, ttl_days: int, llm: LlmMcp, model: str):
         self._cache_dir = cache_dir / "franchise_judge_cache"
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._ttl_seconds = max(0, int(ttl_days)) * 86400
-        self._ollama = ollama
+        self._llm = llm
         self._model = model
 
     def judge(self, filename: str, parsed: LlmFields, imdb: ImdbTitle | None) -> FranchiseDecision | None:
+        # ... (cache logic)
         title = (parsed.title or "") if parsed.kind == "movie" else ""
         year = parsed.year
         key = _cache_key(title or None, year)
@@ -121,7 +122,7 @@ class FranchiseJudgeMcp:
                 pass
 
         try:
-            text = self._ollama.generate(model=self._model, prompt=_prompt(filename, parsed, imdb), temperature=0.0).text
+            text = self._llm.generate(model=self._model, prompt=_prompt(filename, parsed, imdb), temperature=0.0).text
             obj = _extract_json(text)
             decision = FranchiseDecision(
                 is_franchise=_as_bool(obj.get("is_franchise")),

@@ -29,7 +29,8 @@ class VideoConfig:
 
 
 @dataclass(frozen=True)
-class OllamaConfig:
+class LlmConfig:
+    provider: str  # "ollama" or "lm-studio"
     base_url: str
     model: str
     timeout_seconds: int = 120
@@ -73,7 +74,7 @@ class AppConfig:
     ftp: FtpConfig
     paths: PathsConfig
     video: VideoConfig
-    ollama: OllamaConfig
+    llm: LlmConfig
     whisper: WhisperConfig
     pgs_ocr: PgsOcrConfig
     translation: TranslationConfig
@@ -118,12 +119,17 @@ def load_config(path: str | Path) -> AppConfig:
     exts = _as_tuple_str(_require(video_raw, "extensions"))
     video = VideoConfig(extensions=exts, min_bytes=int(video_raw.get("min_bytes", 0)))
 
-    ollama_raw = _require(raw, "ollama")
-    ollama = OllamaConfig(
-        base_url=str(_require(ollama_raw, "base_url")),
-        model=str(_require(ollama_raw, "model")),
-        timeout_seconds=int(ollama_raw.get("timeout_seconds", 120)),
-        temperature=float(ollama_raw.get("temperature", 0.2)),
+    # Support both "llm" and "ollama" keys for backward compatibility
+    llm_raw = raw.get("llm") or raw.get("ollama")
+    if llm_raw is None:
+        raise KeyError("missing config key: llm (or ollama)")
+    
+    llm = LlmConfig(
+        provider=str(llm_raw.get("provider", "ollama")),
+        base_url=str(_require(llm_raw, "base_url")),
+        model=str(llm_raw.get("model", "translategemma")),
+        timeout_seconds=int(llm_raw.get("timeout_seconds", 120)),
+        temperature=float(llm_raw.get("temperature", 0.2)),
     )
 
     whisper_raw = _require(raw, "whisper")
@@ -162,7 +168,7 @@ def load_config(path: str | Path) -> AppConfig:
         ftp=ftp,
         paths=paths_cfg,
         video=video,
-        ollama=ollama,
+        llm=llm,
         whisper=whisper,
         pgs_ocr=pgs_ocr,
         translation=translation,

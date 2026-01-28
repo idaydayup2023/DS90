@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
-from .mcp.ollama import OllamaMcp
+from .mcp.llm_mcp import LlmMcp
 from .srt import SrtCue, clamp_text_single_line, format_srt, parse_srt
 
 
@@ -69,7 +69,7 @@ def _parse_batch_output(text: str) -> dict[int, str] | None:
 
 
 def translate_srt_to_bilingual(
-    ollama: OllamaMcp,
+    llm: LlmMcp,
     model: str,
     srt_content: str,
     batch_size: int,
@@ -94,7 +94,7 @@ def translate_srt_to_bilingual(
         got = None
         prompt = _batch_prompt(batch)
         for _ in range(max_retries + 1):
-            resp = ollama.generate(model=model, prompt=prompt, temperature=temperature).text
+            resp = llm.generate(model=model, prompt=prompt, temperature=temperature).text
             got = _parse_batch_output(resp)
             if got and len(got) == len(batch):
                 break
@@ -103,7 +103,7 @@ def translate_srt_to_bilingual(
             for idx, en in batch:
                 sp = _translategemma_prompt("English", "en", "Chinese", "zh-Hans", en)
                 try:
-                    zh = ollama.generate(model=model, prompt=sp, temperature=temperature).text.strip()
+                    zh = llm.generate(model=model, prompt=sp, temperature=temperature).text.strip()
                     zh = clamp_text_single_line(zh)
                     translated[idx] = zh
                 except Exception:

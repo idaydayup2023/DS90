@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .config import AppConfig
 from .mcp.ftp import FtpMcp
-from .mcp.ollama import OllamaMcp, resolve_ollama_model
+from .mcp.llm_mcp import build_llm_mcp, resolve_llm_model
 from .domain import split_basename
 from .subtitle_acquisition import SubtitleSource
 
@@ -103,11 +103,11 @@ def generate_summary(
             "REMINDER: The output MUST be in Simplified Chinese."
         )
         
-        ollama = OllamaMcp(cfg.ollama.base_url, timeout_seconds=cfg.ollama.timeout_seconds * 2)
-        model = resolve_ollama_model(ollama, cfg.ollama.model)
+        llm = build_llm_mcp(cfg.llm.provider, cfg.llm.base_url, timeout_seconds=cfg.llm.timeout_seconds * 2)
+        model = resolve_llm_model(llm, cfg.llm.model)
         
         try:
-            resp = ollama.generate(model, prompt, temperature=0.5, system=system_prompt)
+            resp = llm.generate(model, prompt, temperature=0.5, system=system_prompt)
             log.info("Summary generated, model=%s len=%d", resp.model, len(resp.text))
             summary_content = resp.text
         except Exception as e:

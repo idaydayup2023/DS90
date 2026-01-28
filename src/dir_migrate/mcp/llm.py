@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Any
 
-from srt_translate.mcp.ollama import OllamaMcp
+from srt_translate.mcp.llm_mcp import LlmMcp as BaseLlmMcp
 
 from ..config import RulesConfig
 from ..domain import ImdbKnowledge, ImdbRelatedMovie, LlmFields
@@ -317,15 +317,15 @@ def _apply_franchise_rules(rules: RulesConfig, fields: LlmFields) -> LlmFields:
 
 
 class LlmMcp:
-    def __init__(self, ollama: OllamaMcp, model: str, temperature: float, max_retries: int = 2):
-        self._ollama = ollama
+    def __init__(self, llm: BaseLlmMcp, model: str, temperature: float, max_retries: int = 2):
+        self._llm = llm
         self._model = model
         self._temperature = temperature
         self._max_retries = max(0, int(max_retries))
 
     @property
-    def ollama(self) -> OllamaMcp:
-        return self._ollama
+    def llm(self) -> BaseLlmMcp:
+        return self._llm
 
     @property
     def model(self) -> str:
@@ -340,7 +340,7 @@ class LlmMcp:
         last_err: Exception | None = None
         for _attempt in range(self._max_retries + 1):
             try:
-                resp = self._ollama.generate(model=self._model, prompt=_prompt(filename), temperature=self._temperature).text
+                resp = self._llm.generate(model=self._model, prompt=_prompt(filename), temperature=self._temperature).text
                 obj = _extract_json(resp)
                 kind = _as_str(obj.get("kind")) or _as_str(fallback.get("kind")) or "movie"
                 fields = LlmFields(
@@ -389,7 +389,7 @@ class LlmMcp:
         for _attempt in range(self._max_retries + 1):
             try:
                 prompt = _prompt_imdb_knowledge(title, year)
-                resp = self._ollama.generate(model=self._model, prompt=prompt, temperature=self._temperature).text
+                resp = self._llm.generate(model=self._model, prompt=prompt, temperature=self._temperature).text
                 obj = _extract_json(resp)
                 related_raw = obj.get("related_movies")
                 related: list[ImdbRelatedMovie] = []

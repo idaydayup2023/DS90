@@ -33,7 +33,7 @@ class TestDirMigrateConfig(unittest.TestCase):
                 "paths": {"local_cache_dir": ".cache/dir_migrate"},
                 "video": {"extensions": [".mkv"], "min_bytes": 0},
                 "subtitle": {"extensions": [".srt"]},
-                "ollama": {"base_url": "http://localhost:11434", "model": "m"},
+                "llm": {"provider": "ollama", "base_url": "http://localhost:11434", "model": "m"},
                 "rules": {},
                 "execution": {"dry_run": True, "apply": False, "limit": 1, "workers": 1, "on_conflict": "skip"},
             }

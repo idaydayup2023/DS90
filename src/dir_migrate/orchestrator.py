@@ -6,7 +6,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, wait
 from dataclasses import asdict
 
 from srt_translate.daemon_executor import DaemonExecutor
-from srt_translate.mcp.ollama import OllamaMcp
+from srt_translate.mcp.llm_mcp import build_llm_mcp, resolve_llm_model
 
 from .agents.executor import apply_one
 from .agents.cleaner import cleanup_sweep
@@ -16,7 +16,6 @@ from .config import AppConfig
 from .domain import MovePlan, RunSummary, SourceFiles
 from .mcp.llm import LlmMcp
 from .mcp.storage import StorageMcp, build_storage_mcp
-from .ollama_util import resolve_ollama_model
 
 
 log = logging.getLogger("dir_migrate.orchestrator")
@@ -44,9 +43,9 @@ def run_once(cfg: AppConfig) -> RunSummary:
     videos = scan.videos
     log.info("scan videos=%d", len(videos))
 
-    ollama = OllamaMcp(cfg.ollama.base_url, timeout_seconds=cfg.ollama.timeout_seconds)
-    model = resolve_ollama_model(ollama, cfg.ollama.model)
-    llm = LlmMcp(ollama=ollama, model=model, temperature=cfg.ollama.temperature, max_retries=2)
+    llm_mcp = build_llm_mcp(cfg.llm.provider, cfg.llm.base_url, timeout_seconds=cfg.llm.timeout_seconds)
+    model = resolve_llm_model(llm_mcp, cfg.llm.model)
+    llm = LlmMcp(llm=llm_mcp, model=model, temperature=cfg.llm.temperature, max_retries=2)
 
     pool = DaemonExecutor(max_workers=max(1, cfg.execution.workers), thread_name_prefix="plan")
     pending: set[Future[object]] = set()

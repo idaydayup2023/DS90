@@ -6,8 +6,6 @@ import posixpath
 from dataclasses import dataclass
 from typing import Any
 
-from srt_translate.mcp.ollama import OllamaMcp
-
 from ..config import AppConfig
 from ..domain import MovePlan
 from ..mcp.storage import StorageMcp
