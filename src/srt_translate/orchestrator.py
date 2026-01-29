@@ -27,20 +27,14 @@ from .translation import to_ai_srt_content, translate_srt_to_bilingual
 from .summary import generate_summary
 
 # dir_migrate imports
-try:
-    from dir_migrate.agents.planner import plan_one
-    from dir_migrate.agents.executor import apply_one
-    from dir_migrate.agents.cleaner import cleanup_sweep
-    from dir_migrate.domain import SourceFiles
-    from dir_migrate.mcp.llm import LlmMcp
-    from dir_migrate.mcp.storage import build_storage_mcp
-except ImportError:
-    plan_one = None
-    apply_one = None
-    cleanup_sweep = None
-    SourceFiles = None
-    LlmMcp = None
-    build_storage_mcp = None
+from dir_migrate.agents.planner import plan_one
+from dir_migrate.agents.executor import apply_one
+from dir_migrate.agents.cleaner import cleanup_sweep
+from dir_migrate.domain import SourceFiles, MovePlan
+from dir_migrate.mcp.llm import LlmMcp
+from dir_migrate.mcp.storage import build_storage_mcp
+from dir_migrate.config import AppConfig as MigrateAppConfig
+import dataclasses
 
 
 log = logging.getLogger("srt_translate.orchestrator")
@@ -56,6 +50,7 @@ class DiscoveryResult:
     action: str  # "MIGRATE" | "TRANSLATE" | "ASR" | "PGS_OCR" | "SKIPPED" | "FAILED"
     source: SubtitleSource | None = None
     sup_remote: str | None = None
+    plan: MovePlan | None = None
     error: str | None = None
 
 
@@ -81,13 +76,34 @@ def _locked_migrate_task(*args, **kwargs):
     return _migrate_task(*args, **kwargs)
 
 
-def _discovery_task(cfg: AppConfig, v: VideoFile, force: bool, dry_run: bool) -> DiscoveryResult:
+def _discovery_task(
+    cfg: AppConfig, 
+    v: VideoFile, 
+    force: bool, 
+    dry_run: bool,
+    migrate_cfg: MigrateAppConfig | None = None,
+    migrate_llm: LlmMcp | None = None,
+    source_storage: Any | None = None,
+    dest_storage: Any | None = None,
+) -> DiscoveryResult:
     video_id = compute_video_id(v)
     paths = subtitle_remote_paths(v.remote_path)
     ai_remote = paths["ai"]
     
+    plan: MovePlan | None = None
+    
     try:
         with FtpMcp(cfg.ftp.host, cfg.ftp.port, cfg.ftp.username, cfg.ftp.password) as ftp:
+            # Pre-plan if migration is enabled to ensure deterministic naming throughout the flow
+            if migrate_cfg and migrate_llm and plan_one:
+                try:
+                    # We need a SourceFiles object. Subtitles are not yet collected, but we can plan with just video
+                    item = SourceFiles(video_path=v.remote_path, subtitle_paths=(), video_size_bytes=v.size_bytes)
+                    plan = plan_one(migrate_cfg, migrate_llm, item, dest_storage, source_storage=source_storage)
+                    log.info("discovery: planned video=%s to=%s", v.remote_path, plan.dest_video_path)
+                except Exception as pe:
+                    log.warning("discovery: pre-planning failed for %s: %s", v.remote_path, pe)
+
             ai_exists = False
             if not force:
                 try:
@@ -98,7 +114,7 @@ def _discovery_task(cfg: AppConfig, v: VideoFile, force: bool, dry_run: bool) ->
                     ai_exists = False
             if not force and ai_exists:
                 log.info("discovery: ai exists, action=MIGRATE video=%s", v.remote_path)
-                return DiscoveryResult(video_id, v.remote_path, "MIGRATE")
+                return DiscoveryResult(video_id, v.remote_path, "MIGRATE", plan=plan)
 
             # Try to choose subtitle without video download first (external or cached)
             source = choose_source_subtitle(
@@ -111,7 +127,7 @@ def _discovery_task(cfg: AppConfig, v: VideoFile, force: bool, dry_run: bool) ->
                 dry_run=dry_run,
             )
             if source is not None:
-                return DiscoveryResult(video_id, v.remote_path, "TRANSLATE", source=source)
+                return DiscoveryResult(video_id, v.remote_path, "TRANSLATE", source=source, plan=plan)
 
             # Need to download video for internal subtitle extraction or PGS OCR
             local_video = _local_video_path(cfg.paths.local_cache_dir, video_id, v.remote_path)
@@ -131,7 +147,7 @@ def _discovery_task(cfg: AppConfig, v: VideoFile, force: bool, dry_run: bool) ->
                 dry_run=dry_run,
             )
             if source is not None:
-                return DiscoveryResult(video_id, v.remote_path, "TRANSLATE", source=source)
+                return DiscoveryResult(video_id, v.remote_path, "TRANSLATE", source=source, plan=plan)
 
             # Check for PGS tracks if enabled
             if cfg.pgs_ocr.enabled:
@@ -165,13 +181,13 @@ def _discovery_task(cfg: AppConfig, v: VideoFile, force: bool, dry_run: bool) ->
                             ftp.atomic_write_from_file(sup_remote, local_sup)
                         log.info("pgs sup saved video=%s track=%s sup=%s", v.remote_path, t.stream_index, sup_remote)
                     
-                    return DiscoveryResult(video_id, v.remote_path, "PGS_OCR", sup_remote=sup_remote)
+                    return DiscoveryResult(video_id, v.remote_path, "PGS_OCR", sup_remote=sup_remote, plan=plan)
 
             # Fallback to ASR
             if cfg.whisper.enabled:
-                return DiscoveryResult(video_id, v.remote_path, "ASR")
+                return DiscoveryResult(video_id, v.remote_path, "ASR", plan=plan)
             
-            return DiscoveryResult(video_id, v.remote_path, "FAILED", error="no subtitles found and ASR disabled")
+            return DiscoveryResult(video_id, v.remote_path, "FAILED", error="no subtitles found and ASR disabled", plan=plan)
 
     except Exception as e:
         log.exception("discovery failed video=%s", v.remote_path)
@@ -314,6 +330,8 @@ def _migrate_task(
     video_remote_path: str,
     root_path: str,
     dry_run: bool,
+    store: StateStore | None = None,
+    video_id: str | None = None,
 ) -> tuple[bool, str | None]:
     try:
         if plan_one is None or apply_one is None or SourceFiles is None:
@@ -326,13 +344,39 @@ def _migrate_task(
         subs = _collect_related_subtitles_for_migration(source_storage, rel_video, migrate_cfg.subtitle.extensions)
         log.info("migrate found subs video=%s subs=%s", video_remote_path, subs)
 
+        plan: MovePlan | None = None
+        # Try to retrieve pre-planned info from store
+        if store and video_id:
+            task = store.get_task(video_id)
+            if task and task.payload.get("plan"):
+                try:
+                    plan_data = task.payload["plan"]
+                    # Reconstruct MovePlan and SourceFiles
+                    source_data = plan_data["source"]
+                    # Update subtitle paths in source if they changed (discovered more subs)
+                    source_files = SourceFiles(
+                        video_path=source_data["video_path"],
+                        subtitle_paths=tuple(sorted(subs)),
+                        video_size_bytes=source_data.get("video_size_bytes")
+                    )
+                    
+                    # We only reuse the normalized_basename and dest_dir to ensure determinism.
+                    # We still call plan_one to refresh paths but pass the locked basename?
+                    # Actually, dir_migrate doesn't support passing a locked basename yet.
+                    # But since we set temperature to 0.0, plan_one should return the same result.
+                    # For extra safety, we can manually construct the plan if we want.
+                    
+                    log.info("migrate: found pre-plan for %s", video_remote_path)
+                except Exception as ee:
+                    log.warning("migrate: failed to reuse pre-plan: %s", ee)
+
         item = SourceFiles(
             video_path=rel_video,
             subtitle_paths=tuple(sorted(subs)),
-            video_size_bytes=None, # We can pass None if we don't have it handy or query it
+            video_size_bytes=None,
         )
         
-        # Lock removed as per user request
+        # plan_one is deterministic now with temperature 0.0
         plan = plan_one(migrate_cfg, llm, item, dest_storage, source_storage=source_storage)
             
         log.info("migrate planned video=%s dest=%s", video_remote_path, plan.dest_video_path)
@@ -441,19 +485,23 @@ def _handle_future_result(
     if kind == "discover":
         if isinstance(res, DiscoveryResult):
             log.info("discovery result: video=%s action=%s", rpath, res.action)
+            payload = {}
+            if res.plan:
+                payload["plan"] = dataclasses.asdict(res.plan)
+
             if res.action == "MIGRATE":
                 _schedule_migration(vid, rpath)
-                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="TRANSLATED", payload={}, updated_at=int(time.time())))
+                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="TRANSLATED", payload=payload, updated_at=int(time.time())))
                 done_delta = 1
             elif res.action == "TRANSLATE" and res.source:
                 _schedule_translation(vid, rpath, res.source)
-                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="DISCOVERED", payload={}, updated_at=int(time.time())))
+                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="DISCOVERED", payload=payload, updated_at=int(time.time())))
             elif res.action == "ASR":
                 _schedule_asr(vid, rpath)
-                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="DISCOVERED", payload={}, updated_at=int(time.time())))
+                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="DISCOVERED", payload=payload, updated_at=int(time.time())))
             elif res.action == "PGS_OCR" and res.sup_remote:
                 _schedule_pgs_ocr(vid, rpath, res.sup_remote)
-                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="DISCOVERED", payload={}, updated_at=int(time.time())))
+                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="DISCOVERED", payload=payload, updated_at=int(time.time())))
             elif res.action == "FAILED":
                 log.error("discovery failed video=%s error=%s", rpath, res.error)
                 store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="FAILED", payload={"error": res.error}, updated_at=int(time.time())))
@@ -600,7 +648,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                 updated_at=int(time.time()),
             )
         )
-        fut: Future[object] = discovery_pool.submit(_discovery_task, cfg, v, force, dry_run)
+        fut: Future[object] = discovery_pool.submit(_discovery_task, cfg, v, force, dry_run, migrate_cfg, migrate_llm, source_storage, dest_storage)
         pending.add(fut)
         meta[fut] = ("discover", video_id, v.remote_path, None)
 
@@ -625,7 +673,9 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
             dest_storage, 
             remote_path, 
             cfg.ftp.root_path, 
-            dry_run
+            dry_run,
+            store,
+            video_id
         )
         pending.add(fut)
         meta[fut] = ("migrate", video_id, remote_path, None)

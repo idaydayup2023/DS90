@@ -16,7 +16,7 @@ from ..mcp.imdb import ImdbMcp, ImdbLookupDebug
 from ..mcp.llm import LlmMcp
 from ..mcp.storage import StorageMcp
 from ..mcp.media import MediaMcp
-from ..naming import build_normalized_basename, subtitle_suffix
+from ..naming import build_normalized_basename, subtitle_suffix, _dotify
 from ..planning import dest_dir_for
 
 
@@ -158,15 +158,7 @@ def _normalize_imdb_query_title(title: str | None, year: int | None) -> str | No
     return t or None
 
 
-def _dotify(text: str) -> str:
-    t = (text or "").strip()
-    if not t:
-        return ""
-    t = t.replace(":", " ")
-    t = re.sub(r"[\\[\\](){}]", " ", t)
-    t = re.sub(r"[^A-Za-z0-9]+", ".", t)
-    t = re.sub(r"\\.+", ".", t)
-    return t.strip(".")
+# _dotify imported from naming.py
 
 
 def _franchise_present_in_dest(dest_storage: StorageMcp, cfg: AppConfig, franchise_root: str) -> bool:
