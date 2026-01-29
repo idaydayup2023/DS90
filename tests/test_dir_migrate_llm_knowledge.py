@@ -1,9 +1,9 @@
 
 import unittest
 from unittest.mock import MagicMock, patch
-from src.dir_migrate.mcp.llm import LlmMcp
-from src.dir_migrate.domain import ImdbKnowledge
-from src.srt_translate.mcp.llm_mcp import LlmMcp as BaseLlmMcp
+from dir_migrate.mcp.llm import LlmMcp
+from dir_migrate.domain import ImdbKnowledge
+from srt_translate.mcp.llm_mcp import LlmMcp as BaseLlmMcp
 
 class TestLlmKnowledge(unittest.TestCase):
     def test_query_imdb(self):

@@ -27,6 +27,9 @@ def generate_summary(
     force: bool,
     dry_run: bool,
 ) -> None:
+    if not cfg.summary.enabled:
+        return
+
     directory, stem, _ = split_basename(video_remote_path)
     summary_remote = posixpath.join(directory, f"{stem}.md")
 
@@ -46,12 +49,13 @@ def generate_summary(
         srt_content = source.local_path.read_text(encoding="utf-8", errors="replace")
         
         # Truncate content if excessively long to avoid blowing up context window
-        # User has configured 256k context.
-        # We limit to 200k chars to leave room for prompt and output.
-        MAX_CHARS = 200000
-        if len(srt_content) > MAX_CHARS:
-            log.warning("Subtitle content too long (%d chars), truncating to %d", len(srt_content), MAX_CHARS)
-            srt_content = srt_content[:MAX_CHARS] + "\n...[Content Truncated]..."
+        # Use config if available, default to 100k
+        max_chars = cfg.summary.max_chars
+        if len(srt_content) > max_chars:
+            log.warning("Subtitle content too long (%d chars), truncating to %d", len(srt_content), max_chars)
+            # Take beginning and end to preserve context
+            half = max_chars // 2
+            srt_content = srt_content[:half] + "\n...[Content Truncated]...\n" + srt_content[-half:]
 
         system_prompt = (
             "Role:\n"

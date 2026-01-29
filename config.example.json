@@ -47,6 +47,11 @@
     "batch_size": 20,
     "max_retries": 2
   },
+  "summary": {
+    "enabled": false,
+    "max_chars": 100000,
+    "workers": 1
+  },
   "dir_migrate": {
     "source": {
       "kind": "ftp",

@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import posixpath
 import time
-from concurrent.futures import FIRST_COMPLETED, Future, wait
+import threading
+from concurrent.futures import Future, wait, FIRST_COMPLETED
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -49,6 +50,16 @@ log = logging.getLogger("srt_translate.orchestrator")
 
 
 @dataclass(frozen=True)
+class DiscoveryResult:
+    video_id: str
+    video_path: str
+    action: str  # "MIGRATE" | "TRANSLATE" | "ASR" | "PGS_OCR" | "SKIPPED" | "FAILED"
+    source: SubtitleSource | None = None
+    sup_remote: str | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class RunSummary:
     videos: int
     skipped: int
@@ -68,6 +79,103 @@ def _locked_generate_summary(*args, **kwargs):
 
 def _locked_migrate_task(*args, **kwargs):
     return _migrate_task(*args, **kwargs)
+
+
+def _discovery_task(cfg: AppConfig, v: VideoFile, force: bool, dry_run: bool) -> DiscoveryResult:
+    video_id = compute_video_id(v)
+    paths = subtitle_remote_paths(v.remote_path)
+    ai_remote = paths["ai"]
+    
+    try:
+        with FtpMcp(cfg.ftp.host, cfg.ftp.port, cfg.ftp.username, cfg.ftp.password) as ftp:
+            ai_exists = False
+            if not force:
+                try:
+                    ai_exists = ftp.exists(ai_remote)
+                    log.debug("discovery: ai_remote=%s exists=%s", ai_remote, ai_exists)
+                except Exception as e:
+                    log.warning("discovery: failed to check ai_exists: %s", e)
+                    ai_exists = False
+            if not force and ai_exists:
+                log.info("discovery: ai exists, action=MIGRATE video=%s", v.remote_path)
+                return DiscoveryResult(video_id, v.remote_path, "MIGRATE")
+
+            # Try to choose subtitle without video download first (external or cached)
+            source = choose_source_subtitle(
+                ftp=ftp,
+                media=None,
+                pgs_ocr=None,
+                cache_dir=cfg.paths.local_cache_dir / "work" / video_id,
+                video_remote_path=v.remote_path,
+                local_video_path=None,
+                dry_run=dry_run,
+            )
+            if source is not None:
+                return DiscoveryResult(video_id, v.remote_path, "TRANSLATE", source=source)
+
+            # Need to download video for internal subtitle extraction or PGS OCR
+            local_video = _local_video_path(cfg.paths.local_cache_dir, video_id, v.remote_path)
+            if not (local_video.exists() and local_video.stat().st_size > 0):
+                log.info("downloading video for subtitle discovery: %s", v.remote_path)
+                ftp.download(v.remote_path, local_video)
+            
+            media = MediaMcp()
+            # Try again with local video
+            source = choose_source_subtitle(
+                ftp=ftp,
+                media=media,
+                pgs_ocr=None,
+                cache_dir=cfg.paths.local_cache_dir / "work" / video_id,
+                video_remote_path=v.remote_path,
+                local_video_path=local_video,
+                dry_run=dry_run,
+            )
+            if source is not None:
+                return DiscoveryResult(video_id, v.remote_path, "TRANSLATE", source=source)
+
+            # Check for PGS tracks if enabled
+            if cfg.pgs_ocr.enabled:
+                try:
+                    tracks = media.probe_subtitles(local_video)
+                except Exception:
+                    tracks = []
+                pgs_tracks = [t for t in tracks if getattr(t, "is_text", False) is False and (t.lang or "").lower() in ("eng", "en") and media.is_pgs(t)]
+                if pgs_tracks:
+                    def _rank(t) -> tuple[int, int, int, int]:
+                        sdh = 1 if "sdh" in (t.title or "").lower() or "hi" in (t.title or "").lower() else 0
+                        return (0 if t.is_default else 1, 0 if not t.is_forced else 1, sdh, int(t.stream_index))
+
+                    pgs_tracks.sort(key=_rank)
+                    t = pgs_tracks[0]
+                    d, stem, _ = split_basename(v.remote_path)
+                    lang = (t.lang or "en").strip().lower()
+                    if lang == "eng": lang = "en"
+                    sup_remote = posixpath.join(d, f"{stem}.{lang}.sup")
+                    
+                    if force or (not ftp.exists(sup_remote)):
+                        local_sup = cfg.paths.local_cache_dir / "work" / video_id / "subs" / posixpath.basename(sup_remote)
+                        pgs_ocr = PgsOcrMcp(
+                            cache_dir=cfg.paths.local_cache_dir,
+                            auto_install=cfg.pgs_ocr.auto_install,
+                            languages=cfg.pgs_ocr.languages,
+                            keep_temp_files=cfg.pgs_ocr.keep_temp_files,
+                        )
+                        pgs_ocr.extract_track_to_sup(local_video, t.stream_index, local_sup)
+                        if not dry_run:
+                            ftp.atomic_write_from_file(sup_remote, local_sup)
+                        log.info("pgs sup saved video=%s track=%s sup=%s", v.remote_path, t.stream_index, sup_remote)
+                    
+                    return DiscoveryResult(video_id, v.remote_path, "PGS_OCR", sup_remote=sup_remote)
+
+            # Fallback to ASR
+            if cfg.whisper.enabled:
+                return DiscoveryResult(video_id, v.remote_path, "ASR")
+            
+            return DiscoveryResult(video_id, v.remote_path, "FAILED", error="no subtitles found and ASR disabled")
+
+    except Exception as e:
+        log.exception("discovery failed video=%s", v.remote_path)
+        return DiscoveryResult(video_id, v.remote_path, "FAILED", error=str(e))
 
 
 def _local_video_path(cache_dir: Path, video_id: str, remote_path: str) -> Path:
@@ -118,7 +226,7 @@ def _translate_and_upload(
         
         # Lock removed as per user request
         result = translate_srt_to_bilingual(
-            ollama=llm,
+            llm=llm,
             model=model,
             srt_content=srt_content,
             batch_size=cfg.translation.batch_size,
@@ -241,14 +349,24 @@ def _migrate_task(
         return False, str(e)
 
 
+_dir_list_cache: dict[str, list[tuple[str, str, int]]] = {}
+_dir_list_lock = threading.Lock()
+
 def _collect_related_subtitles_for_migration(source_storage, rel_video_path: str, subtitle_exts: tuple[str, ...]) -> list[str]:
     directory = posixpath.dirname(rel_video_path)
     video_stem = posixpath.splitext(posixpath.basename(rel_video_path))[0]
     stem_lower = video_stem.lower()
     ext_set = {e.lower() for e in subtitle_exts}
 
+    with _dir_list_lock:
+        if directory in _dir_list_cache:
+            entries = _dir_list_cache[directory]
+        else:
+            entries = source_storage.list_dir(directory)
+            _dir_list_cache[directory] = entries
+
     subs: list[str] = []
-    for p, t, _size in source_storage.list_dir(directory):
+    for p, t, _size in entries:
         if t != "file":
             continue
         name = posixpath.basename(p)
@@ -281,6 +399,7 @@ def _handle_future_result(
     migrated_delta = 0
 
     kind, vid, rpath, extra = meta.pop(fut, ("unknown", "", "", None))
+    log.info("task finished kind=%s video=%s", kind, rpath)
     try:
         res = fut.result()
     except Exception as e:
@@ -319,7 +438,33 @@ def _handle_future_result(
         )
         return 0, 1, 0
 
-    if kind in ("asr", "pgs_ocr"):
+    if kind == "discover":
+        if isinstance(res, DiscoveryResult):
+            log.info("discovery result: video=%s action=%s", rpath, res.action)
+            if res.action == "MIGRATE":
+                _schedule_migration(vid, rpath)
+                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="TRANSLATED", payload={}, updated_at=int(time.time())))
+                done_delta = 1
+            elif res.action == "TRANSLATE" and res.source:
+                _schedule_translation(vid, rpath, res.source)
+                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="DISCOVERED", payload={}, updated_at=int(time.time())))
+            elif res.action == "ASR":
+                _schedule_asr(vid, rpath)
+                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="DISCOVERED", payload={}, updated_at=int(time.time())))
+            elif res.action == "PGS_OCR" and res.sup_remote:
+                _schedule_pgs_ocr(vid, rpath, res.sup_remote)
+                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="DISCOVERED", payload={}, updated_at=int(time.time())))
+            elif res.action == "FAILED":
+                log.error("discovery failed video=%s error=%s", rpath, res.error)
+                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="FAILED", payload={"error": res.error}, updated_at=int(time.time())))
+                failed_delta = 1
+            elif res.action == "SKIPPED":
+                done_delta = 1
+        else:
+            log.error("unexpected discovery result type: %s", type(res))
+            failed_delta = 1
+
+    elif kind in ("asr", "pgs_ocr"):
         if isinstance(res, SubtitleSource):
             _schedule_translation(vid, rpath, res)
         else:
@@ -406,8 +551,9 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
             )
 
     now = int(time.time())
+    discovery_pool = DaemonExecutor(max_workers=max(1, cfg.ftp.concurrency), thread_name_prefix="discover")
     translation_pool = DaemonExecutor(max_workers=max(1, cfg.translation.workers), thread_name_prefix="translate")
-    summary_pool = DaemonExecutor(max_workers=max(1, cfg.translation.workers), thread_name_prefix="summary")
+    summary_pool = DaemonExecutor(max_workers=max(1, cfg.summary.workers), thread_name_prefix="summary")
     asr_pool = DaemonExecutor(max_workers=max(1, cfg.whisper.asr_workers), thread_name_prefix="asr")
     pgs_ocr_pool = DaemonExecutor(max_workers=max(1, cfg.pgs_ocr.max_workers), thread_name_prefix="pgs_ocr") if cfg.pgs_ocr.enabled else None
     
@@ -417,11 +563,21 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
     source_storage = None
     dest_storage = None
     if migrate_cfg and plan_one and apply_one and SourceFiles and LlmMcp and build_storage_mcp:
+        log.info("migration enabled: initializing migrate_pool")
         migrate_pool = DaemonExecutor(max_workers=2, thread_name_prefix="migrate")
-        ollama_migrate = OllamaMcp(migrate_cfg.ollama.base_url, timeout_seconds=migrate_cfg.ollama.timeout_seconds)
-        migrate_llm = LlmMcp(ollama_migrate, migrate_cfg.ollama.model, migrate_cfg.ollama.temperature)
+        llm_mcp_migrate = build_llm_mcp(migrate_cfg.llm.provider, migrate_cfg.llm.base_url, timeout_seconds=migrate_cfg.llm.timeout_seconds)
+        model_migrate = resolve_llm_model(llm_mcp_migrate, migrate_cfg.llm.model)
+        migrate_llm = LlmMcp(llm_mcp_migrate, model_migrate, migrate_cfg.llm.temperature)
         source_storage = build_storage_mcp(migrate_cfg.source)
         dest_storage = build_storage_mcp(migrate_cfg.dest)
+    else:
+        log.warning(
+            "migration disabled: cfg=%s planner=%s executor=%s storage=%s",
+            migrate_cfg is not None,
+            plan_one is not None,
+            apply_one is not None,
+            build_storage_mcp is not None,
+        )
 
     pending: set[Future[object]] = set()
     pending_ops: dict[str, set[str]] = {}
@@ -431,6 +587,22 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
     done_count = 0
     failed_count = 0
     migrated_count = 0
+
+    def _schedule_discovery(v: VideoFile) -> None:
+        video_id = compute_video_id(v)
+        log.info("discovery queued video=%s", v.remote_path)
+        store.upsert_task(
+            TaskRecord(
+                video_id=video_id,
+                video_path=v.remote_path,
+                status="DISCOVERING",
+                payload={"remote_path": v.remote_path, "size_bytes": v.size_bytes, "mtime": v.mtime},
+                updated_at=int(time.time()),
+            )
+        )
+        fut: Future[object] = discovery_pool.submit(_discovery_task, cfg, v, force, dry_run)
+        pending.add(fut)
+        meta[fut] = ("discover", video_id, v.remote_path, None)
 
     def _schedule_migration(video_id: str, remote_path: str) -> None:
         if not migrate_pool:
@@ -459,6 +631,8 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
         meta[fut] = ("migrate", video_id, remote_path, None)
 
     def _schedule_summary(video_id: str, remote_path: str, source: SubtitleSource) -> None:
+        if not cfg.summary.enabled:
+            return
         log.info("summary queued video=%s", remote_path)
         if video_id not in pending_ops:
             pending_ops[video_id] = set()
@@ -547,177 +721,22 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
         pending.add(fut)
         meta[fut] = ("pgs_ocr", video_id, remote_path, None)
 
-    with FtpMcp(cfg.ftp.host, cfg.ftp.port, cfg.ftp.username, cfg.ftp.password) as ftp:
-        media = MediaMcp()
-        pgs_ocr = None
-        if cfg.pgs_ocr.enabled:
-            pgs_ocr = PgsOcrMcp(
-                cache_dir=cfg.paths.local_cache_dir,
-                auto_install=cfg.pgs_ocr.auto_install,
-                languages=cfg.pgs_ocr.languages,
-                keep_temp_files=cfg.pgs_ocr.keep_temp_files,
-            )
-        for v in videos:
-            video_id = compute_video_id(v)
-            paths = subtitle_remote_paths(v.remote_path)
-            ai_remote = paths["ai"]
-            ai_exists = False
-            if not force:
-                try:
-                    ai_exists = ftp.exists(ai_remote)
-                except Exception:
-                    ai_exists = False
-            if not force and ai_exists:
-                skipped += 1
-                store.upsert_task(
-                    TaskRecord(
-                        video_id=video_id,
-                        video_path=v.remote_path,
-                        status="SKIPPED",
-                        payload={"reason": "ai_exists", "ai_remote": ai_remote},
-                        updated_at=now,
-                    )
-                )
-                if migrate_pool:
-                    _schedule_migration(video_id, v.remote_path)
-                continue
-            if (not force) and (not ai_exists):
-                log.info("ai missing video=%s ai=%s", v.remote_path, ai_remote)
+    # Phase 1: Fast scheduling
+    for v in videos:
+        _schedule_discovery(v)
 
-            store.upsert_task(
-                TaskRecord(
-                    video_id=video_id,
-                    video_path=v.remote_path,
-                    status="DISCOVERED",
-                    payload={"remote_path": v.remote_path, "size_bytes": v.size_bytes, "mtime": v.mtime},
-                    updated_at=now,
-                )
-            )
-
-            source = choose_source_subtitle(
-                ftp=ftp,
-                media=None,
-                pgs_ocr=None,
-                cache_dir=cfg.paths.local_cache_dir / "work" / video_id,
-                video_remote_path=v.remote_path,
-                local_video_path=None,
-                dry_run=dry_run,
-            )
-            if source is not None:
-                _schedule_translation(video_id, v.remote_path, source)
-                # If we scheduled a translation, and concurrency is high, wait a bit
-                # to avoid overwhelming the system if we have too many pending tasks
-                while len(pending) >= cfg.translation.workers * 2:
-                     done, pending = wait(pending, return_when=FIRST_COMPLETED, timeout=60)
-                     if not done:
-                         log.info("discovery loop: still waiting for %d tasks: %s", len(pending), [meta[f][0] for f in pending if f in meta])
-                         continue
-                     for fut in done:
-                        dd, fd, md = _handle_future_result(
-                            fut, meta, store, cfg, pending_ops, translation_success, migrate_pool,
-                            _schedule_asr, _schedule_translation, _schedule_summary, _schedule_migration, _schedule_pgs_ocr
-                        )
-                        done_count += dd
-                        failed_count += fd
-                        migrated_count += md
-                continue
-
-            local_video = _download_video(cfg, video_id, v.remote_path)
-            source = choose_source_subtitle(
-                ftp=ftp,
-                media=media,
-                pgs_ocr=pgs_ocr,
-                cache_dir=cfg.paths.local_cache_dir / "work" / video_id,
-                video_remote_path=v.remote_path,
-                local_video_path=local_video,
-                dry_run=dry_run,
-            )
-            if source is not None:
-                _schedule_translation(video_id, v.remote_path, source)
-                continue
-
-            if pgs_ocr_pool and pgs_ocr:
-                prev = store.get_task(video_id)
-                if (
-                    prev is not None
-                    and prev.status == "PGS_OCR_FAILED"
-                    and (not force)
-                    and (cfg.whisper.enabled)
-                    and (int(time.time()) - int(prev.updated_at) <= 7 * 86400)
-                ):
-                    log.info("pgs ocr skipped due to previous failure video=%s", v.remote_path)
-                    _schedule_asr(video_id, v.remote_path)
-                    continue
-                try:
-                    tracks = media.probe_subtitles(local_video)
-                except Exception:
-                    tracks = []
-                pgs_tracks = [t for t in tracks if getattr(t, "is_text", False) is False and (t.lang or "").lower() in ("eng", "en") and media.is_pgs(t)]
-                if pgs_tracks:
-                    def _rank(t) -> tuple[int, int, int, int]:
-                        sdh = 1 if "sdh" in (t.title or "").lower() or "hi" in (t.title or "").lower() else 0
-                        return (
-                            0 if t.is_default else 1,
-                            0 if not t.is_forced else 1,
-                            sdh,
-                            int(t.stream_index),
-                        )
-
-                    pgs_tracks.sort(key=_rank)
-                    t = pgs_tracks[0]
-                    d, stem, _ = split_basename(v.remote_path)
-                    lang = (t.lang or "en").strip().lower()
-                    if lang == "eng":
-                        lang = "en"
-                    sup_remote = posixpath.join(d, f"{stem}.{lang}.sup")
-                    if force or (not ftp.exists(sup_remote)):
-                        local_sup = cfg.paths.local_cache_dir / "work" / video_id / "subs" / posixpath.basename(sup_remote)
-                        try:
-                            pgs_ocr.extract_track_to_sup(local_video, t.stream_index, local_sup)
-                            if not dry_run:
-                                ftp.atomic_write_from_file(sup_remote, local_sup)
-                            log.info("pgs sup saved video=%s track=%s sup=%s", v.remote_path, t.stream_index, sup_remote)
-                        except Exception as e:
-                            log.warning("pgs sup extract failed video=%s track=%s error=%s", v.remote_path, t.stream_index, e)
-                    _schedule_pgs_ocr(video_id, v.remote_path, sup_remote)
-                    continue
-
-            if cfg.whisper.enabled:
-                _schedule_asr(video_id, v.remote_path)
-                # Also wait if too many pending tasks
-                while len(pending) >= cfg.whisper.asr_workers + 2: # Keep queue small for ASR
-                     done, pending = wait(pending, return_when=FIRST_COMPLETED, timeout=60)
-                     if not done:
-                         log.info("whisper check: still waiting for %d tasks: %s", len(pending), [meta[f][0] for f in pending if f in meta])
-                         continue
-                     for fut in done:
-                        dd, fd, md = _handle_future_result(
-                            fut, meta, store, cfg, pending_ops, translation_success, migrate_pool,
-                            _schedule_asr, _schedule_translation, _schedule_summary, _schedule_migration, _schedule_pgs_ocr
-                        )
-                        done_count += dd
-                        failed_count += fd
-                        migrated_count += md
-            else:
-                failed_count += 1
-                store.upsert_task(
-                    TaskRecord(
-                        video_id=video_id,
-                        video_path=v.remote_path,
-                        status="FAILED",
-                        payload={"error": "no subtitles and whisper disabled"},
-                        updated_at=int(time.time()),
-                    )
-                )
-
+    # Phase 2: Handle all tasks in the pool
     try:
         while pending:
-            # Add a timeout to wait so we can log progress or check for hangs
-            done, pending = wait(pending, return_when=FIRST_COMPLETED, timeout=60)
+            done, pending = wait(pending, return_when=FIRST_COMPLETED, timeout=10)
             if not done:
-                log.info("still waiting for %d tasks: %s", len(pending), [meta[f][0] for f in pending if f in meta])
+                active_kinds = {}
+                for f in pending:
+                    k = meta.get(f, ("unknown",))[0]
+                    active_kinds[k] = active_kinds.get(k, 0) + 1
+                log.info("waiting for %d tasks: %s", len(pending), active_kinds)
                 continue
-            
+                
             for fut in done:
                 dd, fd, md = _handle_future_result(
                     fut, meta, store, cfg, pending_ops, translation_success, migrate_pool,
@@ -726,6 +745,8 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                 done_count += dd
                 failed_count += fd
                 migrated_count += md
+
+        # Cleanup sweep (only if migration was active)
         if migrate_cfg and source_storage and cleanup_sweep:
             if migrate_cfg.cleanup.enabled and migrate_cfg.execution.apply and (not dry_run):
                 log.info("migrate cleanup sweep start root=/Downloads max_dirs=%d", 200)
@@ -734,16 +755,10 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
                     log.info("migrate cleanup sweep done removed=%d", removed)
                 except Exception as e:
                     log.warning("migrate cleanup sweep failed error=%s", e)
-            else:
-                log.info(
-                    "migrate cleanup sweep skipped enabled=%s apply=%s dry_run=%s",
-                    migrate_cfg.cleanup.enabled,
-                    migrate_cfg.execution.apply,
-                    dry_run,
-                )
     except KeyboardInterrupt:
         for fut in list(pending):
             fut.cancel()
+        discovery_pool.shutdown(wait=False, cancel_futures=True)
         translation_pool.shutdown(wait=False, cancel_futures=True)
         asr_pool.shutdown(wait=False, cancel_futures=True)
         if pgs_ocr_pool:
@@ -751,13 +766,15 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
         if migrate_pool:
             migrate_pool.shutdown(wait=False, cancel_futures=True)
         raise
-    else:
-        translation_pool.shutdown(wait=False, cancel_futures=False)
-        asr_pool.shutdown(wait=False, cancel_futures=False)
+    finally:
+        discovery_pool.shutdown(wait=True)
+        translation_pool.shutdown(wait=True)
+        summary_pool.shutdown(wait=True)
+        asr_pool.shutdown(wait=True)
         if pgs_ocr_pool:
-            pgs_ocr_pool.shutdown(wait=False, cancel_futures=False)
+            pgs_ocr_pool.shutdown(wait=True)
         if migrate_pool:
-            migrate_pool.shutdown(wait=False, cancel_futures=False)
+            migrate_pool.shutdown(wait=True)
     elapsed = time.time() - started
     log.info(
         "run_once summary videos=%d skipped=%d done=%d failed=%d elapsed=%.2fs",

@@ -89,7 +89,7 @@ cp config.example.json config.json
 ### 2) 先跑 dry-run（不写回）
 
 ```bash
-python3 srt_translate.py --config config.json --once --dry-run
+python3 run_srt_translate.py --config config.json --once --dry-run
 ```
 
 你会在日志看到类似：
@@ -101,25 +101,25 @@ python3 srt_translate.py --config config.json --once --dry-run
 ### 3) 正式写回生成字幕
 
 ```bash
-python3 srt_translate.py --config config.json --once
+python3 run_srt_translate.py --config config.json --once
 ```
 
 如果你希望强制重译（即使远端已存在 `.ai.srt`）：
 
 ```bash
-python3 srt_translate.py --config config.json --once --force
+python3 run_srt_translate.py --config config.json --once --force
 ```
 
 ## 命令详解
 
-### 1. 字幕翻译工具 (`srt_translate.py`)
+### 1. 字幕翻译工具 (`run_srt_translate.py`)
 
 核心工具，负责扫描 FTP、提取字幕、调用 LLM 翻译并回传。
 
 **基本用法**
 
 ```bash
-python3 srt_translate.py --config <CONFIG_PATH> [OPTIONS]
+python3 run_srt_translate.py --config <CONFIG_PATH> [OPTIONS]
 ```
 
 **参数说明**
@@ -135,25 +135,25 @@ python3 srt_translate.py --config <CONFIG_PATH> [OPTIONS]
 
 *   **测试配置与翻译效果（安全模式）**：
     ```bash
-    python3 srt_translate.py --config config.json --once --dry-run
+    python3 run_srt_translate.py --config config.json --once --dry-run
     ```
 *   **生产环境运行（自动跳过已翻译文件）**：
     ```bash
-    python3 srt_translate.py --config config.json --once
+    python3 run_srt_translate.py --config config.json --once
     ```
 *   **修复/重译特定批次（强制覆盖）**：
     ```bash
-    python3 srt_translate.py --config config.json --once --force
+    python3 run_srt_translate.py --config config.json --once --force
     ```
 
-### 2. 目录迁移工具 (`dir_migrate.py`)
+### 2. 目录迁移工具 (`run_dir_migrate.py`)
 
 辅助工具，用于整理下载目录，识别影视信息并按规则迁移到标准库。
 
 **基本用法**
 
 ```bash
-python3 dir_migrate.py --config <CONFIG_PATH> [OPTIONS]
+python3 run_dir_migrate.py --config <CONFIG_PATH> [OPTIONS]
 ```
 
 **参数说明**
@@ -170,18 +170,18 @@ python3 dir_migrate.py --config <CONFIG_PATH> [OPTIONS]
 
 *   **预览迁移计划（不执行移动）**：
     ```bash
-    python3 dir_migrate.py --config config.json --once --dry-run
+    python3 run_dir_migrate.py --config config.json --once --dry-run
     ```
     *输出示例：* `{"src": "/dl/movie.mkv", "dst": "/movies/Movie (2024)/Movie.mkv", "reason": "match"}`
 
 *   **小规模验证（只处理前 5 个视频）**：
     ```bash
-    python3 dir_migrate.py --config config.json --once --apply --limit 5
+    python3 run_dir_migrate.py --config config.json --once --apply --limit 5
     ```
 
 *   **正式执行全量迁移**：
     ```bash
-    python3 dir_migrate.py --config config.json --once --apply
+    python3 run_dir_migrate.py --config config.json --once --apply
     ```
 
 ## 输出文件约定
@@ -225,13 +225,13 @@ python3 demo_translate_local_srt.py --config config.json --in input.srt --out ou
 - dry-run（输出迁移计划 JSON 行，不移动文件）：
 
 ```bash
-python3 dir_migrate.py --config config.json --once --dry-run
+python3 run_dir_migrate.py --config config.json --once --dry-run
 ```
 
 - apply（执行移动/重命名）：
 
 ```bash
-python3 dir_migrate.py --config config.json --once --apply
+python3 run_dir_migrate.py --config config.json --once --apply
 ```
 
 ## 常见问题

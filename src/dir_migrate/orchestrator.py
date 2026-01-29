@@ -48,10 +48,10 @@ def run_once(cfg: AppConfig) -> RunSummary:
     llm = LlmMcp(llm=llm_mcp, model=model, temperature=cfg.llm.temperature, max_retries=2)
 
     pool = DaemonExecutor(max_workers=max(1, cfg.execution.workers), thread_name_prefix="plan")
-    pending: set[Future[object]] = set()
-    meta: dict[Future[object], SourceFiles] = {}
+    pending: set[Future[MovePlan]] = set()
+    meta: dict[Future[MovePlan], SourceFiles] = {}
     for v in videos:
-        fut: Future[object] = pool.submit(plan_one, cfg, llm, v, dest_storage, source_storage)
+        fut: Future[MovePlan] = pool.submit(plan_one, cfg, llm, v, dest_storage, source_storage)
         pending.add(fut)
         meta[fut] = v
 

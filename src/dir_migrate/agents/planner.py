@@ -24,6 +24,8 @@ log = logging.getLogger("dir_migrate.agents.planner")
 
 _franchise_cache_lock = threading.Lock()
 _franchise_present_cache: dict[str, bool] = {}
+_franchise_scan_done = False
+_all_existing_franchises: set[str] = set()
 
 
 def _extract_imdb_from_json(source_storage: StorageMcp, video_path: str) -> tuple[str | None, float | None, int | None]:
@@ -168,45 +170,49 @@ def _dotify(text: str) -> str:
 
 
 def _franchise_present_in_dest(dest_storage: StorageMcp, cfg: AppConfig, franchise_root: str) -> bool:
+    global _franchise_scan_done
     key = _dotify(franchise_root).lower()
     if not key:
         return False
+    
     with _franchise_cache_lock:
-        cached = _franchise_present_cache.get(key)
-    if cached is not None:
-        return cached
+        if _franchise_scan_done:
+            return key in _all_existing_franchises
 
+    # Perform full scan once
     roots = [
         posixpath.join("/", cfg.rules.movie_1080_root),
         posixpath.join("/", cfg.rules.movie_4k_root),
+        posixpath.join("/", cfg.rules.tv_1080_root),
+        posixpath.join("/", cfg.rules.tv_4k_root),
     ]
-    found = False
+    
+    found_franchises: set[str] = set()
     for root in roots:
         try:
             entries = dest_storage.list_dir(root)
+            for p, t, _sz in entries:
+                if t == "dir":
+                    # Some folders might be direct franchise roots, some might be buckets (A-Z)
+                    # For safety, we can look into folders that look like buckets
+                    name = posixpath.basename(p)
+                    if len(name) == 1 or (name.startswith("A-") or name == "0-9"):
+                        try:
+                            sub_entries = dest_storage.list_dir(p)
+                            for sp, st, _ssz in sub_entries:
+                                if st == "dir":
+                                    found_franchises.add(posixpath.basename(sp).lower())
+                        except Exception:
+                            continue
+                    else:
+                        found_franchises.add(name.lower())
         except Exception:
             continue
-        buckets = [p for p, t, _sz in entries if t == "dir"]
-        for bucket in buckets:
-            try:
-                items = dest_storage.list_dir(bucket)
-            except Exception:
-                continue
-            for p, t, _sz in items:
-                if t != "dir":
-                    continue
-                name = posixpath.basename(p).lower()
-                if name.startswith(key):
-                    found = True
-                    break
-            if found:
-                break
-        if found:
-            break
-
+            
     with _franchise_cache_lock:
-        _franchise_present_cache[key] = found
-    return found
+        _all_existing_franchises.update(found_franchises)
+        _franchise_scan_done = True
+        return key in _all_existing_franchises
 
 
 def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: StorageMcp | None = None, source_storage: StorageMcp | None = None) -> MovePlan:
@@ -278,9 +284,10 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
 
             # 1. Try LLM first (Preferred if no json)
             if imdb_rating is None:
-                know = llm.query_imdb(fields.title or p.name, fields.year)
+                search_title = fields.title or p.stem
+                know = llm.query_imdb(search_title, fields.year)
                 if know.imdb_rating is not None:
-                    log.info("using llm provided rating=%s for %s", know.imdb_rating, fields.title)
+                    log.info("using llm provided rating=%s for %s", know.imdb_rating, search_title)
                     imdb_rating = know.imdb_rating
                     imdb_votes = know.imdb_votes
                     imdb_id = know.imdb_id
@@ -300,10 +307,11 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
                     imdb_title, imdb_dbg = imdb.lookup_by_id_debug(tt)
                     log.info("imdb tt_source=sidecar tt=%s video=%s", tt, item.video_path)
                 else:
-                    qtitle = _normalize_imdb_query_title(fields.title, fields.year)
-                    if qtitle and fields.title and qtitle.strip() != str(fields.title).strip():
-                        log.info("imdb title normalized from=%s to=%s video=%s", fields.title, qtitle, item.video_path)
-                    imdb_title, imdb_dbg = imdb.lookup_debug(kind="movie", title=qtitle or fields.title, year=fields.year)
+                    search_title = fields.title or p.stem
+                    qtitle = _normalize_imdb_query_title(search_title, fields.year)
+                    if qtitle and search_title and qtitle.strip() != str(search_title).strip():
+                        log.info("imdb title normalized from=%s to=%s video=%s", search_title, qtitle, item.video_path)
+                    imdb_title, imdb_dbg = imdb.lookup_debug(kind="movie", title=qtitle or search_title, year=fields.year)
                 
                 imdb_id = getattr(imdb_title, "imdb_id", None) if imdb_title is not None else None
                 imdb_rating = getattr(imdb_title, "rating", None) if imdb_title is not None else None
@@ -321,7 +329,7 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
                 candidates: list[str] = []
                 if imdb_title is not None and imdb_title.franchise_root:
                     candidates.append(imdb_title.franchise_root)
-                judge = FranchiseJudgeMcp(cache_dir=cfg.paths.local_cache_dir, ttl_days=cfg.imdb.ttl_days, ollama=llm.ollama, model=cfg.ollama.model)
+                judge = FranchiseJudgeMcp(cache_dir=cfg.paths.local_cache_dir, ttl_days=cfg.imdb.ttl_days, llm=llm.llm, model=cfg.llm.model)
                 decision = judge.judge(p.name, fields, imdb_title)
                 if decision is not None and decision.is_franchise and decision.franchise_root:
                     llm_franchise = decision.franchise_root

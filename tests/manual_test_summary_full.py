@@ -7,7 +7,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
-from srt_translate.config import AppConfig, OllamaConfig, PathsConfig, FtpConfig
+from srt_translate.config import AppConfig, LlmConfig, PathsConfig, FtpConfig, SummaryConfig
 from srt_translate.summary import generate_summary
 from srt_translate.subtitle_acquisition import SubtitleSource
 
@@ -17,11 +17,17 @@ logging.basicConfig(level=logging.INFO)
 def test_manual_summary():
     # 1. Config
     cfg = MagicMock(spec=AppConfig)
-    cfg.ollama = OllamaConfig(
+    cfg.llm = LlmConfig(
+        provider="ollama",
         base_url="http://localhost:11434",
         model="gemma3:latest",
         timeout_seconds=600, # Longer timeout for large context processing
         temperature=0.5
+    )
+    cfg.summary = SummaryConfig(
+        enabled=True,
+        max_chars=100000,
+        workers=1
     )
     cfg.paths = PathsConfig(
         local_cache_dir=Path("./tests/temp_cache"),

@@ -2,7 +2,7 @@
 
 本项目遵循“Keep a Changelog”格式记录变更（语义版本以实际发布为准）。
 
-## [Unreleased]
+## [Unreleased] - 2026-01-29
 
 ### Added
 
@@ -33,6 +33,16 @@
 - PGS OCR 策略优化：7 天内失败过（`PGS_OCR_FAILED`）则不再重试 OCR，直接回落 ASR
 
 ### Fixed
+
+- `dir_migrate` 分类与迁移增强：
+  - 修复 `The.Rip.2026` 等影片被误识别为电视剧的问题：优化 `kind` 推断逻辑，增加 2160p/4K 视频在无 SxxExx 标识时默认为 `movie` 的规则。
+  - 修复 `kind` 推断中的正则表达式 bug（修正了 `\b` 边界符与 `\d` 数字符在 raw string 中的转义错误）。
+  - 修复 FTP 迁移中的 "550 Invalid cross-device link" 错误：在 `FtpMcp` 中实现 copy+delete 降级方案，支持跨分区/跨挂载点的文件移动。
+  - 优化 FTP 扫描性能：实现全局加盟店（Franchise）缓存，避免在处理每个文件时重复扫描整个媒体库，解决大库扫描导致的系统挂起问题。
+  - 修复 `dry_run` 模式下部分逻辑仍执行实际操作的 bug。
+- `srt_translate` 任务链增强：
+  - 修复 `orchestrator` 中配置继承问题，确保翻译或总结完成后能正确触发迁移任务。
+  - 增加目录列表缓存，减少重复的 FTP `LIST` 请求。
 
 - `dir_migrate` 命名与归集修复：
   - 严格保持影片/剧集原始名称（如 `St. Denis Medical`, `9-1-1 Nashville`），禁止 LLM 或程序逻辑进行删减或“总结”。

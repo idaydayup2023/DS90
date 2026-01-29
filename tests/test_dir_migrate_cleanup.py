@@ -13,7 +13,7 @@ from dir_migrate.config import (
     CleanupConfig,
     ExecutionConfig,
     ImdbConfig,
-    OllamaConfig,
+    LlmConfig,
     PathsConfig,
     RulesConfig,
     StorageConfig,
@@ -34,7 +34,7 @@ class TestDirMigrateCleanup(unittest.TestCase):
             video=VideoConfig(extensions=(".mkv",), min_bytes=0),
             subtitle=SubtitleConfig(extensions=(".srt",)),
             cleanup=CleanupConfig(enabled=cleanup_enabled, protected_dirnames=("torrent.files",), min_confidence=0.85),
-            ollama=OllamaConfig(base_url="http://localhost:11434", model="x", timeout_seconds=5, temperature=0.0),
+            llm=LlmConfig(provider="ollama", base_url="http://localhost:11434", model="x", timeout_seconds=5, temperature=0.0),
             imdb=ImdbConfig(),
             rules=RulesConfig(
                 movie_1080_root="X-Movie",

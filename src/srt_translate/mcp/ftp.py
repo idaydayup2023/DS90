@@ -195,11 +195,31 @@ class FtpMcp:
     def rename(self, src: str, dst: str) -> None:
         try:
             self.ftp.rename(src, dst)
+        except ftplib.error_perm as e:
+            if "cross-device" in str(e).lower() or "550" in str(e):
+                # Try copy-delete fallback
+                self.copy(src, dst)
+                self.delete(src)
+                return
+            raise
         except Exception:
             # Reconnect and retry once if broken pipe
             self.close()
             self.connect()
-            self.ftp.rename(src, dst)
+            try:
+                self.ftp.rename(src, dst)
+            except ftplib.error_perm as e:
+                if "cross-device" in str(e).lower() or "550" in str(e):
+                    self.copy(src, dst)
+                    self.delete(src)
+                    return
+                raise
+
+    def copy(self, src: str, dst: str) -> None:
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=True) as tmp:
+            self.download(src, Path(tmp.name))
+            self.upload(Path(tmp.name), dst)
 
     def rmdir(self, remote_dir: str) -> None:
         remote_dir = remote_dir.rstrip("/") or "/"

@@ -2,11 +2,11 @@
 import unittest
 import dataclasses
 from unittest.mock import MagicMock, patch, ANY
-from src.dir_migrate.agents.planner import plan_one
-from src.dir_migrate.config import AppConfig, ImdbConfig, RulesConfig, PathsConfig, OllamaConfig
-from src.dir_migrate.domain import SourceFiles, ImdbKnowledge, LlmFields
-from src.dir_migrate.mcp.llm import LlmMcp
-from src.dir_migrate.mcp.imdb import ImdbMcp, ImdbLookupDebug
+from dir_migrate.agents.planner import plan_one
+from dir_migrate.config import AppConfig, ImdbConfig, RulesConfig, PathsConfig, LlmConfig
+from dir_migrate.domain import SourceFiles, ImdbKnowledge, LlmFields
+from dir_migrate.mcp.llm import LlmMcp
+from dir_migrate.mcp.imdb import ImdbMcp, ImdbLookupDebug
 
 class TestPlannerLlmFallback(unittest.TestCase):
     def setUp(self):
@@ -20,8 +20,8 @@ class TestPlannerLlmFallback(unittest.TestCase):
         self.cfg.imdb = ImdbConfig(enabled=True, min_rating=6.0, skip_unrated=True)
         self.cfg.paths = MagicMock(spec=PathsConfig)
         self.cfg.paths.local_cache_dir = "/tmp"
-        self.cfg.ollama = MagicMock(spec=OllamaConfig)
-        self.cfg.ollama.model = "test"
+        self.cfg.llm = MagicMock(spec=LlmConfig)
+        self.cfg.llm.model = "test"
 
         self.llm = MagicMock(spec=LlmMcp)
         self.item = SourceFiles(video_path="/Downloads/Joe.Dirt.2.2015.mkv", subtitle_paths=(), video_size_bytes=None)

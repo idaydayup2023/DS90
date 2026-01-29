@@ -78,6 +78,12 @@ def _pick_non_conflicting(cfg: AppConfig, dest_storage: StorageMcp, plan: MovePl
 
 
 def apply_one(cfg: AppConfig, source_storage: StorageMcp, dest_storage: StorageMcp, plan: MovePlan) -> tuple[bool, str | None, str | None]:
+    if cfg.execution.dry_run:
+        log.info("dry-run: would move %s to %s", plan.source.video_path, plan.dest_video_path)
+        for src_sub, dst_sub in plan.subtitle_moves:
+            log.info("dry-run: would move subtitle %s to %s", src_sub, dst_sub)
+        return True, "DRY_RUN", None
+
     chosen = _pick_non_conflicting(cfg, dest_storage, plan)
     if chosen is None:
         return False, "CONFLICT", None

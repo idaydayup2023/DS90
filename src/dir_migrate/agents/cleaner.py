@@ -6,6 +6,8 @@ import posixpath
 from dataclasses import dataclass
 from typing import Any
 
+from srt_translate.mcp.llm_mcp import build_llm_mcp, resolve_llm_model
+
 from ..config import AppConfig
 from ..domain import MovePlan
 from ..mcp.storage import StorageMcp
@@ -79,8 +81,9 @@ def _prompt(dir_path: str, moved_files: list[str], residual_dirs: list[str], res
 
 
 def _llm_decide_cleanup(cfg: AppConfig, moved_files: list[str], dir_path: str, residual_dirs: list[str], residual_files: list[tuple[str, int | None]]) -> CleanupDecision:
-    ollama = OllamaMcp(cfg.ollama.base_url, timeout_seconds=cfg.ollama.timeout_seconds)
-    text = ollama.generate(model=cfg.ollama.model, prompt=_prompt(dir_path, moved_files, residual_dirs, residual_files), temperature=0.0).text
+    llm_mcp = build_llm_mcp(cfg.llm.provider, cfg.llm.base_url, timeout_seconds=cfg.llm.timeout_seconds)
+    model = resolve_llm_model(llm_mcp, cfg.llm.model)
+    text = llm_mcp.generate(model=model, prompt=_prompt(dir_path, moved_files, residual_dirs, residual_files), temperature=0.0).text
     obj = _extract_json(text)
     decision = str(obj.get("decision") or "unknown").strip().lower()
     confidence = obj.get("confidence")

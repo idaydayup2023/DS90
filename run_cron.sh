@@ -59,7 +59,7 @@ cd "$PROJECT_DIR" || {
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] 开始执行: 字幕翻译与迁移 (srt_translate)" >> "$LOG_FILE"
 
 # 说明: --once 表示运行一次扫描队列后退出
-/opt/homebrew/bin/python3 srt_translate.py --config "$CONFIG_FILE" --once >> "$LOG_FILE" 2>&1
+/opt/homebrew/bin/python3 run_srt_translate.py --config "$CONFIG_FILE" --once >> "$LOG_FILE" 2>&1
 TRANSLATE_EXIT_CODE=$?
 
 if [ $TRANSLATE_EXIT_CODE -eq 0 ]; then

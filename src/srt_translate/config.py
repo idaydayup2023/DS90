@@ -70,6 +70,13 @@ class TranslationConfig:
 
 
 @dataclass(frozen=True)
+class SummaryConfig:
+    enabled: bool = True
+    max_chars: int = 100000
+    workers: int = 1
+
+
+@dataclass(frozen=True)
 class AppConfig:
     ftp: FtpConfig
     paths: PathsConfig
@@ -78,6 +85,7 @@ class AppConfig:
     whisper: WhisperConfig
     pgs_ocr: PgsOcrConfig
     translation: TranslationConfig
+    summary: SummaryConfig
 
 
 def _require(d: dict[str, Any], key: str) -> Any:
@@ -164,6 +172,13 @@ def load_config(path: str | Path) -> AppConfig:
         max_retries=int(translation_raw.get("max_retries", 2)),
     )
 
+    summary_raw = raw.get("summary") or {}
+    summary = SummaryConfig(
+        enabled=bool(summary_raw.get("enabled", True)),
+        max_chars=int(summary_raw.get("max_chars", 100000)),
+        workers=int(summary_raw.get("workers", 1)),
+    )
+
     return AppConfig(
         ftp=ftp,
         paths=paths_cfg,
@@ -172,6 +187,7 @@ def load_config(path: str | Path) -> AppConfig:
         whisper=whisper,
         pgs_ocr=pgs_ocr,
         translation=translation,
+        summary=summary,
     )
 
 

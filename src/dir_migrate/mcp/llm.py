@@ -61,10 +61,25 @@ def _as_str(v: Any) -> str | None:
 def _fallback_from_filename(name: str) -> dict[str, Any]:
     out: dict[str, Any] = {}
     stem = re.sub(r"(?i)\.(mkv|mp4|avi|mov|m4v|ts)$", "", name).strip()
-    m = re.search(r"(?i)\\b(19\\d{2}|20\\d{2})\\b", name)
+
+    # Simple title extraction: everything before the first year, resolution, or common keyword
+    title_part = stem
+    keywords = r"\b(19\d{2}|20\d{2}|2160p|1080p|720p|4k|web[-_. ]?dl|webrip|bluray|brrip|hdtv|remux|x264|x265|hevc|S\d{1,2}E\d{1,2})\b"
+    m = re.search(r"(?i)" + keywords, stem)
+    if m:
+        title_part = stem[:m.start()].strip(" ._-")
+
+    if title_part:
+        # Clean up dots and underscores
+        t = title_part.replace(".", " ").replace("_", " ").strip()
+        if t:
+            out["title"] = t
+            out["series"] = t
+
+    m = re.search(r"(?i)\b(19\d{2}|20\d{2})\b", name)
     if m:
         out["year"] = int(m.group(1))
-    m = re.search(r"(?i)\\bS(\\d{1,2})E(\\d{1,2})\\b", name)
+    m = re.search(r"(?i)\bS(\d{1,2})E(\d{1,2})\b", name)
     if m:
         out["kind"] = "tv"
         out["season"] = int(m.group(1))
@@ -75,6 +90,11 @@ def _fallback_from_filename(name: str) -> dict[str, Any]:
         out["resolution"] = "1080p"
     elif re.search(r"(?i)\b720p\b", name):
         out["resolution"] = "720p"
+    
+    # If it's 2160p/4K and no SxxExx, it's almost certainly a movie.
+    if out.get("resolution") == "2160p" and "kind" not in out:
+        out["kind"] = "movie"
+
     if "kind" not in out:
         out["kind"] = "movie" if out.get("year") else "unknown"
     
@@ -239,7 +259,8 @@ def _prompt(filename: str) -> str:
         "If it's a spin-off, ensure 'franchise_root' is the main series and 'series' is the full spin-off name.\n"
         "3) YEAR/SEASON/EPISODE: Extract accurately. 'season' and 'episode' must be integers.\n"
         "4) NO ALTERATION: Only extract fields. Do NOT change characters or capitalization from the original filename for names.\n"
-        "5) OUTPUT ONLY JSON. No explanations.\n\n"
+        "5) NEVER NULL TITLE: You must provide a 'title' (for movies) or 'series' (for TV). If unsure, use the most likely name from the filename. Never return null for both 'title' and 'series'.\n"
+        "6) OUTPUT ONLY JSON. No explanations.\n\n"
         f"FILENAME: {filename}\n"
         "OUTPUT JSON SCHEMA:\n"
         "{\n"

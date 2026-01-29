@@ -194,6 +194,7 @@ def load_config(path: str | Path) -> AppConfig:
     common_ftp_raw = raw_all.get("ftp") if isinstance(raw_all, dict) else None
     common_paths_raw = raw_all.get("paths") if isinstance(raw_all, dict) else None
     common_video_raw = raw_all.get("video") if isinstance(raw_all, dict) else None
+    common_llm_raw = raw_all.get("llm") if isinstance(raw_all, dict) else None
     common_ollama_raw = raw_all.get("ollama") if isinstance(raw_all, dict) else None
 
     source = _load_storage_with_fallback(_require(tool_raw, "source"), common_ftp_raw)
@@ -239,7 +240,7 @@ def load_config(path: str | Path) -> AppConfig:
     )
 
     # Support both "llm" and "ollama" keys for backward compatibility
-    llm_raw = tool_raw.get("llm") or tool_raw.get("ollama") or common_ollama_raw
+    llm_raw = tool_raw.get("llm") or tool_raw.get("ollama") or common_llm_raw or common_ollama_raw
     if llm_raw is None:
         raise KeyError("missing config key: llm (or ollama)")
     
