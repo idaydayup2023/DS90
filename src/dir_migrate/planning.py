@@ -64,8 +64,7 @@ def dest_dir_for(rules: RulesConfig, fields: LlmFields, normalized_basename: str
         return posixpath.join("/", root, sb, sxx)
     
     root = rules.movie_4k_root if _is_4k(fields.resolution) else rules.movie_1080_root
-    if _is_4k(fields.resolution):
-        bucket = _decade_bucket(fields.year)
-    else:
-        bucket = _year_bucket_movie_1080(fields.year, rules.year_split)
+    # User expects recent movies to be in year folders, not decade buckets.
+    # We use year_bucket_movie_1080 for both to respect year_split.
+    bucket = _year_bucket_movie_1080(fields.year, rules.year_split)
     return posixpath.join("/", root, bucket, normalized_basename)

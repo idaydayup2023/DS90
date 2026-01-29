@@ -230,8 +230,16 @@ def _sanitize_fields(filename: str, fields: LlmFields, fallback: dict[str, Any])
     if not series:
         series = _as_str(fallback.get("series"))
 
+    kind = fields.kind
+    # Safety: If LLM claims it's TV but failed to find ANY season/episode, 
+    # and it looks like a movie (4K or has year), trust the movie judgment.
+    if kind == "tv" and fields.season is None and fields.episode is None:
+        if resolution == "2160p" or fields.year is not None or fallback.get("kind") == "movie":
+            log.info("overriding kind from tv to movie for %s (no SxxExx found)", filename)
+            kind = "movie"
+
     return LlmFields(
-        kind=fields.kind,
+        kind=kind,
         title=fields.title,
         series=series,
         franchise_root=fields.franchise_root,
@@ -257,10 +265,13 @@ def _prompt(filename: str) -> str:
         "Do NOT truncate, do NOT summarize, and do NOT omit any words (e.g., 'St. Denis Medical' must stay 'St. Denis Medical', 'Law and Order SVU' must stay 'Law and Order SVU').\n"
         "2) FRANCHISE vs SERIES: 'franchise_root' is the main brand (e.g., '9-1-1', 'Law and Order'). 'series' is the specific show name (e.g., '9-1-1: Nashville', 'Law and Order: SVU'). "
         "If it's a spin-off, ensure 'franchise_root' is the main series and 'series' is the full spin-off name.\n"
-        "3) YEAR/SEASON/EPISODE: Extract accurately. 'season' and 'episode' must be integers.\n"
-        "4) NO ALTERATION: Only extract fields. Do NOT change characters or capitalization from the original filename for names.\n"
-        "5) NEVER NULL TITLE: You must provide a 'title' (for movies) or 'series' (for TV). If unsure, use the most likely name from the filename. Never return null for both 'title' and 'series'.\n"
-        "6) OUTPUT ONLY JSON. No explanations.\n\n"
+        "3) KIND IDENTIFICATION: 'kind' must be 'movie' if there is no season/episode information (like S01E01). "
+        "High-resolution files (2160p/4K) without SxxExx are almost always movies. "
+        "TV shows must have a season and episode.\n"
+        "4) YEAR/SEASON/EPISODE: Extract accurately. 'season' and 'episode' must be integers.\n"
+        "5) NO ALTERATION: Only extract fields. Do NOT change characters or capitalization from the original filename for names.\n"
+        "6) NEVER NULL TITLE: You must provide a 'title' (for movies) or 'series' (for TV). If unsure, use the most likely name from the filename. Never return null for both 'title' and 'series'.\n"
+        "7) OUTPUT ONLY JSON. No explanations.\n\n"
         f"FILENAME: {filename}\n"
         "OUTPUT JSON SCHEMA:\n"
         "{\n"

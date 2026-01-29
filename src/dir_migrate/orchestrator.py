@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import posixpath
 from concurrent.futures import FIRST_COMPLETED, Future, wait
 from dataclasses import asdict
 
@@ -82,6 +83,7 @@ def run_once(cfg: AppConfig) -> RunSummary:
     skipped = 0
     conflicts = 0
     apply_failed = 0
+    failed_source_dirs: set[str] = set()
 
     for plan in plans:
         if getattr(plan, "skip_reason", None):
@@ -96,6 +98,14 @@ def run_once(cfg: AppConfig) -> RunSummary:
         if ok:
             moved += 1
             continue
+        
+        # Record failed source directory to prevent aggressive cleanup
+        # We normalize by stripping leading/trailing slashes
+        sdir = posixpath.dirname(plan.source.video_path.rstrip("/"))
+        sdir = sdir.strip("/")
+        if sdir:
+            failed_source_dirs.add(sdir)
+
         if status == "CONFLICT":
             conflicts += 1
             continue
@@ -105,7 +115,7 @@ def run_once(cfg: AppConfig) -> RunSummary:
     if cfg.cleanup.enabled and cfg.execution.apply and (not cfg.execution.dry_run):
         log.info("cleanup sweep start root=/Downloads max_dirs=%d", 200)
         try:
-            removed = cleanup_sweep(cfg, source_storage, root="", max_dirs=200)
+            removed = cleanup_sweep(cfg, source_storage, root="", max_dirs=200, exclude_dirs=failed_source_dirs)
             log.info("cleanup sweep done removed=%d", removed)
         except Exception as e:
             log.warning("cleanup sweep failed error=%s", e)

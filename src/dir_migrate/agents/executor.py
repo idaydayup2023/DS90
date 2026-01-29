@@ -100,12 +100,19 @@ def apply_one(cfg: AppConfig, source_storage: StorageMcp, dest_storage: StorageM
             source_storage.rename(src_sub, dst_sub, overwrite=overwrite)
             moved.append((dst_sub, src_sub))
     except Exception as e:
+        rollback_failed = False
         for dst_rel, src_rel in reversed(moved):
             try:
                 dest_storage.rename(dst_rel, src_rel, overwrite=False)
-            except Exception:
-                pass
-        return False, "FAILED", str(e)
+            except Exception as re:
+                rollback_failed = True
+                log.error("rollback failed for %s to %s: %s", dst_rel, src_rel, re)
+        
+        err_msg = str(e)
+        if rollback_failed:
+            err_msg += " (ROLLBACK FAILED: files may be partially moved or stuck at destination)"
+            
+        return False, "FAILED", err_msg
     try:
         cleanup_source_residual_dirs(cfg, source_storage, chosen)
     except Exception as e:

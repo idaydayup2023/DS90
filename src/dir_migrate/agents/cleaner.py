@@ -63,7 +63,8 @@ def _prompt(dir_path: str, moved_files: list[str], residual_dirs: list[str], res
         "4) Choose \"keep\" for generic folders (Downloads, Movies, TV, torrents, incomplete, temp) or anything that may hold other downloads.\n"
         "5) Never delete directories named torrent.files or low_imdb.\n"
         "6) Typical safe residuals include: NFO, images (jpg/png), SFV, small text, and folders like Screens/Proof/Sample.\n"
-        "7) When in doubt: unknown.\n\n"
+        "7) BE CONSERVATIVE: If there are many subtitle files (.srt, .ass, etc.) or a large number of metadata files, it might indicate an incomplete migration. In such cases, prefer 'keep' or 'unknown'.\n"
+        "8) When in doubt: unknown.\n\n"
         f"DIRECTORY: {dir_path}\n"
         "MOVED FILES (examples):\n"
         f"{moved or '- (none)'}\n\n"
@@ -153,12 +154,13 @@ def cleanup_source_residual_dirs(cfg: AppConfig, source_storage: StorageMcp, pla
         cur = parent
 
 
-def cleanup_sweep(cfg: AppConfig, source_storage: StorageMcp, root: str = "", max_dirs: int = 200) -> int:
+def cleanup_sweep(cfg: AppConfig, source_storage: StorageMcp, root: str = "", max_dirs: int = 200, exclude_dirs: set[str] | None = None) -> int:
     if not cfg.cleanup.enabled:
         return 0
     if cfg.execution.dry_run or not cfg.execution.apply:
         return 0
     protected = {p.lower() for p in cfg.cleanup.protected_dirnames}
+    excludes = {p.strip("/").lower() for p in (exclude_dirs or set())}
     max_dirs = max(0, int(max_dirs))
     root_label = root or "<storage_root>"
     log.info("cleanup sweep scan start root=%s max_dirs=%d", root_label, max_dirs)
@@ -176,9 +178,10 @@ def cleanup_sweep(cfg: AppConfig, source_storage: StorageMcp, root: str = "", ma
         if checked >= max_dirs:
             break
         checked += 1
-        base = posixpath.basename(d.rstrip("/")).lower()
-        if base in protected:
-            log.info("cleanup sweep skip dir=%s reason=protected", d)
+        d_norm = d.strip("/")
+        base = posixpath.basename(d_norm).lower()
+        if base in protected or d_norm.lower() in excludes:
+            log.info("cleanup sweep skip dir=%s reason=%s", d, "protected" if base in protected else "excluded")
             continue
         try:
             children = source_storage.list_dir(d)
