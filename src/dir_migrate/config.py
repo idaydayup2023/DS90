@@ -13,7 +13,7 @@ class FtpConnConfig:
     username: str
     password: str
     root_path: str
-    timeout_seconds: int = 30
+    timeout_seconds: int = 3600
 
 
 @dataclass(frozen=True)

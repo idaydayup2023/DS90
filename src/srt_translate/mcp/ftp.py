@@ -18,7 +18,7 @@ class FtpEntry:
 
 
 class FtpMcp:
-    def __init__(self, host: str, port: int, username: str, password: str, timeout: int = 30):
+    def __init__(self, host: str, port: int, username: str, password: str, timeout: int = 3600):
         self._host = host
         self._port = port
         self._username = username

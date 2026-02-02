@@ -393,21 +393,14 @@ def _migrate_task(
         return False, str(e)
 
 
-_dir_list_cache: dict[str, list[tuple[str, str, int]]] = {}
-_dir_list_lock = threading.Lock()
-
 def _collect_related_subtitles_for_migration(source_storage, rel_video_path: str, subtitle_exts: tuple[str, ...]) -> list[str]:
     directory = posixpath.dirname(rel_video_path)
     video_stem = posixpath.splitext(posixpath.basename(rel_video_path))[0]
     stem_lower = video_stem.lower()
     ext_set = {e.lower() for e in subtitle_exts}
 
-    with _dir_list_lock:
-        if directory in _dir_list_cache:
-            entries = _dir_list_cache[directory]
-        else:
-            entries = source_storage.list_dir(directory)
-            _dir_list_cache[directory] = entries
+    # No caching here to ensure we see the most up-to-date file list (especially newly created .ai.srt)
+    entries = source_storage.list_dir(directory)
 
     subs: list[str] = []
     for p, t, _size in entries:
@@ -563,6 +556,11 @@ def _handle_future_result(
             if success:
                 migrated_delta = 1
                 store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="MIGRATED", payload={}, updated_at=int(time.time())))
+            elif err and "CONFLICT" in str(err):
+                # If it's a conflict, it means the file is already at destination
+                log.info("migration conflict video=%s: considering as migrated", rpath)
+                migrated_delta = 1
+                store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="MIGRATED", payload={"info": "conflict: already exists"}, updated_at=int(time.time())))
             else:
                 store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="MIGRATION_FAILED", payload={"error": err}, updated_at=int(time.time())))
         else:
