@@ -104,12 +104,34 @@ def _fallback_from_filename(name: str) -> dict[str, Any]:
     elif re.search(r"(?i)\bx264\b|\bavc\b|\bh264\b", name):
         out["codec"] = "x264"
     
-    # Simple group extraction: last part after hyphen or dot
-    m = re.search(r"(?i)[-_.]([a-zA-Z0-9]+)$", stem)
-    if m:
-        g = m.group(1)
-        if g.lower() not in ("mkv", "mp4", "avi", "mov", "srt", "x264", "x265", "hevc", "1080p", "720p", "2160p", "aac", "ac3"):
-            out["group"] = g
+    # Try to extract source
+    if re.search(r"(?i)\bWEB[-_. ]?DL\b", name):
+        out["source"] = "WEB-DL"
+    elif re.search(r"(?i)\bWebRip\b", name):
+        out["source"] = "WebRip"
+    elif re.search(r"(?i)\bBluRay\b", name):
+        out["source"] = "BluRay"
+    elif re.search(r"(?i)\bHDTV\b", name):
+        out["source"] = "HDTV"
+    
+    # Try to extract group from brackets if present
+    m_bracket = re.search(r"\[(.*?)\]", name)
+    if m_bracket:
+        out["group"] = m_bracket.group(1)
+    
+    # Simple group extraction: last part after hyphen or dot (if no bracketed group found)
+    if not out.get("group"):
+        m = re.search(r"(?i)[-_.]([a-zA-Z0-9]+)$", stem)
+        if m:
+            g = m.group(1)
+            # Exclusion list for common tags that are not groups
+            exclusions = {
+                "mkv", "mp4", "avi", "mov", "srt", "x264", "x265", "hevc", 
+                "1080p", "720p", "2160p", "aac", "ac3", "amzn", "nf", 
+                "dsnp", "hmax", "max", "atvp", "webdl", "web", "rip"
+            }
+            if g.lower() not in exclusions:
+                out["group"] = g
 
     # If source was mistakenly put into group or vice versa, or source was hallucinated from group
     # We trust fallback group more if LLM returns null group but has source that looks like group?
@@ -160,7 +182,8 @@ def _sanitize_fields(filename: str, fields: LlmFields, fallback: dict[str, Any])
     def _looks_like_source(s: str | None) -> bool:
         if not s:
             return False
-        return bool(re.match(r"(?i)^(web[-_. ]?dl|webrip|bluray|brrip|hdtv|remux)$", s.strip()))
+        # Extended list of common sources and streaming providers
+        return bool(re.match(r"(?i)^(web[-_. ]?dl|webrip|bluray|brrip|hdtv|remux|amzn|nf|dsnp|hmax|max|atvp|apple[-_. ]?tv|hulu|pcok|paramount|dpv)$", s.strip()))
 
     resolution = _norm_res(fields.resolution) or _norm_res(_as_str(fallback.get("resolution")))
     codec = _as_str(fields.codec)
@@ -180,6 +203,7 @@ def _sanitize_fields(filename: str, fields: LlmFields, fallback: dict[str, Any])
     source = _as_str(fields.source)
     group = _as_str(fields.group)
     audio = _as_str(fields.audio)
+    video_tags = _as_str(fields.video_tags)
     episode_title = _as_str(fields.episode_title)
 
     if episode_title and (_looks_like_resolution(episode_title) or _looks_like_codec(episode_title) or _looks_like_source(episode_title) or _looks_like_se(episode_title)):
@@ -252,6 +276,7 @@ def _sanitize_fields(filename: str, fields: LlmFields, fallback: dict[str, Any])
         codec=codec,
         audio=audio,
         group=group,
+        video_tags=video_tags,
         confidence=fields.confidence,
     )
 
@@ -271,7 +296,9 @@ def _prompt(filename: str) -> str:
         "4) YEAR/SEASON/EPISODE: Extract accurately. 'season' and 'episode' must be integers.\n"
         "5) NO ALTERATION: Only extract fields. Do NOT change characters or capitalization from the original filename for names.\n"
         "6) NEVER NULL TITLE: You must provide a 'title' (for movies) or 'series' (for TV). If unsure, use the most likely name from the filename. Never return null for both 'title' and 'series'.\n"
-        "7) OUTPUT ONLY JSON. No explanations.\n\n"
+        "7) RELEASE GROUP: 'group' is the release group. If there is a name in brackets at the end (e.g., [Ben The Men]), that is the 'group'. Streaming providers like 'AMZN', 'NF', 'DSNP' are part of the 'source', NOT the 'group'.\n"
+        "8) VIDEO TAGS: 'video_tags' should include HDR info (DV, HDR10+, HDR, etc.) and other technical tags if present.\n"
+        "9) OUTPUT ONLY JSON. No explanations.\n\n"
         f"FILENAME: {filename}\n"
         "OUTPUT JSON SCHEMA:\n"
         "{\n"
@@ -288,6 +315,7 @@ def _prompt(filename: str) -> str:
         "  \"codec\": string|null,\n"
         "  \"audio\": string|null,\n"
         "  \"group\": string|null,\n"
+        "  \"video_tags\": string|null,\n"
         "  \"confidence\": number|null\n"
         "}\n"
     )
@@ -344,6 +372,7 @@ def _apply_franchise_rules(rules: RulesConfig, fields: LlmFields) -> LlmFields:
         codec=fields.codec,
         audio=fields.audio,
         group=fields.group,
+        video_tags=fields.video_tags,
         confidence=fields.confidence,
     )
 
@@ -389,6 +418,7 @@ class LlmMcp:
                     codec=_as_str(obj.get("codec")) or _as_str(fallback.get("codec")),
                     audio=_as_str(obj.get("audio")) or _as_str(fallback.get("audio")),
                     group=_as_str(obj.get("group")) or _as_str(fallback.get("group")),
+                    video_tags=_as_str(obj.get("video_tags")) or _as_str(fallback.get("video_tags")),
                     confidence=_as_float(obj.get("confidence")) or _as_float(fallback.get("confidence")),
                 )
                 fields = _sanitize_fields(filename, fields, fallback)
@@ -413,6 +443,7 @@ class LlmMcp:
                 codec=_as_str(fallback.get("codec")),
                 audio=_as_str(fallback.get("audio")),
                 group=_as_str(fallback.get("group")),
+                video_tags=_as_str(fallback.get("video_tags")),
                 confidence=None,
             ),
         )

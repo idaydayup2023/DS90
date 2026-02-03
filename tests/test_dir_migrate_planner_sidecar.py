@@ -39,7 +39,8 @@ class TestDirMigratePlannerSidecar(unittest.TestCase):
             year=2024,
             resolution="1080p",
             series=None, franchise_root=None, season=None, episode=None, episode_title=None,
-            source=None, codec=None, audio=None, group=None, confidence=None
+            source=None, codec=None, audio=None, group=None,
+            video_tags=None, confidence=None
         )
 
         # Source Files
@@ -83,3 +84,4 @@ class TestDirMigratePlannerSidecar(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

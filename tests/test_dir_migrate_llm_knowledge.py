@@ -45,3 +45,4 @@ class TestLlmKnowledge(unittest.TestCase):
         self.assertIsNone(know.title)
         self.assertIsNone(know.imdb_rating)
         self.assertEqual(len(know.related_movies), 0)
+

@@ -23,3 +23,4 @@ class TestImdbLdJsonParse(unittest.TestCase):
         obj = imdb._parse_ld_json(html)
         self.assertIsNotNone(obj)
         self.assertEqual(obj.get("name"), "The Rip")
+

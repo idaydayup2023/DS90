@@ -178,3 +178,4 @@ class TestDirMigrateCleanup(unittest.TestCase):
             self.assertIsNone(err)
             self.assertFalse((src_root / "A" / "Movie.ai.srt").exists())
             self.assertTrue((dst_root / "X" / "Movie.ai.srt").exists())
+

@@ -71,6 +71,7 @@ class TestImdbTitleNormalization(unittest.TestCase):
                 codec="x265",
                 audio="5.1",
                 group=None,
+            video_tags=None,
                 confidence=0.9,
             )
             llm = _FakeLlm(fields)
@@ -110,4 +111,5 @@ class TestImdbTitleNormalization(unittest.TestCase):
                 planner_mod.ImdbMcp = old
 
             self.assertEqual(seen.get("title"), "The Descent")
+
 

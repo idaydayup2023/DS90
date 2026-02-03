@@ -194,6 +194,26 @@ def load_config(path: str | Path) -> AppConfig:
 def ensure_dirs(cfg: AppConfig) -> None:
     cfg.paths.local_cache_dir.mkdir(parents=True, exist_ok=True)
     cfg.paths.state_db_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Cleanup large temporary video cache on startup
+    video_cache = cfg.paths.local_cache_dir / "videos"
+    if video_cache.exists():
+        import shutil
+        import logging
+        log = logging.getLogger("srt_translate.config")
+        log.info("Cleaning up startup video cache: %s", video_cache)
+        try:
+            for item in video_cache.iterdir():
+                if item.is_file():
+                    item.unlink()
+                elif item.is_dir():
+                    shutil.rmtree(item)
+        except Exception as e:
+            log.warning("Failed to cleanup video cache: %s", e)
+    
+    # Also ensure the subdirs exist
+    (cfg.paths.local_cache_dir / "videos").mkdir(parents=True, exist_ok=True)
+    (cfg.paths.local_cache_dir / "work").mkdir(parents=True, exist_ok=True)
 
 
 def normalize_extensions(exts: Iterable[str]) -> tuple[str, ...]:

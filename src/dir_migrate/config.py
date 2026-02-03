@@ -13,7 +13,7 @@ class FtpConnConfig:
     username: str
     password: str
     root_path: str
-    timeout_seconds: int = 3600
+    timeout_seconds: int = 7200
 
 
 @dataclass(frozen=True)
@@ -148,7 +148,7 @@ def _load_storage(raw: dict[str, Any]) -> StorageConfig:
             username=str(_require(ftp_raw, "username")),
             password=str(_require(ftp_raw, "password")),
             root_path=str(_require(ftp_raw, "root_path")),
-            timeout_seconds=int(ftp_raw.get("timeout_seconds", 30)),
+            timeout_seconds=int(ftp_raw.get("timeout_seconds", 7200)),
         )
         return StorageConfig(kind="ftp", ftp=ftp, local_root=None)
     if kind == "local":
@@ -170,7 +170,7 @@ def _load_storage_with_fallback(storage_raw: dict[str, Any], common_ftp_raw: dic
             username=str(_require(common_ftp_raw, "username")),
             password=str(_require(common_ftp_raw, "password")),
             root_path=str(storage_raw.get("root_path") or common_ftp_raw.get("root_path") or "/"),
-            timeout_seconds=int(common_ftp_raw.get("timeout_seconds", 30)),
+            timeout_seconds=int(common_ftp_raw.get("timeout_seconds", 7200)),
         )
         return StorageConfig(kind="ftp", ftp=ftp, local_root=None)
     if kind == "local":

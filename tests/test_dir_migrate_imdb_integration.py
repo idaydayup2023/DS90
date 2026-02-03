@@ -104,6 +104,7 @@ class TestDirMigrateImdbIntegration(unittest.TestCase):
                     codec="HEVC",
                     audio="5.1",
                     group="BONE",
+                    video_tags=None,
                     confidence=0.9,
                 )
             )
@@ -150,6 +151,7 @@ class TestDirMigrateImdbIntegration(unittest.TestCase):
                     codec="x265",
                     audio="5.1",
                     group=None,
+            video_tags=None,
                     confidence=0.9,
                 )
             )
@@ -206,6 +208,7 @@ class TestDirMigrateImdbIntegration(unittest.TestCase):
                     codec="X",
                     audio="5.1",
                     group=None,
+            video_tags=None,
                     confidence=0.9,
                 )
             )
@@ -243,3 +246,4 @@ class TestDirMigrateImdbIntegration(unittest.TestCase):
                 planner_mod.FranchiseJudgeMcp = old_judge
 
             self.assertNotEqual(plan.dest_dir, "/Downloads/low_imdb")
+

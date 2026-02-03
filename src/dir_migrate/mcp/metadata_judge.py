@@ -111,6 +111,7 @@ class MetadataJudgeMcp:
                     codec=parsed.codec,
                     audio=parsed.audio,
                     group=parsed.group,
+                    video_tags=parsed.video_tags,
                     confidence=_as_float(obj.get("confidence")) or parsed.confidence,
                 )
                 return out

@@ -49,6 +49,7 @@ def build_normalized_basename(fields: LlmFields, original_stem: str) -> str:
 
     src = _dotify(fields.source or "") or "unknown"
     codec = _dotify(fields.codec or "") or "unknown"
+    tags = _dotify(fields.video_tags or "")
     audio = _dotify(fields.audio or "") or "unknown"
     group = _dotify(fields.group or "") or ""
     
@@ -73,7 +74,7 @@ def build_normalized_basename(fields: LlmFields, original_stem: str) -> str:
         if group and src and group.lower() == src.lower():
              group = ""
         
-        parts += [resolution, src, codec]
+        parts += [resolution, src, codec, tags, audio]
         
         # Filter empty/unknown
         final_parts = []
@@ -108,7 +109,7 @@ def build_normalized_basename(fields: LlmFields, original_stem: str) -> str:
     if group and src and group.lower() == src.lower():
          group = ""
          
-    parts = [title, year, resolution, src, codec]
+    parts = [title, year, resolution, src, codec, tags, audio]
     
     final_parts = []
     for p in parts:

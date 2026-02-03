@@ -78,6 +78,7 @@ class TestDirMigrateImdbTtExtraction(unittest.TestCase):
                 codec="x265",
                 audio="5.1",
                 group=None,
+            video_tags=None,
                 confidence=0.9,
             )
             llm = _FakeLlm(fields)
@@ -120,4 +121,5 @@ class TestDirMigrateImdbTtExtraction(unittest.TestCase):
 
             self.assertEqual(called.get("tt"), "tt0137523")
             self.assertNotEqual(plan.dest_dir, "/Downloads/low_imdb")
+
 

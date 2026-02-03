@@ -35,6 +35,7 @@ class TestDirMigratePlanning(unittest.TestCase):
             codec=None,
             audio=None,
             group=None,
+            video_tags=None,
             confidence=None,
         )
         d = dest_dir_for(rules, f, "X")
@@ -96,3 +97,4 @@ class TestDirMigratePlanning(unittest.TestCase):
         d = dest_dir_for(rules, f, "X")
         self.assertIn("/X-TV/NCIS/", d)
         self.assertTrue(d.endswith("/S02"))
+

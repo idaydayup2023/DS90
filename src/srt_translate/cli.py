@@ -28,12 +28,14 @@ def main(argv: list[str] | None = None) -> int:
     # Load dir_migrate config
     try:
         migrate_cfg = dm_config.load_config(args.config)
-        # Sync execution flags
+        # Sync execution flags only if explicitly provided via CLI
+        # Otherwise respect the values in config.json
         if args.dry_run:
             migrate_cfg = migrate_cfg.with_execution(dry_run=True, apply=False)
-        else:
-            # srt_translate default is to apply if not dry-run
-            migrate_cfg = migrate_cfg.with_execution(dry_run=False, apply=True)
+        elif args.force:
+            # If force is requested for srt_translate, we assume user wants to apply changes
+            # But we still respect the dry_run setting in migrate_cfg if not overridden
+            pass 
     except Exception as e:
         print(f"Warning: failed to load dir_migrate config: {e}", file=sys.stderr)
         migrate_cfg = None

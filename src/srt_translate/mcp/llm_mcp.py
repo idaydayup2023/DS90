@@ -21,7 +21,7 @@ class LlmMcp(Protocol):
 
 
 class OllamaMcp:
-    def __init__(self, base_url: str, timeout_seconds: int = 120):
+    def __init__(self, base_url: str, timeout_seconds: int = 600):
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout_seconds
 
@@ -76,7 +76,7 @@ class OllamaMcp:
 class LmStudioMcp:
     """LM Studio provides an OpenAI-compatible API."""
 
-    def __init__(self, base_url: str, timeout_seconds: int = 120):
+    def __init__(self, base_url: str, timeout_seconds: int = 600):
         # base_url should be like http://localhost:1234/v1
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout_seconds

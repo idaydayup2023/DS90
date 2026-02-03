@@ -63,3 +63,4 @@ class TestDirMigrateConfig(unittest.TestCase):
         self.assertEqual(cfg.source.ftp.host, "h")
         self.assertEqual(cfg.source.ftp.root_path, "/Downloads")
         self.assertEqual(cfg.dest.ftp.root_path, "/")
+

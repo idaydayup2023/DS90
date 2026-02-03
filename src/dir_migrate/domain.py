@@ -25,6 +25,7 @@ class LlmFields:
     codec: str | None
     audio: str | None
     group: str | None
+    video_tags: str | None
     confidence: float | None
 
 

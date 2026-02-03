@@ -30,7 +30,8 @@ class TestPlannerLlmFallback(unittest.TestCase):
         self.llm.infer.return_value = LlmFields(
             kind="movie", title="Joe Dirt 2", series=None, franchise_root=None,
             year=2015, season=None, episode=None, episode_title=None,
-            resolution="1080p", source=None, codec=None, audio=None, group=None, confidence=1.0
+            resolution="1080p", source=None, codec=None, audio=None, group=None,
+            video_tags=None, confidence=1.0
         )
 
     @patch("src.dir_migrate.agents.planner.ImdbMcp")
@@ -82,3 +83,4 @@ class TestPlannerLlmFallback(unittest.TestCase):
         
         # Verify decision: rating 7.0 (from IMDb) >= 6.0 => keep (Movies dir)
         self.assertTrue(plan.dest_dir.startswith("/Movies/"))
+

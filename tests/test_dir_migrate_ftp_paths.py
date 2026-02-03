@@ -22,3 +22,4 @@ class TestDirMigrateFtpPaths(unittest.TestCase):
     def test_ftp_abs_keeps_absolute_when_root_not_slash(self):
         cfg = FtpConnConfig(host="h", port=21, username="u", password="p", root_path="/Downloads", timeout_seconds=5)
         self.assertEqual(_ftp_abs(cfg, "/X-Movie/2026/A.mkv"), "/X-Movie/2026/A.mkv")
+

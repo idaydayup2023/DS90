@@ -5,7 +5,7 @@ import posixpath
 import time
 import threading
 from concurrent.futures import Future, wait, FIRST_COMPLETED
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from dataclasses import dataclass
 
 from typing import Any
@@ -39,8 +39,9 @@ import dataclasses
 
 log = logging.getLogger("srt_translate.orchestrator")
 
-# Global lock for Ollama removed as per user request
-# _OLLAMA_LOCK = threading.Lock()
+# Global semaphore to ensure only one heavy FTP operation (video download/upload/move)
+# happens at a time across all task pools.
+_FTP_HEAVY_SEMAPHORE = threading.Semaphore(1)
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,13 @@ class RunSummary:
     done: int
     failed: int
     elapsed_seconds: float
+
+
+def subtitle_suffix(video_stem: str, sub_stem: str) -> str:
+    """Extract suffix like '.en' or '.zh' from 'movie.en' given 'movie'."""
+    if sub_stem.startswith(video_stem):
+        return sub_stem[len(video_stem):]
+    return ""
 
 
 def _locked_translate_and_upload(*args, **kwargs):
@@ -133,7 +141,8 @@ def _discovery_task(
             local_video = _local_video_path(cfg.paths.local_cache_dir, video_id, v.remote_path)
             if not (local_video.exists() and local_video.stat().st_size > 0):
                 log.info("downloading video for subtitle discovery: %s", v.remote_path)
-                ftp.download(v.remote_path, local_video)
+                with _FTP_HEAVY_SEMAPHORE:
+                    ftp.download(v.remote_path, local_video)
             
             media = MediaMcp()
             # Try again with local video
@@ -212,7 +221,8 @@ def _download_video(cfg: AppConfig, video_id: str, video_remote_path: str) -> Pa
     if local.exists() and local.stat().st_size > 0:
         return local
     with FtpMcp(cfg.ftp.host, cfg.ftp.port, cfg.ftp.username, cfg.ftp.password) as ftp:
-        ftp.download(video_remote_path, local)
+        with _FTP_HEAVY_SEMAPHORE:
+            ftp.download(video_remote_path, local)
     return local
 
 
@@ -256,7 +266,9 @@ def _translate_and_upload(
     
     if not dry_run:
         with FtpMcp(cfg.ftp.host, cfg.ftp.port, cfg.ftp.username, cfg.ftp.password) as ftp:
+            log.info("uploading translation result to ftp: %s", ai_remote)
             ftp.atomic_write_from_file(ai_remote, local_ai)
+            log.info("upload translation done: %s", ai_remote)
 
 
 def _asr_then_upload(
@@ -284,7 +296,9 @@ def _asr_then_upload(
     asr.transcribe_to_srt(local_video, local_asr)
     if not dry_run:
         with FtpMcp(cfg.ftp.host, cfg.ftp.port, cfg.ftp.username, cfg.ftp.password) as ftp:
+            log.info("uploading asr result to ftp: %s", asr_remote)
             ftp.atomic_write_from_file(asr_remote, local_asr)
+            log.info("upload asr done: %s", asr_remote)
     return SubtitleSource(kind="asr", remote_path=asr_remote, local_path=local_asr, quality=None, meta={"generated": True})
 
 
@@ -311,7 +325,9 @@ def _pgs_ocr_sup_then_upload(
     ocr.sup_to_srt(local_sup, local_emb)
     if not dry_run:
         with FtpMcp(cfg.ftp.host, cfg.ftp.port, cfg.ftp.username, cfg.ftp.password) as ftp:
+            log.info("uploading pgs ocr result to ftp: %s", emb_remote)
             ftp.atomic_write_from_file(emb_remote, local_emb)
+            log.info("upload pgs ocr done: %s", emb_remote)
     q = score_srt_content(local_emb.read_text(encoding="utf-8", errors="replace"))
     return SubtitleSource(
         kind="emb",
@@ -345,43 +361,61 @@ def _migrate_task(
         log.info("migrate found subs video=%s subs=%s", video_remote_path, subs)
 
         plan: MovePlan | None = None
-        # Try to retrieve pre-planned info from store
+        # Try to retrieve pre-planned info from store to ensure determinism
         if store and video_id:
             task = store.get_task(video_id)
             if task and task.payload.get("plan"):
                 try:
                     plan_data = task.payload["plan"]
-                    # Reconstruct MovePlan and SourceFiles
                     source_data = plan_data["source"]
-                    # Update subtitle paths in source if they changed (discovered more subs)
+                    
+                    # Reconstruct SourceFiles with current subtitles (might have more now)
                     source_files = SourceFiles(
-                        video_path=source_data["video_path"],
+                        video_path=rel_video,
                         subtitle_paths=tuple(sorted(subs)),
                         video_size_bytes=source_data.get("video_size_bytes")
                     )
                     
-                    # We only reuse the normalized_basename and dest_dir to ensure determinism.
-                    # We still call plan_one to refresh paths but pass the locked basename?
-                    # Actually, dir_migrate doesn't support passing a locked basename yet.
-                    # But since we set temperature to 0.0, plan_one should return the same result.
-                    # For extra safety, we can manually construct the plan if we want.
+                    # Reconstruct MovePlan using the locked normalized_basename and dest_dir
+                    # We re-calculate dest_video_path and subtitle_moves based on these locked values
+                    locked_basename = plan_data["normalized_basename"]
+                    locked_dest_dir = plan_data["dest_dir"]
                     
-                    log.info("migrate: found pre-plan for %s", video_remote_path)
+                    p_orig = PurePosixPath(rel_video)
+                    dv = posixpath.join(locked_dest_dir, locked_basename + p_orig.suffix)
+                    
+                    moves = []
+                    for s in subs:
+                        sp = PurePosixPath(s)
+                        suffix = subtitle_suffix(p_orig.stem, sp.stem)
+                        dest_sub = posixpath.join(locked_dest_dir, locked_basename + suffix + sp.suffix)
+                        moves.append((s, dest_sub))
+                    
+                    plan = MovePlan(
+                        source=source_files,
+                        normalized_basename=locked_basename,
+                        dest_dir=locked_dest_dir,
+                        dest_video_path=dv,
+                        subtitle_moves=tuple(moves),
+                        skip_reason=None
+                    )
+                    log.info("migrate: using locked pre-plan for %s -> %s", video_remote_path, plan.dest_video_path)
                 except Exception as ee:
-                    log.warning("migrate: failed to reuse pre-plan: %s", ee)
+                    log.warning("migrate: failed to reconstruct locked pre-plan: %s", ee)
 
-        item = SourceFiles(
-            video_path=rel_video,
-            subtitle_paths=tuple(sorted(subs)),
-            video_size_bytes=None,
-        )
-        
-        # plan_one is deterministic now with temperature 0.0
-        plan = plan_one(migrate_cfg, llm, item, dest_storage, source_storage=source_storage)
+        if plan is None:
+            item = SourceFiles(
+                video_path=rel_video,
+                subtitle_paths=tuple(sorted(subs)),
+                video_size_bytes=None,
+            )
+            # plan_one is deterministic now with temperature 0.0, but we prefer the locked one above
+            plan = plan_one(migrate_cfg, llm, item, dest_storage, source_storage=source_storage)
+            log.info("migrate planned video=%s dest=%s", video_remote_path, plan.dest_video_path)
+
+        with _FTP_HEAVY_SEMAPHORE:
+            success, result, error = apply_one(migrate_cfg, source_storage, dest_storage, plan)
             
-        log.info("migrate planned video=%s dest=%s", video_remote_path, plan.dest_video_path)
-
-        success, result, error = apply_one(migrate_cfg, source_storage, dest_storage, plan)
         if not success:
             log.error("migrate apply failed video=%s error=%s", video_remote_path, error)
             return False, f"{result}: {error}"
@@ -610,7 +644,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
     dest_storage = None
     if migrate_cfg and plan_one and apply_one and SourceFiles and LlmMcp and build_storage_mcp:
         log.info("migration enabled: initializing migrate_pool")
-        migrate_pool = DaemonExecutor(max_workers=2, thread_name_prefix="migrate")
+        migrate_pool = DaemonExecutor(max_workers=max(1, migrate_cfg.execution.workers), thread_name_prefix="migrate")
         llm_mcp_migrate = build_llm_mcp(migrate_cfg.llm.provider, migrate_cfg.llm.base_url, timeout_seconds=migrate_cfg.llm.timeout_seconds)
         model_migrate = resolve_llm_model(llm_mcp_migrate, migrate_cfg.llm.model)
         migrate_llm = LlmMcp(llm_mcp_migrate, model_migrate, migrate_cfg.llm.temperature)
@@ -653,6 +687,14 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
     def _schedule_migration(video_id: str, remote_path: str) -> None:
         if not migrate_pool:
             return
+        
+        # Check if already migrated
+        if store:
+            task = store.get_task(video_id)
+            if task and task.status == "MIGRATED":
+                log.info("migrate skip (already MIGRATED in store): %s", remote_path)
+                return
+
         log.info("migrate queued video=%s", remote_path)
         store.upsert_task(
             TaskRecord(
@@ -778,11 +820,14 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
         while pending:
             done, pending = wait(pending, return_when=FIRST_COMPLETED, timeout=10)
             if not done:
+                # Add a periodic status report to see what's actually running
                 active_kinds = {}
                 for f in pending:
                     k = meta.get(f, ("unknown",))[0]
                     active_kinds[k] = active_kinds.get(k, 0) + 1
-                log.info("waiting for %d tasks: %s", len(pending), active_kinds)
+                
+                # Check for stalled downloads/uploads by looking at logs
+                log.info("Status Report: Waiting for %d tasks: %s", len(pending), active_kinds)
                 continue
                 
             for fut in done:
