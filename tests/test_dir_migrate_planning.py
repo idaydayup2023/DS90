@@ -64,10 +64,12 @@ class TestDirMigratePlanning(unittest.TestCase):
             codec=None,
             audio=None,
             group=None,
+            video_tags=None,
             confidence=None,
         )
         d = dest_dir_for(rules, f, "X")
-        self.assertTrue(d.startswith("/MOVIE/2020s/"))
+        # With year=2024 and year_split=2024, it should go to /MOVIE/2024/
+        self.assertTrue(d.startswith("/MOVIE/2024/"))
 
     def test_tv_includes_sxx(self):
         rules = RulesConfig(
@@ -92,6 +94,7 @@ class TestDirMigratePlanning(unittest.TestCase):
             codec=None,
             audio=None,
             group=None,
+            video_tags=None,
             confidence=None,
         )
         d = dest_dir_for(rules, f, "X")

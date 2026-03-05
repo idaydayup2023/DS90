@@ -248,10 +248,58 @@ def _sanitize_fields(filename: str, fields: LlmFields, fallback: dict[str, Any])
     if resolution not in allowed_res:
         resolution = "unknown"
 
+    video_tags = _as_str(fields.video_tags)
+    if video_tags:
+        # Clean video_tags: split by comma/space, remove duplicates and known fields
+        # Regex to split by comma or space but keep multi-word tags? 
+        # Usually tags are single words like "HDR", "DV". 
+        # But "HDR10+" is one tag.
+        # Let's split by comma first, then by space if needed?
+        # User prompt says "include HDR info...".
+        # Let's try to normalize.
+        raw_tags = re.split(r"[, ]+", video_tags)
+        cleaned_tags = []
+        seen_tags = set()
+        
+        # Collect values to exclude
+        exclude_values = set()
+        if resolution: exclude_values.add(resolution.lower())
+        if codec: exclude_values.add(codec.lower())
+        if source: exclude_values.add(source.lower())
+        if audio: exclude_values.add(audio.lower())
+        if group: exclude_values.add(group.lower())
+        exclude_values.add("unknown")
+        
+        for t in raw_tags:
+            t_clean = t.strip()
+            if not t_clean:
+                continue
+            t_lower = t_clean.lower()
+            
+            # Skip if it's one of the other fields
+            if t_lower in exclude_values:
+                continue
+                
+            # Skip if it looks like resolution/codec/source/SE
+            if _looks_like_resolution(t_clean) or _looks_like_codec(t_clean) or _looks_like_se(t_clean):
+                continue
+            
+            if t_lower not in seen_tags:
+                seen_tags.add(t_lower)
+                cleaned_tags.append(t_clean)
+        
+        video_tags = ".".join(cleaned_tags) if cleaned_tags else None
+
     series = _as_str(fields.series)
     if series and _looks_like_se(series):
         series = None
     if not series:
+        series = _as_str(fallback.get("series"))
+    if series:
+        trimmed = re.sub(r"(?i)[ ._-]*S\d{1,2}E\d{1,2}.*$", "", series).strip(" ._-")
+        if trimmed:
+            series = trimmed
+    if (not series) and _as_str(fallback.get("series")):
         series = _as_str(fallback.get("series"))
 
     kind = fields.kind
@@ -261,6 +309,12 @@ def _sanitize_fields(filename: str, fields: LlmFields, fallback: dict[str, Any])
         if resolution == "2160p" or fields.year is not None or fallback.get("kind") == "movie":
             log.info("overriding kind from tv to movie for %s (no SxxExx found)", filename)
             kind = "movie"
+            
+    # Safety: If LLM claims it's MOVIE but we have clear Season/Episode info,
+    # trust the SxxExx.
+    if kind == "movie" and fields.season is not None and fields.episode is not None:
+        log.info("overriding kind from movie to tv for %s (found S%sE%s)", filename, fields.season, fields.episode)
+        kind = "tv"
 
     return LlmFields(
         kind=kind,
@@ -290,9 +344,8 @@ def _prompt(filename: str) -> str:
         "Do NOT truncate, do NOT summarize, and do NOT omit any words (e.g., 'St. Denis Medical' must stay 'St. Denis Medical', 'Law and Order SVU' must stay 'Law and Order SVU').\n"
         "2) FRANCHISE vs SERIES: 'franchise_root' is the main brand (e.g., '9-1-1', 'Law and Order'). 'series' is the specific show name (e.g., '9-1-1: Nashville', 'Law and Order: SVU'). "
         "If it's a spin-off, ensure 'franchise_root' is the main series and 'series' is the full spin-off name.\n"
-        "3) KIND IDENTIFICATION: 'kind' must be 'movie' if there is no season/episode information (like S01E01). "
-        "High-resolution files (2160p/4K) without SxxExx are almost always movies. "
-        "TV shows must have a season and episode.\n"
+        "3) KIND IDENTIFICATION: 'kind' must be 'tv' if there is season/episode information (like S01E01), even if resolution is high. "
+        "Only set 'kind' to 'movie' if there is absolutely NO season/episode pattern.\n"
         "4) YEAR/SEASON/EPISODE: Extract accurately. 'season' and 'episode' must be integers.\n"
         "5) NO ALTERATION: Only extract fields. Do NOT change characters or capitalization from the original filename for names.\n"
         "6) NEVER NULL TITLE: You must provide a 'title' (for movies) or 'series' (for TV). If unsure, use the most likely name from the filename. Never return null for both 'title' and 'series'.\n"

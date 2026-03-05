@@ -385,11 +385,30 @@ def _migrate_task(
                     dv = posixpath.join(locked_dest_dir, locked_basename + p_orig.suffix)
                     
                     moves = []
+                    subtitle_exts = {str(e).lower() for e in migrate_cfg.subtitle.extensions}
+                    existing_src = set()
                     for s in subs:
                         sp = PurePosixPath(s)
                         suffix = subtitle_suffix(p_orig.stem, sp.stem)
                         dest_sub = posixpath.join(locked_dest_dir, locked_basename + suffix + sp.suffix)
                         moves.append((s, dest_sub))
+                        existing_src.add(s)
+
+                    locked_moves = plan_data.get("subtitle_moves") or []
+                    for pair in locked_moves:
+                        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                            continue
+                        src_locked = str(pair[0])
+                        dst_locked = str(pair[1])
+                        ext = PurePosixPath(src_locked).suffix.lower()
+                        if ext in subtitle_exts:
+                            if src_locked in existing_src:
+                                continue
+                            sp = PurePosixPath(src_locked)
+                            suffix = subtitle_suffix(p_orig.stem, sp.stem)
+                            dst_locked = posixpath.join(locked_dest_dir, locked_basename + suffix + sp.suffix)
+                            existing_src.add(src_locked)
+                        moves.append((src_locked, dst_locked))
                     
                     plan = MovePlan(
                         source=source_files,

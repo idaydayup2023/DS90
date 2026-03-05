@@ -30,6 +30,9 @@ class TestDirMigratePlannerSidecar(unittest.TestCase):
         cfg.imdb = ImdbConfig(enabled=False, auto_install=False, ttl_days=1, min_rating=None, min_votes=None, skip_unrated=False)
         cfg.paths = MagicMock(spec=PathsConfig)
         cfg.paths.local_cache_dir = Path("/tmp")
+        cfg.source = MagicMock()
+        cfg.source.kind = "ftp"
+        cfg.source.local_root = None
 
         # LLM
         llm = MagicMock(spec=LlmMcp)
@@ -84,4 +87,3 @@ class TestDirMigratePlannerSidecar(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-
