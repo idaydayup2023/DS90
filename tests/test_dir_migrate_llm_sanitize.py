@@ -62,6 +62,31 @@ class TestDirMigrateLlmSanitize(unittest.TestCase):
         name = build_normalized_basename(sanitized, Path(filename).stem)
         self.assertNotIn("S00E00", name)
 
+    def test_remove_eztvx_ad_tag_from_group(self):
+        filename = "Show.Name.S01E01.1080p.WEB.h264.[EZTVx.to].mkv"
+        fallback = _fallback_from_filename(filename)
+        fields = LlmFields(
+            kind="tv",
+            title=None,
+            series="Show Name",
+            franchise_root=None,
+            year=None,
+            season=1,
+            episode=1,
+            episode_title=None,
+            resolution="1080p",
+            source="WEB",
+            codec="h264",
+            audio=None,
+            group="EZTVx.to",
+            video_tags=None,
+            confidence=0.9,
+        )
+        sanitized = _sanitize_fields(filename, fields, fallback)
+        name = build_normalized_basename(sanitized, Path(filename).stem)
+        self.assertNotIn("EZTVx.to", name)
+        self.assertNotIn("EZTVx", name)
+
 
 if __name__ == "__main__":
     unittest.main()

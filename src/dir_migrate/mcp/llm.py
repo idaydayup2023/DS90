@@ -185,6 +185,12 @@ def _sanitize_fields(filename: str, fields: LlmFields, fallback: dict[str, Any])
         # Extended list of common sources and streaming providers
         return bool(re.match(r"(?i)^(web[-_. ]?dl|webrip|bluray|brrip|hdtv|remux|amzn|nf|dsnp|hmax|max|atvp|apple[-_. ]?tv|hulu|pcok|paramount|dpv)$", s.strip()))
 
+    def _looks_like_ad_tag(s: str | None) -> bool:
+        if not s:
+            return False
+        t = re.sub(r"[^a-z0-9]", "", s.lower())
+        return t in {"eztvxto", "eztv", "eztvx"}
+
     resolution = _norm_res(fields.resolution) or _norm_res(_as_str(fallback.get("resolution")))
     codec = _as_str(fields.codec)
     if codec and _looks_like_resolution(codec):
@@ -213,6 +219,8 @@ def _sanitize_fields(filename: str, fields: LlmFields, fallback: dict[str, Any])
         source = None
     if not source:
         source = _as_str(fallback.get("source"))
+    if _looks_like_ad_tag(source):
+        source = None
 
     if not group:
         group = _as_str(fallback.get("group"))
@@ -224,6 +232,8 @@ def _sanitize_fields(filename: str, fields: LlmFields, fallback: dict[str, Any])
     # But _looks_like_source checks for WEB-DL etc. ELiTE won't match.
     
     if group and (_looks_like_resolution(group) or _looks_like_codec(group) or _looks_like_source(group) or _looks_like_se(group)):
+        group = None
+    if _looks_like_ad_tag(group):
         group = None
     
     # New check: if source matches group, clear source?
