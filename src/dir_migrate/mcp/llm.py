@@ -302,18 +302,17 @@ def _sanitize_fields(filename: str, fields: LlmFields, fallback: dict[str, Any])
     if (not series) and _as_str(fallback.get("series")):
         series = _as_str(fallback.get("series"))
 
+    season = fields.season if (fields.season is not None and fields.season > 0) else None
+    episode = fields.episode if (fields.episode is not None and fields.episode > 0) else None
+
     kind = fields.kind
-    # Safety: If LLM claims it's TV but failed to find ANY season/episode, 
-    # and it looks like a movie (4K or has year), trust the movie judgment.
-    if kind == "tv" and fields.season is None and fields.episode is None:
+    if kind == "tv" and (season is None or episode is None):
         if resolution == "2160p" or fields.year is not None or fallback.get("kind") == "movie":
-            log.info("overriding kind from tv to movie for %s (no SxxExx found)", filename)
+            log.info("overriding kind from tv to movie for %s (no valid SxxExx found)", filename)
             kind = "movie"
-            
-    # Safety: If LLM claims it's MOVIE but we have clear Season/Episode info,
-    # trust the SxxExx.
-    if kind == "movie" and fields.season is not None and fields.episode is not None:
-        log.info("overriding kind from movie to tv for %s (found S%sE%s)", filename, fields.season, fields.episode)
+
+    if kind == "movie" and season is not None and episode is not None:
+        log.info("overriding kind from movie to tv for %s (found S%sE%s)", filename, season, episode)
         kind = "tv"
 
     return LlmFields(
@@ -322,8 +321,8 @@ def _sanitize_fields(filename: str, fields: LlmFields, fallback: dict[str, Any])
         series=series,
         franchise_root=fields.franchise_root,
         year=fields.year,
-        season=fields.season,
-        episode=fields.episode,
+        season=season,
+        episode=episode,
         episode_title=episode_title,
         resolution=resolution,
         source=source,
