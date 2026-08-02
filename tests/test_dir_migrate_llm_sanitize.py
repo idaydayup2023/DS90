@@ -12,6 +12,17 @@ from dir_migrate.naming import build_normalized_basename
 
 
 class TestDirMigrateLlmSanitize(unittest.TestCase):
+    def test_fallback_keeps_uhd_quality_neutral(self):
+        fallback = _fallback_from_filename("Ambiguous.Title.2024.UHD.HEVC.mkv")
+        self.assertEqual("unknown", fallback["kind"])
+        self.assertEqual("2160p", fallback["resolution"])
+
+    def test_fallback_preserves_split_4k_episode_marker(self):
+        fallback = _fallback_from_filename("Show.Name.S01.E02.2160p.UHD.HEVC.mkv")
+        self.assertEqual("tv", fallback["kind"])
+        self.assertEqual(1, fallback["season"])
+        self.assertEqual(2, fallback["episode"])
+
     def test_tv_series_drops_episode_tail(self):
         filename = "Tehran.S03E02.Friend.or.Foe.1080p.x265-ELiTE.mkv"
         fallback = _fallback_from_filename(filename)
@@ -35,7 +46,7 @@ class TestDirMigrateLlmSanitize(unittest.TestCase):
         sanitized = _sanitize_fields(filename, fields, fallback)
         self.assertEqual("Tehran", sanitized.series)
 
-    def test_4k_movie_never_generates_s00e00(self):
+    def test_4k_does_not_force_incomplete_tv_guess_to_movie(self):
         filename = "War.Machine.2026.2160p.WEB-DL.HEVC.x265.5.1.BONE.mkv"
         fallback = _fallback_from_filename(filename)
         fields = LlmFields(
@@ -56,7 +67,7 @@ class TestDirMigrateLlmSanitize(unittest.TestCase):
             confidence=0.8,
         )
         sanitized = _sanitize_fields(filename, fields, fallback)
-        self.assertEqual("movie", sanitized.kind)
+        self.assertEqual("unknown", sanitized.kind)
         self.assertIsNone(sanitized.season)
         self.assertIsNone(sanitized.episode)
         name = build_normalized_basename(sanitized, Path(filename).stem)

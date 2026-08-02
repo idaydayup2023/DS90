@@ -60,17 +60,18 @@ def _prompt(filename: str, parsed: LlmFields, imdb: ImdbTitle) -> str:
         "Given a video filename, parsed metadata, and IMDb metadata, produce the most trustworthy metadata.\n"
         "Rules:\n"
         "1) Output JSON only. No explanations.\n"
-        "2) kind must be \"movie\" or \"tv\".\n"
+        "2) kind must be \"movie\", \"tv\", or \"unknown\". Use unknown when evidence is insufficient.\n"
         "3) title for movie; series for tv.\n"
         "4) Prefer IMDb title/year if it clearly matches the filename.\n"
         "5) franchise_root: for tv spin-off, use the original franchise name if known; otherwise null.\n"
-        "6) Keep season/episode from parsed metadata.\n\n"
+        "6) Keep season/episode from parsed metadata.\n"
+        "7) 4K, UHD, 2160p, HEVC, HDR and similar quality tags are neutral and must not decide movie vs TV.\n\n"
         f"FILENAME: {filename}\n"
         f"PARSED: {json.dumps(asdict(parsed), ensure_ascii=False)}\n"
         f"IMDB: {json.dumps(asdict(imdb), ensure_ascii=False)}\n"
         "OUTPUT JSON SCHEMA:\n"
         "{\n"
-        "  \"kind\": \"movie|tv\",\n"
+        "  \"kind\": \"movie|tv|unknown\",\n"
         "  \"title\": string|null,\n"
         "  \"series\": string|null,\n"
         "  \"franchise_root\": string|null,\n"
@@ -119,4 +120,3 @@ class MetadataJudgeMcp:
                 last_err = e
                 continue
         raise RuntimeError(str(last_err) if last_err else "metadata judge failed")
-

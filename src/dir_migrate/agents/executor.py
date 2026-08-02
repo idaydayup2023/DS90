@@ -78,6 +78,9 @@ def _pick_non_conflicting(cfg: AppConfig, dest_storage: StorageMcp, plan: MovePl
 
 
 def apply_one(cfg: AppConfig, source_storage: StorageMcp, dest_storage: StorageMcp, plan: MovePlan) -> tuple[bool, str | None, str | None]:
+    if plan.skip_reason:
+        log.info("migration skipped video=%s reason=%s", plan.source.video_path, plan.skip_reason)
+        return False, "SKIPPED", plan.skip_reason
     if cfg.execution.dry_run:
         log.info("dry-run: would move %s to %s", plan.source.video_path, plan.dest_video_path)
         for src_sub, dst_sub in plan.subtitle_moves:

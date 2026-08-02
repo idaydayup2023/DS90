@@ -78,7 +78,7 @@ class ExecutionConfig:
 @dataclass(frozen=True)
 class ImdbConfig:
     enabled: bool = False
-    auto_install: bool = True
+    auto_install: bool = False
     ttl_days: int = 30
     min_rating: float | None = 5.0
     min_votes: int | None = None
@@ -255,7 +255,7 @@ def load_config(path: str | Path) -> AppConfig:
     imdb_raw = tool_raw.get("imdb") or {}
     imdb = ImdbConfig(
         enabled=bool(imdb_raw.get("enabled", False)),
-        auto_install=bool(imdb_raw.get("auto_install", True)),
+        auto_install=bool(imdb_raw.get("auto_install", False)),
         ttl_days=int(imdb_raw.get("ttl_days", 30)),
         min_rating=float(imdb_raw["min_rating"]) if "min_rating" in imdb_raw and imdb_raw["min_rating"] is not None else None,
         min_votes=int(imdb_raw["min_votes"]) if "min_votes" in imdb_raw and imdb_raw["min_votes"] is not None else None,

@@ -1,27 +1,53 @@
 
 import unittest
 import dataclasses
-from unittest.mock import MagicMock, patch, ANY
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 from dir_migrate.agents.planner import plan_one
-from dir_migrate.config import AppConfig, ImdbConfig, RulesConfig, PathsConfig, LlmConfig
+from dir_migrate.config import (
+    AppConfig,
+    CleanupConfig,
+    ExecutionConfig,
+    ImdbConfig,
+    LlmConfig,
+    PathsConfig,
+    RulesConfig,
+    StorageConfig,
+    SubtitleConfig,
+    VideoConfig,
+)
 from dir_migrate.domain import SourceFiles, ImdbKnowledge, LlmFields
 from dir_migrate.mcp.llm import LlmMcp
 from dir_migrate.mcp.imdb import ImdbMcp, ImdbLookupDebug
 
 class TestPlannerLlmFallback(unittest.TestCase):
     def setUp(self):
-        self.cfg = MagicMock(spec=AppConfig)
-        self.cfg.rules = RulesConfig(
-            movie_1080_root="Movies", 
-            movie_4k_root="Movies4K",
-            tv_1080_root="TV",
-            tv_4k_root="TV4K"
+        self.cfg = AppConfig(
+            source=StorageConfig(kind="ftp"),
+            dest=StorageConfig(kind="ftp"),
+            paths=PathsConfig(local_cache_dir=Path("/tmp")),
+            video=VideoConfig(extensions=(".mkv",), min_bytes=0),
+            subtitle=SubtitleConfig(extensions=(".srt",)),
+            cleanup=CleanupConfig(enabled=False),
+            llm=LlmConfig(
+                provider="ollama",
+                base_url="http://localhost:11434",
+                model="test",
+            ),
+            imdb=ImdbConfig(enabled=True, min_rating=6.0, skip_unrated=True),
+            rules=RulesConfig(
+                movie_1080_root="Movies",
+                movie_4k_root="Movies4K",
+                tv_1080_root="TV",
+                tv_4k_root="TV4K",
+            ),
+            execution=ExecutionConfig(
+                dry_run=True,
+                apply=False,
+                limit=None,
+                workers=1,
+            ),
         )
-        self.cfg.imdb = ImdbConfig(enabled=True, min_rating=6.0, skip_unrated=True)
-        self.cfg.paths = MagicMock(spec=PathsConfig)
-        self.cfg.paths.local_cache_dir = "/tmp"
-        self.cfg.llm = MagicMock(spec=LlmConfig)
-        self.cfg.llm.model = "test"
 
         self.llm = MagicMock(spec=LlmMcp)
         self.item = SourceFiles(video_path="/Downloads/Joe.Dirt.2.2015.mkv", subtitle_paths=(), video_size_bytes=None)
@@ -34,7 +60,7 @@ class TestPlannerLlmFallback(unittest.TestCase):
             video_tags=None, confidence=1.0
         )
 
-    @patch("src.dir_migrate.agents.planner.ImdbMcp")
+    @patch("dir_migrate.agents.planner.ImdbMcp")
     def test_llm_priority(self, MockImdbMcp):
         # Mock LLM providing rating (Priority)
         self.llm.query_imdb.return_value = ImdbKnowledge(
@@ -57,7 +83,7 @@ class TestPlannerLlmFallback(unittest.TestCase):
         # Verify decision: rating 5.7 (from LLM) < 6.0 => low_imdb
         self.assertEqual(plan.dest_dir, "/Downloads/low_imdb")
 
-    @patch("src.dir_migrate.agents.planner.ImdbMcp")
+    @patch("dir_migrate.agents.planner.ImdbMcp")
     def test_llm_fallback_to_imdb(self, MockImdbMcp):
         # Mock LLM failing (no rating)
         self.llm.query_imdb.return_value = ImdbKnowledge(
@@ -83,4 +109,3 @@ class TestPlannerLlmFallback(unittest.TestCase):
         
         # Verify decision: rating 7.0 (from IMDb) >= 6.0 => keep (Movies dir)
         self.assertTrue(plan.dest_dir.startswith("/Movies/"))
-

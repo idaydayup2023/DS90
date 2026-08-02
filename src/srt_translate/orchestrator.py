@@ -30,7 +30,7 @@ from .summary import generate_summary
 from dir_migrate.agents.planner import plan_one
 from dir_migrate.agents.executor import apply_one
 from dir_migrate.agents.cleaner import cleanup_sweep
-from dir_migrate.domain import SourceFiles, MovePlan
+from dir_migrate.domain import CLASSIFICATION_VERSION, SourceFiles, MovePlan
 from dir_migrate.mcp.llm import LlmMcp
 from dir_migrate.mcp.storage import build_storage_mcp
 from dir_migrate.config import AppConfig as MigrateAppConfig
@@ -367,6 +367,16 @@ def _migrate_task(
             if task and task.payload.get("plan"):
                 try:
                     plan_data = task.payload["plan"]
+                    if plan_data.get("classification_version") != CLASSIFICATION_VERSION:
+                        raise ValueError("stored migration plan uses stale classification rules")
+                    pending_reason = plan_data.get("skip_reason")
+                    if pending_reason:
+                        log.warning(
+                            "migrate classification pending video=%s reason=%s",
+                            video_remote_path,
+                            pending_reason,
+                        )
+                        return False, f"CLASSIFICATION_PENDING: {pending_reason}"
                     source_data = plan_data["source"]
                     
                     # Reconstruct SourceFiles with current subtitles (might have more now)
@@ -431,6 +441,14 @@ def _migrate_task(
             # plan_one is deterministic now with temperature 0.0, but we prefer the locked one above
             plan = plan_one(migrate_cfg, llm, item, dest_storage, source_storage=source_storage)
             log.info("migrate planned video=%s dest=%s", video_remote_path, plan.dest_video_path)
+
+        if plan.skip_reason:
+            log.warning(
+                "migrate classification pending video=%s reason=%s",
+                video_remote_path,
+                plan.skip_reason,
+            )
+            return False, f"CLASSIFICATION_PENDING: {plan.skip_reason}"
 
         with _FTP_HEAVY_SEMAPHORE:
             success, result, error = apply_one(migrate_cfg, source_storage, dest_storage, plan)
@@ -614,6 +632,17 @@ def _handle_future_result(
                 log.info("migration conflict video=%s: considering as migrated", rpath)
                 migrated_delta = 1
                 store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="MIGRATED", payload={"info": "conflict: already exists"}, updated_at=int(time.time())))
+            elif err and "CLASSIFICATION_PENDING" in str(err):
+                log.warning("migration pending confirmation video=%s reason=%s", rpath, err)
+                store.upsert_task(
+                    TaskRecord(
+                        video_id=vid,
+                        video_path=rpath,
+                        status="CLASSIFICATION_PENDING",
+                        payload={"reason": err},
+                        updated_at=int(time.time()),
+                    )
+                )
             else:
                 store.upsert_task(TaskRecord(video_id=vid, video_path=rpath, status="MIGRATION_FAILED", payload={"error": err}, updated_at=int(time.time())))
         else:
@@ -793,7 +822,7 @@ def run_once(cfg: AppConfig, store: StateStore, force: bool, dry_run: bool, migr
         )
         try:
             asr_cmd = resolve_whisper_command(cfg.whisper, cache_dir=cfg.paths.local_cache_dir)
-            asr_device = resolve_whisper_device(cfg.whisper)
+            asr_device = resolve_whisper_device(cfg.whisper, cache_dir=cfg.paths.local_cache_dir)
         except Exception as e:
             failed_count += 1
             store.upsert_task(

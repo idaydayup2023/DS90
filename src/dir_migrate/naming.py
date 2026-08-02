@@ -38,7 +38,7 @@ def _season_episode(season: int | None, episode: int | None) -> str:
 
 def build_normalized_basename(fields: LlmFields, original_stem: str) -> str:
     resolution = (fields.resolution or "").lower()
-    if resolution in ("4k", "2160", "2160p"):
+    if resolution in ("4k", "uhd", "2160", "2160p"):
         resolution = "2160p"
     if resolution in ("1080", "1080p"):
         resolution = "1080p"

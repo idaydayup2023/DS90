@@ -7,8 +7,10 @@ import os
 import posixpath
 import re
 import threading
+import weakref
 from pathlib import Path, PurePosixPath
 
+from ..classification import classify_media, sidecar_media_kind
 from ..config import AppConfig
 from ..domain import MovePlan, SourceFiles
 from ..mcp.franchise_judge import FranchiseJudgeMcp
@@ -23,9 +25,41 @@ from ..planning import dest_dir_for
 log = logging.getLogger("dir_migrate.agents.planner")
 
 _franchise_cache_lock = threading.Lock()
-_franchise_present_cache: dict[str, bool] = {}
-_franchise_scan_done = False
-_all_existing_franchises: set[str] = set()
+_franchise_scan_cache: weakref.WeakKeyDictionary[
+    object, dict[tuple[str, ...], set[str]]
+] = weakref.WeakKeyDictionary()
+
+
+def _classification_metadata_from_sidecars(
+    source_storage: StorageMcp | None,
+    video_path: str,
+) -> tuple[str | None, str | None, int | None, int | None]:
+    if source_storage is None:
+        return None, None, None, None
+    directory = posixpath.dirname(video_path.rstrip("/")) or ""
+    video_stem = PurePosixPath(video_path).stem.lower()
+    try:
+        entries = source_storage.list_dir(directory)
+    except Exception:
+        return None, None, None, None
+    for path, entry_type, _size in entries:
+        if entry_type != "file":
+            continue
+        name = posixpath.basename(path)
+        lower = name.lower()
+        if not lower.endswith((".nfo", ".json")):
+            continue
+        sidecar_stem = PurePosixPath(name).stem.lower()
+        if sidecar_stem not in (video_stem, "tvshow", "season"):
+            continue
+        try:
+            text = source_storage.read_text(path, max_bytes=1048576)
+        except Exception:
+            continue
+        kind, evidence, season, episode = sidecar_media_kind(name, text)
+        if kind:
+            return kind, evidence, season, episode
+    return None, None, None, None
 
 
 def _extract_imdb_from_json(source_storage: StorageMcp, video_path: str) -> tuple[str | None, float | None, int | None]:
@@ -161,23 +195,26 @@ def _normalize_imdb_query_title(title: str | None, year: int | None) -> str | No
 # _dotify imported from naming.py
 
 
+def _franchise_name_present(folder_names: set[str], key: str) -> bool:
+    return any(name == key or name.startswith(key + ".") for name in folder_names)
+
+
 def _franchise_present_in_dest(dest_storage: StorageMcp, cfg: AppConfig, franchise_root: str) -> bool:
-    global _franchise_scan_done
     key = _dotify(franchise_root).lower()
     if not key:
         return False
-    
-    with _franchise_cache_lock:
-        if _franchise_scan_done:
-            return key in _all_existing_franchises
 
-    # Perform full scan once
-    roots = [
+    roots = (
         posixpath.join("/", cfg.rules.movie_1080_root),
         posixpath.join("/", cfg.rules.movie_4k_root),
         posixpath.join("/", cfg.rules.tv_1080_root),
         posixpath.join("/", cfg.rules.tv_4k_root),
-    ]
+    )
+
+    with _franchise_cache_lock:
+        cached_by_roots = _franchise_scan_cache.get(dest_storage)
+        if cached_by_roots is not None and roots in cached_by_roots:
+            return _franchise_name_present(cached_by_roots[roots], key)
     
     found_franchises: set[str] = set()
     for root in roots:
@@ -185,10 +222,17 @@ def _franchise_present_in_dest(dest_storage: StorageMcp, cfg: AppConfig, franchi
             entries = dest_storage.list_dir(root)
             for p, t, _sz in entries:
                 if t == "dir":
-                    # Some folders might be direct franchise roots, some might be buckets (A-Z)
-                    # For safety, we can look into folders that look like buckets
+                    # Some folders are direct franchise roots; movie libraries may
+                    # also use A-Z, year, or decade buckets.
                     name = posixpath.basename(p)
-                    if len(name) == 1 or (name.startswith("A-") or name == "0-9"):
+                    is_bucket = (
+                        len(name) == 1
+                        or name.startswith("A-")
+                        or name == "0-9"
+                        or re.fullmatch(r"\d{4}s?", name) is not None
+                        or name.lower() in ("unknownyear", "unknowndecade")
+                    )
+                    if is_bucket:
                         try:
                             sub_entries = dest_storage.list_dir(p)
                             for sp, st, _ssz in sub_entries:
@@ -202,9 +246,9 @@ def _franchise_present_in_dest(dest_storage: StorageMcp, cfg: AppConfig, franchi
             continue
             
     with _franchise_cache_lock:
-        _all_existing_franchises.update(found_franchises)
-        _franchise_scan_done = True
-        return key in _all_existing_franchises
+        cached_by_roots = _franchise_scan_cache.setdefault(dest_storage, {})
+        cached_by_roots[roots] = found_franchises
+        return _franchise_name_present(found_franchises, key)
 
 
 def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: StorageMcp | None = None, source_storage: StorageMcp | None = None) -> MovePlan:
@@ -253,6 +297,58 @@ def plan_one(cfg: AppConfig, llm: LlmMcp, item: SourceFiles, dest_storage: Stora
 
         except Exception as e:
             log.warning("failed to probe media info for %s: %s", item.video_path, e)
+
+    metadata_kind, metadata_evidence, metadata_season, metadata_episode = _classification_metadata_from_sidecars(
+        source_storage,
+        item.video_path,
+    )
+    if metadata_season is not None or metadata_episode is not None:
+        fields = dataclasses.replace(
+            fields,
+            season=metadata_season if metadata_season is not None else fields.season,
+            episode=metadata_episode if metadata_episode is not None else fields.episode,
+        )
+    classification = classify_media(
+        item.video_path,
+        fields,
+        metadata_kind=metadata_kind,
+        metadata_evidence=metadata_evidence,
+    )
+    log.info(
+        "classification video=%s decision=%s season=%s episode=%s explanation=%s",
+        item.video_path,
+        classification.kind,
+        classification.season,
+        classification.episode,
+        classification.explanation,
+    )
+    if classification.kind == "unknown":
+        return MovePlan(
+            source=item,
+            normalized_basename=p.stem,
+            dest_dir="",
+            dest_video_path=item.video_path,
+            subtitle_moves=(),
+            skip_reason=classification.explanation,
+        )
+
+    if classification.kind == "tv":
+        fields = dataclasses.replace(
+            fields,
+            kind="tv",
+            title=fields.title,
+            series=fields.series or fields.title,
+            season=classification.season,
+            episode=classification.episode,
+        )
+    else:
+        fields = dataclasses.replace(
+            fields,
+            kind="movie",
+            season=None,
+            episode=None,
+            episode_title=None,
+        )
 
     if cfg.imdb.enabled:
         imdb = ImdbMcp(cache_dir=cfg.paths.local_cache_dir, auto_install=cfg.imdb.auto_install, ttl_days=cfg.imdb.ttl_days)

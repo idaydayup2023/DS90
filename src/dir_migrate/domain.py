@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+CLASSIFICATION_VERSION = 2
+
+
 @dataclass(frozen=True)
 class SourceFiles:
     video_path: str
@@ -54,6 +57,7 @@ class MovePlan:
     dest_video_path: str
     subtitle_moves: tuple[tuple[str, str], ...]
     skip_reason: str | None = None
+    classification_version: int = CLASSIFICATION_VERSION
 
 
 @dataclass(frozen=True)

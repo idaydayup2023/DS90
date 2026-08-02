@@ -43,7 +43,7 @@ class WhisperConfig:
     command: tuple[str, ...]
     language: str | None
     asr_workers: int = 1
-    auto_install: bool = True
+    auto_install: bool = False
     device: str = "auto"
     model: str = "small"
     fallback_models: tuple[str, ...] = ("medium",)
@@ -55,7 +55,7 @@ class WhisperConfig:
 @dataclass(frozen=True)
 class PgsOcrConfig:
     enabled: bool = True
-    auto_install: bool = True
+    auto_install: bool = False
     languages: tuple[str, ...] = ("en",)
     max_workers: int = 1
     keep_temp_files: bool = False
@@ -146,7 +146,7 @@ def load_config(path: str | Path) -> AppConfig:
         command=_as_tuple_str(_require(whisper_raw, "command")),
         language=whisper_raw.get("language"),
         asr_workers=int(whisper_raw.get("asr_workers", 1)),
-        auto_install=bool(whisper_raw.get("auto_install", True)),
+        auto_install=bool(whisper_raw.get("auto_install", False)),
         device=str(whisper_raw.get("device", "auto")),
         model=str(whisper_raw.get("model", "small")),
         fallback_models=_as_tuple_str(whisper_raw.get("fallback_models", ["medium"])),
@@ -158,7 +158,7 @@ def load_config(path: str | Path) -> AppConfig:
     pgs_raw = raw.get("pgs_ocr") or {}
     pgs_ocr = PgsOcrConfig(
         enabled=bool(pgs_raw.get("enabled", True)),
-        auto_install=bool(pgs_raw.get("auto_install", True)),
+        auto_install=bool(pgs_raw.get("auto_install", False)),
         languages=_as_tuple_str(pgs_raw.get("languages", ["en"])),
         max_workers=int(pgs_raw.get("max_workers", 1)),
         keep_temp_files=bool(pgs_raw.get("keep_temp_files", False)),

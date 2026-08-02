@@ -12,6 +12,35 @@ from dir_migrate.planning import dest_dir_for
 
 
 class TestDirMigratePlanning(unittest.TestCase):
+    def test_unknown_kind_cannot_be_planned_as_movie(self):
+        rules = RulesConfig(
+            movie_1080_root="X-Movie",
+            movie_4k_root="MOVIE",
+            tv_1080_root="X-TV",
+            tv_4k_root="TV",
+            year_split=2024,
+            franchise_map={},
+        )
+        f = LlmFields(
+            kind="unknown",
+            title="Ambiguous",
+            series=None,
+            franchise_root=None,
+            year=2024,
+            season=None,
+            episode=None,
+            episode_title=None,
+            resolution="2160p",
+            source=None,
+            codec=None,
+            audio=None,
+            group=None,
+            video_tags=None,
+            confidence=None,
+        )
+        with self.assertRaisesRegex(ValueError, "not confirmed"):
+            dest_dir_for(rules, f, "Ambiguous")
+
     def test_movie_1080_year_bucket(self):
         rules = RulesConfig(
             movie_1080_root="X-Movie",
@@ -100,4 +129,3 @@ class TestDirMigratePlanning(unittest.TestCase):
         d = dest_dir_for(rules, f, "X")
         self.assertIn("/X-TV/NCIS/", d)
         self.assertTrue(d.endswith("/S02"))
-

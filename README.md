@@ -45,7 +45,7 @@
 
 ### 1. 基础环境
 *   **操作系统**: macOS / Linux (推荐), Windows (理论支持但未验证)
-*   **Python**: >= 3.11（核心代码只用标准库；ASR/PGS-OCR 会自动创建 venv 并安装所需包）
+*   **Python**: >= 3.11（核心代码只用标准库；ASR/PGS-OCR/IMDb 使用项目独立 venv 和带哈希锁文件）
 
 ### 2. 外部程序依赖
 本项目依赖以下外部工具，请确保它们在系统 `PATH` 中可用：
@@ -57,10 +57,12 @@
     *   *官网*: https://ollama.com/
     *   *服务*: 需启动服务 (`ollama serve`) 并确保 API 端口 (默认 11434) 可访问。
 *   **whisper** (可选): 用于无字幕视频的兜底 ASR。
-    *   默认启用“自动安装”：首次需要时会在 `paths.local_cache_dir/tools/whisper_venv` 创建 venv，并安装 `openai-whisper`。
+    *   默认不在运行时安装。使用 `python3 install_optional_dependencies.py asr` 按 `requirements/asr.lock` 安装。
     *   可配置使用 GPU：`whisper.device = auto|cuda|mps|cpu`。
 *   **tesseract** (可选): 用于 PGS 字幕 OCR（将内置位图字幕转成 SRT）。
-    *   默认启用“自动安装”：若检测不到 `tesseract`，会尝试 `brew install tesseract`（macOS）。
+    *   必须由管理员预先安装；项目运行时不会调用 Homebrew 或系统包管理器。
+
+当前验证版本：Python 3.14.6、FFmpeg 8.1.2、Ollama 0.32.5、Tesseract 5.5.3。Python 可选依赖的完整版本和哈希见 [`requirements/`](requirements/README.md)。
 
 ### 3. 模型准备
 请在 Ollama 中拉取适合的模型：
@@ -71,7 +73,17 @@
 
 ## 快速开始
 
-### 1) 准备配置
+### 1) 安装可选依赖
+
+按实际启用的功能安装。以下命令会创建项目缓存目录中的独立虚拟环境，不修改系统 Python：
+
+```bash
+python3 install_optional_dependencies.py asr ocr imdb
+```
+
+`auto_install` 默认值为 `false`。只有显式改为 `true` 时，运行时才会安装缺失环境，而且仍严格使用带哈希锁文件。
+
+### 2) 准备配置
 
 复制示例配置并修改：
 
@@ -86,7 +98,7 @@ cp config.example.json config.json
 - `ollama.base_url`：例如 `http://localhost:11434`
 - `ollama.model`：建议填你本机存在的模型名（如 `translategemma:latest`）
 
-### 2) 先跑 dry-run（不写回）
+### 3) 先跑 dry-run（不写回）
 
 ```bash
 python3 run_srt_translate.py --config config.json --once --dry-run
@@ -98,7 +110,7 @@ python3 run_srt_translate.py --config config.json --once --dry-run
 - `translate progress x/y`
 - `run_once summary ... done=... failed=...`
 
-### 3) 正式写回生成字幕
+### 4) 正式写回生成字幕
 
 ```bash
 python3 run_srt_translate.py --config config.json --once
@@ -166,6 +178,8 @@ python3 run_dir_migrate.py --config <CONFIG_PATH> [OPTIONS]
 | `--apply` | 否 | **执行模式**。只有显式指定此参数，工具才会真正执行文件移动/重命名操作。 |
 | `--limit LIMIT` | 否 | **数量限制**。限制单次处理的视频数量（整数）。用于小规模验证规则是否正确。 |
 
+分类优先使用完整路径中的季集标记（如 `S01E02`、`1x02`、`Season 01/E02`、`第1季/第2集`），其次使用同名 `.nfo/.json` 元数据。模型单独给出的季集号不能确认电视剧，必须有路径或元数据佐证；若文件名同时具备“发布年份 + 电影发布来源”（如 `2026.WEB-DL`）且没有季集证据，则按电影处理并丢弃模型虚构的季集号。`4K/UHD/2160p/HEVC/HDR` 只代表画质或编码，不参与电影/电视剧判断。证据不完整时计划会包含 `skip_reason: "classification pending: ..."`，文件保持原位，集成任务状态记录为 `CLASSIFICATION_PENDING`，需补充命名或元数据后再运行。
+
 **使用示例**
 
 *   **预览迁移计划（不执行移动）**：
@@ -208,6 +222,8 @@ chmod +x killcron.sh
 ```bash
 python3 -m unittest discover -s tests -p "test_*.py" -v
 ```
+
+依赖升级流程、锁文件重新生成和离线 wheelhouse 准备方法见 [`requirements/README.md`](requirements/README.md)。
 
 本地翻译冒烟（不走 FTP，只翻译本地 srt）：
 

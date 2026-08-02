@@ -9,7 +9,7 @@ from .domain import LlmFields
 
 def _is_4k(resolution: str | None) -> bool:
     r = (resolution or "").lower()
-    return "2160" in r or "4k" in r
+    return "2160" in r or "4k" in r or "uhd" in r
 
 
 def _year_bucket_movie_1080(year: int | None, year_split: int) -> str:
@@ -52,11 +52,14 @@ def series_bucket(fields: LlmFields) -> str:
 
 
 def dest_dir_for(rules: RulesConfig, fields: LlmFields, normalized_basename: str) -> str:
+    if fields.kind not in ("movie", "tv"):
+        raise ValueError(f"media classification is not confirmed: {fields.kind}")
     if fields.kind == "tv":
+        if fields.season is None or fields.episode is None:
+            raise ValueError("TV classification requires both season and episode")
         root = rules.tv_4k_root if _is_4k(fields.resolution) else rules.tv_1080_root
         sb = series_bucket(fields)
-        season = fields.season if fields.season is not None else 0
-        sxx = f"S{season:02d}"
+        sxx = f"S{fields.season:02d}"
         # Ensure root starts with / but don't double it if already there
         # And ensure we don't accidentally put it in /Downloads if root is relative?
         # The rules.*_root usually are like "X-TV" or "TV". 

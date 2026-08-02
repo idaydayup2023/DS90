@@ -27,7 +27,7 @@
     "command": ["whisper"],
     "language": "en",
     "asr_workers": 1,
-    "auto_install": true,
+    "auto_install": false,
     "device": "auto",
     "model": "small",
     "fallback_models": ["medium"],
@@ -37,7 +37,7 @@
   },
   "pgs_ocr": {
     "enabled": true,
-    "auto_install": true,
+    "auto_install": false,
     "languages": ["en"],
     "max_workers": 1,
     "keep_temp_files": false
@@ -84,7 +84,7 @@
     },
     "imdb": {
       "enabled": false,
-      "auto_install": true,
+      "auto_install": false,
       "ttl_days": 30,
       "min_rating": 5.0,
       "min_votes": null,

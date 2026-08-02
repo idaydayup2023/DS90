@@ -13,7 +13,7 @@ from dir_migrate.config import (
     CleanupConfig,
     ExecutionConfig,
     ImdbConfig,
-    OllamaConfig,
+    LlmConfig,
     PathsConfig,
     RulesConfig,
     StorageConfig,
@@ -37,7 +37,7 @@ class _FakeLlm:
         return ImdbKnowledge(title=None, year=None, imdb_id=None, imdb_rating=None, imdb_votes=None, related_movies=())
 
     @property
-    def ollama(self):
+    def llm(self):
         return object()
 
 
@@ -58,7 +58,7 @@ class TestDirMigrateImdbTtExtraction(unittest.TestCase):
                 video=VideoConfig(extensions=(".mkv",), min_bytes=0),
                 subtitle=SubtitleConfig(extensions=(".srt",)),
                 cleanup=CleanupConfig(enabled=False),
-                ollama=OllamaConfig(base_url="http://localhost:11434", model="x", timeout_seconds=5, temperature=0.0),
+                llm=LlmConfig(provider="ollama", base_url="http://localhost:11434", model="x", timeout_seconds=5, temperature=0.0),
                 imdb=ImdbConfig(enabled=True, auto_install=False, ttl_days=1, min_rating=5.0, min_votes=None, skip_unrated=True, use_llm_judge=False),
                 rules=RulesConfig(movie_1080_root="X-Movie", movie_4k_root="MOVIE", tv_1080_root="X-TV", tv_4k_root="TV", year_split=2024, franchise_map={}),
                 execution=ExecutionConfig(dry_run=True, apply=False, limit=None, workers=1, on_conflict="skip"),
@@ -121,5 +121,3 @@ class TestDirMigrateImdbTtExtraction(unittest.TestCase):
 
             self.assertEqual(called.get("tt"), "tt0137523")
             self.assertNotEqual(plan.dest_dir, "/Downloads/low_imdb")
-
-

@@ -43,7 +43,7 @@ class TestDirMigratePlannerSidecar(unittest.TestCase):
             resolution="1080p",
             series=None, franchise_root=None, season=None, episode=None, episode_title=None,
             source=None, codec=None, audio=None, group=None,
-            video_tags=None, confidence=None
+            video_tags=None, confidence=0.9
         )
 
         # Source Files

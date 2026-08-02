@@ -7,6 +7,7 @@ from typing import Any
 
 from srt_translate.mcp.llm_mcp import LlmMcp as BaseLlmMcp
 
+from ..classification import path_markers
 from ..config import RulesConfig
 from ..domain import ImdbKnowledge, ImdbRelatedMovie, LlmFields
 
@@ -64,7 +65,7 @@ def _fallback_from_filename(name: str) -> dict[str, Any]:
 
     # Simple title extraction: everything before the first year, resolution, or common keyword
     title_part = stem
-    keywords = r"\b(19\d{2}|20\d{2}|2160p|1080p|720p|4k|web[-_. ]?dl|webrip|bluray|brrip|hdtv|remux|x264|x265|hevc|S\d{1,2}E\d{1,2})\b"
+    keywords = r"\b(19\d{2}|20\d{2}|2160p|1080p|720p|4k|uhd|web[-_. ]?dl|webrip|bluray|brrip|hdtv|remux|x264|x265|hevc|S\d{1,2}[._ -]*E\d{1,3}|Season[._ -]*\d{1,2})\b"
     m = re.search(r"(?i)" + keywords, stem)
     if m:
         title_part = stem[:m.start()].strip(" ._-")
@@ -79,24 +80,24 @@ def _fallback_from_filename(name: str) -> dict[str, Any]:
     m = re.search(r"(?i)\b(19\d{2}|20\d{2})\b", name)
     if m:
         out["year"] = int(m.group(1))
-    m = re.search(r"(?i)\bS(\d{1,2})E(\d{1,2})\b", name)
-    if m:
+    season, episode, _evidence = path_markers(name)
+    if season is not None and episode is not None:
         out["kind"] = "tv"
-        out["season"] = int(m.group(1))
-        out["episode"] = int(m.group(2))
-    if re.search(r"(?i)\b2160p\b|\b4k\b", name):
+        out["season"] = season
+        out["episode"] = episode
+    elif season is not None or episode is not None:
+        out["kind"] = "unknown"
+        out["season"] = season
+        out["episode"] = episode
+    if re.search(r"(?i)\b2160p\b|\b4k\b|\buhd\b", name):
         out["resolution"] = "2160p"
     elif re.search(r"(?i)\b1080p\b", name):
         out["resolution"] = "1080p"
     elif re.search(r"(?i)\b720p\b", name):
         out["resolution"] = "720p"
     
-    # If it's 2160p/4K and no SxxExx, it's almost certainly a movie.
-    if out.get("resolution") == "2160p" and "kind" not in out:
-        out["kind"] = "movie"
-
     if "kind" not in out:
-        out["kind"] = "movie" if out.get("year") else "unknown"
+        out["kind"] = "unknown"
     
     # Try to extract group and codec if common patterns match
     if re.search(r"(?i)\bx265\b|\bhevc\b", name):
@@ -127,7 +128,7 @@ def _fallback_from_filename(name: str) -> dict[str, Any]:
             # Exclusion list for common tags that are not groups
             exclusions = {
                 "mkv", "mp4", "avi", "mov", "srt", "x264", "x265", "hevc", 
-                "1080p", "720p", "2160p", "aac", "ac3", "amzn", "nf", 
+                "1080p", "720p", "2160p", "4k", "uhd", "aac", "ac3", "amzn", "nf",
                 "dsnp", "hmax", "max", "atvp", "webdl", "web", "rip"
             }
             if g.lower() not in exclusions:
@@ -154,7 +155,7 @@ def _sanitize_fields(filename: str, fields: LlmFields, fallback: dict[str, Any])
         s = str(v).strip()
         if not s:
             return None
-        if s.lower() in ("4k", "2160", "2160p"):
+        if s.lower() in ("4k", "uhd", "2160", "2160p"):
             return "2160p"
         if s.lower() in ("1080", "1080p"):
             return "1080p"
@@ -172,7 +173,7 @@ def _sanitize_fields(filename: str, fields: LlmFields, fallback: dict[str, Any])
     def _looks_like_resolution(s: str | None) -> bool:
         if not s:
             return False
-        return bool(re.match(r"(?i)^(2160p|1080p|720p|4k)$", s.strip()))
+        return bool(re.match(r"(?i)^(2160p|1080p|720p|4k|uhd)$", s.strip()))
 
     def _looks_like_codec(s: str | None) -> bool:
         if not s:
@@ -315,11 +316,21 @@ def _sanitize_fields(filename: str, fields: LlmFields, fallback: dict[str, Any])
     season = fields.season if (fields.season is not None and fields.season > 0) else None
     episode = fields.episode if (fields.episode is not None and fields.episode > 0) else None
 
-    kind = fields.kind
-    if kind == "tv" and (season is None or episode is None):
-        if resolution == "2160p" or fields.year is not None or fallback.get("kind") == "movie":
-            log.info("overriding kind from tv to movie for %s (no valid SxxExx found)", filename)
-            kind = "movie"
+    kind = fields.kind if fields.kind in ("movie", "tv", "unknown") else "unknown"
+
+    if kind == "tv":
+        if season is None or episode is None:
+            log.info(
+                "marking classification unknown for %s (TV suggestion lacks complete season/episode)",
+                filename,
+            )
+            kind = "unknown"
+        elif fallback.get("kind") != "tv":
+            log.info(
+                "marking classification unknown for %s (model season/episode lacks filename evidence)",
+                filename,
+            )
+            kind = "unknown"
 
     if kind == "movie" and season is not None and episode is not None:
         log.info("overriding kind from movie to tv for %s (found S%sE%s)", filename, season, episode)
@@ -353,18 +364,19 @@ def _prompt(filename: str) -> str:
         "Do NOT truncate, do NOT summarize, and do NOT omit any words (e.g., 'St. Denis Medical' must stay 'St. Denis Medical', 'Law and Order SVU' must stay 'Law and Order SVU').\n"
         "2) FRANCHISE vs SERIES: 'franchise_root' is the main brand (e.g., '9-1-1', 'Law and Order'). 'series' is the specific show name (e.g., '9-1-1: Nashville', 'Law and Order: SVU'). "
         "If it's a spin-off, ensure 'franchise_root' is the main series and 'series' is the full spin-off name.\n"
-        "3) KIND IDENTIFICATION: 'kind' must be 'tv' if there is season/episode information (like S01E01), even if resolution is high. "
-        "Only set 'kind' to 'movie' if there is absolutely NO season/episode pattern.\n"
+        "3) KIND IDENTIFICATION: 'kind' must be 'tv' if there is season/episode information (S01E01, 1x01, Season 1 Episode 1, 第1季第1集). "
+        "Use 'unknown' when evidence is insufficient; do not guess movie merely because no episode marker was found.\n"
         "4) YEAR/SEASON/EPISODE: Extract accurately. 'season' and 'episode' must be integers.\n"
         "5) NO ALTERATION: Only extract fields. Do NOT change characters or capitalization from the original filename for names.\n"
         "6) NEVER NULL TITLE: You must provide a 'title' (for movies) or 'series' (for TV). If unsure, use the most likely name from the filename. Never return null for both 'title' and 'series'.\n"
         "7) RELEASE GROUP: 'group' is the release group. If there is a name in brackets at the end (e.g., [Ben The Men]), that is the 'group'. Streaming providers like 'AMZN', 'NF', 'DSNP' are part of the 'source', NOT the 'group'.\n"
-        "8) VIDEO TAGS: 'video_tags' should include HDR info (DV, HDR10+, HDR, etc.) and other technical tags if present.\n"
+        "8) VIDEO TAGS: 'video_tags' should include HDR info (DV, HDR10+, HDR, etc.) and other technical tags if present. "
+        "4K, UHD, 2160p, HEVC, HDR and similar quality/codec tags are neutral and must never decide movie vs TV.\n"
         "9) OUTPUT ONLY JSON. No explanations.\n\n"
         f"FILENAME: {filename}\n"
         "OUTPUT JSON SCHEMA:\n"
         "{\n"
-        "  \"kind\": \"movie|tv\",\n"
+        "  \"kind\": \"movie|tv|unknown\",\n"
         "  \"title\": string|null,\n"
         "  \"series\": string|null,\n"
         "  \"franchise_root\": string|null,\n"
@@ -465,7 +477,7 @@ class LlmMcp:
             try:
                 resp = self._llm.generate(model=self._model, prompt=_prompt(filename), temperature=self._temperature).text
                 obj = _extract_json(resp)
-                kind = _as_str(obj.get("kind")) or _as_str(fallback.get("kind")) or "movie"
+                kind = _as_str(obj.get("kind")) or _as_str(fallback.get("kind")) or "unknown"
                 fields = LlmFields(
                     kind=str(kind).lower(),
                     title=_as_str(obj.get("title")) or _as_str(fallback.get("title")),
@@ -492,7 +504,7 @@ class LlmMcp:
         return _apply_franchise_rules(
             rules,
             LlmFields(
-                kind=str(fallback.get("kind") or "movie").lower(),
+                kind=str(fallback.get("kind") or "unknown").lower(),
                 title=_as_str(fallback.get("title")),
                 series=_as_str(fallback.get("series")),
                 franchise_root=_as_str(fallback.get("franchise_root")),

@@ -7,15 +7,14 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Final
 
 from .config import WhisperConfig
+from .locked_venv import locked_venv_is_current, sync_locked_venv, venv_python
 
 
 log = logging.getLogger("srt_translate.bootstrap")
 
-_DEFAULT_PIP_PACKAGE: Final[str] = "openai-whisper"
-_WHISPER_MODULE: Final[str] = "whisper"
+_WHISPER_MODULE = "whisper"
 _ensured: bool = False
 _ensure_result: tuple[bool, str | None] | None = None
 _ensure_lock = threading.Lock()
@@ -32,7 +31,7 @@ def _run(cmd: list[str]) -> tuple[int, str, str]:
 
 def _venv_paths(cache_dir: Path) -> tuple[Path, Path]:
     venv_dir = cache_dir / "tools" / "whisper_venv"
-    py = venv_dir / "bin" / "python"
+    py = venv_python(venv_dir)
     return venv_dir, py
 
 
@@ -44,8 +43,8 @@ def _venv_has_whisper(venv_python: Path) -> bool:
     return rc == 0 and out.strip() == "ok"
 
 
-def _detect_torch_device() -> str | None:
-    if not _has_module("torch"):
+def _detect_torch_device(python: Path | None = None) -> str | None:
+    if python is None and not _has_module("torch"):
         return None
     code = (
         "import torch\n"
@@ -61,7 +60,7 @@ def _detect_torch_device() -> str | None:
     )
     try:
         p = subprocess.run(
-            [sys.executable, "-c", code],
+            [str(python or sys.executable), "-c", code],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -75,11 +74,16 @@ def _detect_torch_device() -> str | None:
     return out if out in ("cuda", "mps", "cpu") else None
 
 
-def resolve_whisper_device(cfg: WhisperConfig) -> str:
+def resolve_whisper_device(cfg: WhisperConfig, cache_dir: Path | None = None) -> str:
     pref = (cfg.device or "auto").strip().lower()
     if pref in ("cuda", "mps", "cpu"):
         return pref
-    detected = _detect_torch_device()
+    python: Path | None = None
+    if cache_dir is not None:
+        venv_dir, venv_py = _venv_paths(cache_dir)
+        if locked_venv_is_current(venv_dir, "asr.lock"):
+            python = venv_py
+    detected = _detect_torch_device(python)
     return detected or "cpu"
 
 
@@ -87,11 +91,11 @@ def resolve_whisper_command(cfg: WhisperConfig, cache_dir: Path) -> tuple[str, .
     ok, err = ensure_whisper_available(cfg, cache_dir=cache_dir)
     if not ok:
         raise RuntimeError(err or "whisper is not available")
-    if _has_module(_WHISPER_MODULE):
-        return (sys.executable, "-m", _WHISPER_MODULE)
     venv_dir, venv_py = _venv_paths(cache_dir)
     if _venv_has_whisper(venv_py):
         return (str(venv_py), "-m", _WHISPER_MODULE)
+    if cfg.command and shutil.which(cfg.command[0]):
+        return cfg.command
     return cfg.command
 
 
@@ -106,45 +110,30 @@ def ensure_whisper_available(cfg: WhisperConfig, cache_dir: Path) -> tuple[bool,
             _ensure_result = (True, None)
             return _ensure_result
 
+        venv_dir, venv_py = _venv_paths(cache_dir)
+        if locked_venv_is_current(venv_dir, "asr.lock") and _venv_has_whisper(venv_py):
+            _ensure_result = (True, None)
+            return _ensure_result
+
         if cfg.command and shutil.which(cfg.command[0]):
             _ensure_result = (True, None)
             return _ensure_result
 
-        if _has_module(_WHISPER_MODULE):
-            _ensure_result = (True, None)
-            return _ensure_result
-
-        venv_dir, venv_py = _venv_paths(cache_dir)
-        if _venv_has_whisper(venv_py):
-            _ensure_result = (True, None)
-            return _ensure_result
-
         if not cfg.auto_install:
-            _ensure_result = (False, f"whisper not found: {cfg.command[0] if cfg.command else 'whisper'}")
+            if venv_py.exists():
+                message = "whisper environment is not synchronized with requirements/asr.lock"
+            else:
+                message = f"whisper not found: {cfg.command[0] if cfg.command else 'whisper'}"
+            _ensure_result = (False, message + "; run the documented locked install first")
             return _ensure_result
 
-        try:
-            log.warning("whisper command not found, attempting pip install: %s", _DEFAULT_PIP_PACKAGE)
-            rc, out, err = _run([sys.executable, "-m", "pip", "install", "-U", _DEFAULT_PIP_PACKAGE])
-            if rc != 0:
-                if "externally-managed-environment" in err.lower():
-                    venv_dir.mkdir(parents=True, exist_ok=True)
-                    rc2, _out2, err2 = _run([sys.executable, "-m", "venv", str(venv_dir)])
-                    if rc2 != 0:
-                        _ensure_result = (False, f"auto-install failed: {err2.strip() or err.strip() or out.strip()}")
-                        return _ensure_result
-                    rc3, out3, err3 = _run([str(venv_py), "-m", "pip", "install", "-U", _DEFAULT_PIP_PACKAGE])
-                    if rc3 != 0:
-                        _ensure_result = (False, f"auto-install failed: {err3.strip() or out3.strip()}")
-                        return _ensure_result
-                else:
-                    _ensure_result = (False, f"auto-install failed: {err.strip() or out.strip()}")
-                    return _ensure_result
-        except Exception as e:
-            _ensure_result = (False, f"auto-install failed: {e}")
+        log.warning("whisper not found or stale, synchronizing requirements/asr.lock")
+        ok, err = sync_locked_venv(venv_dir, "asr.lock", timeout=1800)
+        if not ok:
+            _ensure_result = (False, f"locked whisper install failed: {err}")
             return _ensure_result
 
-        if _has_module(_WHISPER_MODULE) or (cfg.command and shutil.which(cfg.command[0])) or _venv_has_whisper(venv_py):
+        if _venv_has_whisper(venv_py):
             _ensure_result = (True, None)
             return _ensure_result
 

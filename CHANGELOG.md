@@ -2,7 +2,25 @@
 
 本项目遵循“Keep a Changelog”格式记录变更（语义版本以实际发布为准）。
 
-## [Unreleased] - 2026-01-29
+## [Unreleased] - 2026-08-02
+
+### Security
+
+- 可选 ASR/OCR/IMDb 依赖改为带哈希的锁定文件安装，避免运行时获取未固定版本；新增统一的手动安装入口与离线 wheelhouse 说明。
+- 默认关闭 Whisper、PGS OCR 和 IMDb 组件的运行时自动安装；运行过程不再修改系统 Python，也不再调用系统包管理器安装 Tesseract。
+- 升级 `torch`、`requests`、`urllib3`、`Pillow` 和 `Cinemagoer` 至已验证的新稳定版本，并升级 FFmpeg/Tesseract 外部组件。
+
+### Changed
+
+- 可选工具使用各自的项目缓存虚拟环境，并通过锁文件摘要标记验证环境是否与当前依赖配置一致。
+- README 与示例配置明确记录依赖版本、联网/离线安装流程以及需要单独部署的外部组件。
+
+### Fixed
+
+- 修复 `dir_migrate` 加盟系列目录缓存跨目标存储污染，以及年份/年代桶与带前缀系列目录无法正确识别的问题。
+- 更新已过期的 LLM/IMDb 测试配置，使测试覆盖与当前配置模型一致。
+- 修复目录迁移把 4K/UHD/2160p/HEVC 画质标签当成电影证据的问题；分类现在读取完整目录路径中的季集标记及 `.nfo/.json` 元数据，证据不足时保留原文件并标记 `CLASSIFICATION_PENDING`。
+- 拒绝模型在无路径或元数据佐证时虚构的季集号；对于同时具备发布年份和 `WEB-DL/BluRay/Remux` 等电影发布结构的文件，丢弃虚构季集号并按电影处理，避免 `DDP5.1` 等技术数字导致错误追加 `S01E01`。
 
 ### Added
 
