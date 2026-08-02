@@ -4,8 +4,11 @@ __pycache__/
 *.pyc
 *.pyo
 *.sqlite3
-logs/*.log
-logs/*.lock
+logs/
+
+# Local media and subtitle files (repository root only)
+/*.mp4
+/*.srt
 tests/out*.srt
 tests/*.sup
 tests/*.emb*.srt
