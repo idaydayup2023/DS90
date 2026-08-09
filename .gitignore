@@ -5,6 +5,10 @@ __pycache__/
 *.pyo
 *.sqlite3
 logs/
+target/
+*.part
+*.plan.json
+/subtrans.toml
 
 # Local media and subtitle files (repository root only)
 /*.mp4

@@ -1,111 +1,48 @@
+# V3 architecture
 
-# Architecture
+## Scope
 
-Based on the latest design (2026-01), the system adopts a layered architecture separating triggers, routing (MCP), agents, skills, and external services.
+V3 从干净模块边界重建，只包含字幕翻译和目录迁移。主程序及核心逻辑均为 Rust，不直接复制 V2 Python 模块。
 
-```mermaid
-flowchart TB 
- 
-     %% ========= Trigger Layer ========= 
-     subgraph TriggerLayer["事件 / 触发层"] 
-         Timer["定时触发"] 
-         Manual["人工触发"] 
-     end 
- 
-     %% ========= MCP Runtime ========= 
-     subgraph MCPLayer["MCP 运行层（Agent 路由）"] 
-         MCP["MCP Router"] 
-         Rules["路由规则（配置）"] 
-     end 
- 
-     %% ========= Agent Layer ========= 
-     subgraph AgentLayer["Agent 层（决策与编排）"] 
-         ftpAgent["FTP Agent"] 
-         ffmpegAgent["FFmpeg Agent"] 
-         imdbAgent["IMDB Agent"] 
-         srtAgent["SRT Agent"] 
-         translateAgent["Translate Agent"] 
-         translateQCAgent["Translate QC Agent"] 
-         srtACKAgent["SRT ACK Agent"] 
-         migrateAgent["Migrate Agent"] 
-     end 
- 
-     %% ========= Skill Layer ========= 
-     subgraph SkillLayer["Skill 层（能力执行）"] 
-         ftpSkill["FTP_OpSkill"] 
-         ffmpegSkill["FFmpeg_OpSkill"] 
-         imdbSkill["IMDB_OpSkill"] 
-         translateSkill["SRT_TranslateSkill"] 
-         migrateSkill["MigrateSkill"] 
-         cleanSkill["CleanSkill"] 
-         asrSkill["ASR Skill"] 
-         ocrSkill["OCR Skill"] 
-     end 
- 
-     %% ========= External / Model Layer ========= 
-     subgraph ExternalLayer["外部服务 / 模型"] 
-         ftpServer["FTP Server"] 
-         ffmpegCli["FFmpeg CLI"] 
-         imdbAPI["IMDB API"] 
-         whisperModel["Whisper ASR"] 
-         ollamaModel["Ollama LLM"] 
-         tesseractOCR["Tesseract OCR"] 
-     end 
- 
-     %% ========= Trigger Flow ========= 
-     Timer --> MCP 
-     Manual --> MCP 
-     Rules --> MCP 
- 
-     %% ========= MCP -> Agent Routing ========= 
-     MCP <--> ftpAgent 
-     MCP <--> ffmpegAgent 
-     MCP <--> imdbAgent 
-     MCP <--> srtAgent 
-     MCP <--> translateAgent 
-     MCP <--> migrateAgent 
- 
-     %% ========= Agent -> Skill ========= 
-     ftpAgent --> ftpSkill 
-     ffmpegAgent --> ffmpegSkill 
-     imdbAgent --> imdbSkill 
- 
-     srtAgent --> asrSkill 
-     srtAgent --> ocrSkill 
- 
-     translateAgent --> translateSkill 
-     translateQCAgent --> translateAgent 
-     srtACKAgent --> translateAgent 
- 
-     migrateAgent --> migrateSkill 
-     migrateAgent --> cleanSkill 
- 
-     %% ========= Skill -> External ========= 
-     ftpSkill --> ftpServer 
-     ffmpegSkill --> ffmpegCli 
-     imdbSkill --> imdbAPI 
-     imdbSkill --> ollamaModel 
- 
-     asrSkill --> whisperModel 
-     ocrSkill --> tesseractOCR 
- 
-     translateSkill --> ollamaModel 
-     migrateSkill --> ollamaModel
+```text
+subtrans CLI
+├── config       strict TOML + environment-only secrets
+├── storage      local / FTP, normalized relative paths, atomic publication
+├── subtitles    acquire → parse → translate → QC → publish
+├── migration    classify → immutable plan → approve → verify → commit
+├── artifact     字幕就绪提交标记与完整缓存身份
+└── state        SQLite 租约、逐文件进度与 append-only 事件
 ```
 
-## Layers Description
+## Safety invariants
 
-1.  **Trigger Layer**: Entry points. `Timer` corresponds to `cron` jobs (e.g. `cron_scan.sh`), `Manual` corresponds to CLI execution.
-2.  **MCP Runtime**: The central orchestration logic (currently implemented in `orchestrator.py` and `runner.py`). It reads `config.json` (Rules) and routes tasks.
-3.  **Agent Layer**: Logical units responsible for decision making.
-    *   `srtAgent`: Handles subtitle acquisition (embedded, external, ASR, OCR).
-    *   `translateAgent`: Manages the translation process (LLM calls, batching).
-    *   `migrateAgent`: Handles file organization and cleaning (`dir_migrate` module).
-4.  **Skill Layer**: Atomic capabilities or "Tools" (MCPs).
-    *   `FTP_OpSkill`: `FtpMcp`
-    *   `FFmpeg_OpSkill`: `MediaMcp`
-    *   `IMDB_OpSkill`: `ImdbMcp`
-    *   `ASR Skill`: `AsrMcp`
-    *   `OCR Skill`: `PgsOcrMcp`
-    *   `TranslateSkill`: `OllamaMcp` / `translation.py`
-5.  **External Layer**: Actual binaries or services (`ffmpeg`, `ollama`, `tesseract`, etc.).
+- 所有存储路径必须是规范化相对路径；拒绝绝对路径、`..`、反斜杠、NUL 和本地符号链接逃逸。
+- 媒体分类只使用可解释规则。完整季集标记可判剧集；年份与正式发行源标签可判电影；证据不足进入 `pending`。
+- 画质/编码标签与媒体类型正交，永不合成季集编号。
+- 迁移计划包含规则版本、配置/存储绑定、源内容 SHA-256、分类证据、目标和伴随文件，并由规范 JSON 的 SHA-256 固定。
+- 执行必须提交精确的计划哈希；源身份变化、计划/配置不匹配、待确认项或目标内容冲突都会停止。
+- 跨后端移动先流式暂存并计算 SHA-256，再原子发布并复核目标；复制模式在全部目标验证后才按“伴随文件在前、主视频在后”删除源文件。同一文件系统/FTP 账户改名按该顺序原子推进，逐文件状态支持中断后前向恢复。
+- 字幕迁移默认要求有效的 `ready` manifest；manifest 绑定视频身份、字幕源哈希、完整翻译参数和最终输出哈希。
+- 字幕翻译严格保持 cue 索引和时间轴；模型返回缺项、重复项、额外项、空文本、源文回显、低目标文字比例或非 JSON 均失败，不发布部分结果。
+- 密钥不序列化到配置、计划、manifest 或状态库。
+
+## External boundaries
+
+Rust 原生实现目录扫描、本地/FTP I/O、分类、计划/执行、SRT、HTTP LLM 客户端、缓存、校验和状态机。以下能力保留为外部可选边界：
+
+- `ffmpeg`/`ffprobe`：媒体容器与字幕流处理；
+- ASR worker：例如 Apple Silicon 上独立安装的 Whisper 实现；
+- PGS OCR worker：图像字幕识别；
+- Ollama 或 OpenAI-compatible 服务：只翻译字幕，不参与迁移分类。
+
+worker 只能通过显式命令和 `{input}`、`{output}`、`{language}`、`{stream}` 参数模板调用，不经过 shell；启用时必须声明版本。进程有超时和输出大小边界，生成 SRT 仍须通过同一严格校验。V3 不自动安装 Python 包，也不创建隐式虚拟环境。
+
+## Failure and restart model
+
+SQLite 使用 WAL 与 `synchronous=FULL`，每次状态变更在同一事务内更新 job 快照并追加 event。任务带进程所有者和过期租约，避免两个执行端同时处理。相同计划/源文件产生稳定 job id，每个文件动作另有持久化状态；已 `COMMITTED` 的任务重跑会复核目标后跳过。进程在发布后、记账前崩溃时，重跑可依据源/目标哈希前向恢复；内容不一致立即停止。
+
+## Deployment targets
+
+Apple Silicon 是当前一体化生产基线：群晖媒体优先通过 SMB/NFS 挂载，字幕、状态、规则分类、计划批准和迁移均由同一 Apple 主机执行，ASR/LLM 也可使用本机硬件。状态库必须放本机磁盘而非网络共享。
+
+暂不拆成 NAS 与 Apple 两个执行端，因为迁移依赖字幕 `ready` 状态，拆分会新增跨端队列、锁、凭据、一致性和恢复面。只有 NAS 架构/glibc 已实机验收、共享锁和断网恢复测试通过、且测得显著吞吐或可用性收益时，才允许启用 NAS 原生执行；macOS 二进制不能复制到 DSM 使用。

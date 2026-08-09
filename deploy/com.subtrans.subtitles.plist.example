@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.subtrans.subtitles</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/subtrans/bin/subtrans</string>
+    <string>subtitles</string>
+    <string>--config</string>
+    <string>/usr/local/subtrans/etc/subtrans.toml</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>3600</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/usr/local/subtrans/logs/subtitles.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/usr/local/subtrans/logs/subtitles.stderr.log</string>
+</dict>
+</plist>

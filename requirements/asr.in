@@ -1,4 +1,0 @@
-openai-whisper==20250625
-requests==2.34.2
-torch==2.13.0
-urllib3==2.7.0
