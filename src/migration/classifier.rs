@@ -3,7 +3,7 @@ use std::path::Path;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-pub const RULE_VERSION: &str = "migration-rules-v3.1";
+pub const RULE_VERSION: &str = "migration-rules-v3.2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

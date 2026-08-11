@@ -76,7 +76,7 @@ fn main() -> Result<()> {
             force,
             limit,
         } => {
-            let cfg = Config::load(config)?;
+            let cfg = load_runtime_config(config)?;
             subtrans::subtitles::run(&cfg, dry_run, force, limit)
         }
         Command::Migrate { command } => match command {
@@ -85,7 +85,7 @@ fn main() -> Result<()> {
                 output,
                 limit,
             } => {
-                let cfg = Config::load(config)?;
+                let cfg = load_runtime_config(config)?;
                 let plan = subtrans::migration::build_plan(&cfg, limit)?;
                 plan.write(&output)?;
                 println!(
@@ -101,12 +101,12 @@ fn main() -> Result<()> {
                 plan,
                 approve,
             } => {
-                let cfg = Config::load(config)?;
+                let cfg = load_runtime_config(config)?;
                 let plan = subtrans::migration::PlanDocument::read(&plan)?;
                 subtrans::migration::apply_plan(&cfg, &plan, &approve)
             }
             MigrateCommand::Review { config, plan } => {
-                let cfg = Config::load(config)?;
+                let cfg = load_runtime_config(config)?;
                 let plan = subtrans::migration::PlanDocument::read(&plan)?;
                 plan.verify_config(&cfg)?;
                 if plan.pending_count() == 0 {
@@ -120,6 +120,9 @@ fn main() -> Result<()> {
                     println!("PENDING {}", item.source);
                     if let subtrans::migration::PlanStatus::Pending { reason } = &item.status {
                         println!("  reason: {reason}");
+                    }
+                    if let Some(destination) = &item.proposed_destination {
+                        println!("  proposed destination (not executable): {destination}");
                     }
                     for evidence in &item.classification.evidence {
                         println!(
@@ -139,9 +142,22 @@ fn main() -> Result<()> {
             }
         },
         Command::Doctor { config } => {
-            let cfg = Config::load(config)?;
+            let cfg = load_runtime_config(config)?;
             subtrans::storage::doctor(&cfg.source)?;
             subtrans::storage::doctor(&cfg.destination)?;
+            subtrans::storage::doctor_writable(&cfg.source, "", "source storage root")?;
+            for (name, root) in [
+                ("movie_4k", &cfg.migration.layouts.movie_4k.root),
+                ("movie_other", &cfg.migration.layouts.movie_other.root),
+                ("tv_4k", &cfg.migration.layouts.tv_4k.root),
+                ("tv_other", &cfg.migration.layouts.tv_other.root),
+            ] {
+                subtrans::storage::doctor_writable(
+                    &cfg.destination,
+                    root,
+                    &format!("migration.layouts.{name}.root"),
+                )?;
+            }
             subtrans::subtitles::doctor(&cfg)?;
             println!(
                 "subtrans {} configuration and dependencies are ready",
@@ -150,4 +166,8 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn load_runtime_config(path: PathBuf) -> Result<Config> {
+    Config::load(path)
 }

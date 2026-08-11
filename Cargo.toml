@@ -1,6 +1,6 @@
 [package]
 name = "subtrans"
-version = "3.0.0"
+version = "3.1.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Auditable subtitle translation and media migration"
@@ -15,6 +15,7 @@ anyhow = "1.0"
 clap = { version = "4.6.5", features = ["derive"] }
 hex = "0.4"
 fs2 = "0.4"
+libc = "0.2"
 regex = "1.12"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
 rusqlite = { version = "0.37.0", features = ["bundled"] }

@@ -2,7 +2,7 @@ mod quality;
 mod srt;
 mod translation;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 use crate::artifact::{
-    ARTIFACT_SCHEMA, SubtitleArtifact, artifact_paths, read_ready_artifact,
+    ARTIFACT_SCHEMA, SubtitleArtifact, SubtitleSourceEvidence, artifact_paths, read_ready_artifact,
     validate_manifest_for_publish, video_identity,
 };
 use crate::config::{Config, ExternalWorkerConfig, LlmProvider, TranslationConfig};
@@ -32,6 +32,7 @@ struct SourceSubtitle {
     kind: String,
     path: Option<String>,
     acquisition_key: String,
+    evidence: Option<SubtitleSourceEvidence>,
 }
 
 #[derive(Serialize)]
@@ -91,6 +92,14 @@ pub fn run(cfg: &Config, dry_run: bool, force: bool, limit: Option<usize>) -> Re
     let mut failures = Vec::new();
 
     for video in videos {
+        if let Some(marker) = incomplete_marker(&video, &by_directory, cfg) {
+            pending += 1;
+            println!(
+                "subtitles pending video={} reason=incomplete_download_marker marker={marker}",
+                video.path
+            );
+            continue;
+        }
         match process_video(
             &mut state,
             storage.as_ref(),
@@ -134,6 +143,19 @@ enum VideoOutcome {
     Pending(String),
 }
 
+enum ExistingSourceResolution {
+    Ready(SourceSubtitle),
+    Pending(String),
+    None,
+}
+
+struct SourceComparison {
+    timing_match_ratio: f32,
+    text_similarity: f32,
+    external_quality: f32,
+    embedded_quality: f32,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn process_video(
     state: &mut StateStore,
@@ -157,8 +179,18 @@ fn process_video(
         );
         return Ok(VideoOutcome::Cached);
     }
+    let existing_source =
+        resolve_existing_source(storage, video, by_directory, cfg, &acquisition_key)?;
+    let existing_source = match existing_source {
+        ExistingSourceResolution::Ready(source) => Some(source),
+        ExistingSourceResolution::Pending(reason) => return Ok(VideoOutcome::Pending(reason)),
+        ExistingSourceResolution::None => None,
+    };
     if dry_run {
-        let source = acquire_existing_source(storage, video, by_directory, cfg, &acquisition_key)?;
+        let source = match existing_source {
+            Some(source) => Some(source),
+            None => probe_generated_source_availability(storage, video, cfg, &acquisition_key)?,
+        };
         return Ok(source.map_or_else(
             || VideoOutcome::Pending("no_existing_source".into()),
             |source| {
@@ -193,8 +225,11 @@ fn process_video(
             "ACQUIRING",
             &serde_json::json!({"video": video.path}),
         )?;
-        let source = acquire_source(storage, video, by_directory, cfg, &acquisition_key)?
-            .context("no usable English subtitle source was found")?;
+        let source = match existing_source {
+            Some(source) => Some(source),
+            None => acquire_generated_source(storage, video, cfg, &acquisition_key)?,
+        }
+        .context("no usable English subtitle source was found")?;
         state.renew(&job_id, owner, cfg.state.lease_seconds)?;
         state.transition(
             &job_id,
@@ -244,6 +279,7 @@ fn process_video(
             acquisition_key: source.acquisition_key,
             source_kind: source.kind,
             source_path: source.path,
+            source_evidence: source.evidence,
             created_unix_seconds: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -284,6 +320,65 @@ fn process_video(
         );
     }
     result
+}
+
+fn probe_generated_source_availability(
+    storage: &dyn Storage,
+    video: &FileEntry,
+    cfg: &Config,
+    acquisition_key: &str,
+) -> Result<Option<SourceSubtitle>> {
+    let Some(local_video) = storage.local_path(&video.path)? else {
+        return Ok(cfg
+            .subtitles
+            .asr
+            .as_ref()
+            .filter(|worker| worker.enabled)
+            .map(|_| SourceSubtitle {
+                bytes: Vec::new(),
+                kind: "configured_asr_worker".into(),
+                path: None,
+                acquisition_key: acquisition_key.into(),
+                evidence: None,
+            }));
+    };
+    let scratch = tempfile::Builder::new()
+        .prefix("subtrans-probe-")
+        .tempdir()?;
+    let tracks = probe_tracks(&local_video, cfg, &scratch)?;
+    let has_english_text = tracks
+        .iter()
+        .any(|track| is_english_track(track) && is_text_codec(&track.codec_name));
+    let has_english_bitmap = tracks
+        .iter()
+        .any(|track| is_english_track(track) && is_bitmap_codec(&track.codec_name));
+    let kind = if has_english_text {
+        Some("embedded_english_text")
+    } else if has_english_bitmap
+        && cfg
+            .subtitles
+            .pgs_ocr
+            .as_ref()
+            .is_some_and(|worker| worker.enabled)
+    {
+        Some("embedded_english_bitmap_with_ocr")
+    } else if cfg
+        .subtitles
+        .asr
+        .as_ref()
+        .is_some_and(|worker| worker.enabled)
+    {
+        Some("configured_asr_worker")
+    } else {
+        None
+    };
+    Ok(kind.map(|kind| SourceSubtitle {
+        bytes: Vec::new(),
+        kind: kind.into(),
+        path: None,
+        acquisition_key: acquisition_key.into(),
+        evidence: None,
+    }))
 }
 
 pub fn doctor(cfg: &Config) -> Result<()> {
@@ -367,6 +462,7 @@ fn acquisition_key(video: &FileEntry, cfg: &Config) -> Result<String> {
         source_language: &'a str,
         ffmpeg: &'a str,
         ffprobe: &'a str,
+        external_srt_validation: &'a crate::config::ExternalSrtValidationConfig,
         asr: &'a Option<ExternalWorkerConfig>,
         pgs_ocr: &'a Option<ExternalWorkerConfig>,
     }
@@ -376,33 +472,100 @@ fn acquisition_key(video: &FileEntry, cfg: &Config) -> Result<String> {
         source_language: &cfg.translation.source_language,
         ffmpeg: &cfg.subtitles.ffmpeg,
         ffprobe: &cfg.subtitles.ffprobe,
+        external_srt_validation: &cfg.subtitles.external_srt_validation,
         asr: &cfg.subtitles.asr,
         pgs_ocr: &cfg.subtitles.pgs_ocr,
     })?))
 }
 
-fn acquire_source(
+fn resolve_existing_source(
     storage: &dyn Storage,
     video: &FileEntry,
     by_directory: &HashMap<String, Vec<FileEntry>>,
     cfg: &Config,
     acquisition_key: &str,
-) -> Result<Option<SourceSubtitle>> {
-    if let Some(existing) =
-        acquire_existing_source(storage, video, by_directory, cfg, acquisition_key)?
-    {
-        return Ok(Some(existing));
-    }
-    acquire_generated_source(storage, video, cfg, acquisition_key)
+) -> Result<ExistingSourceResolution> {
+    let candidates = acquire_existing_sources(storage, video, by_directory, cfg, acquisition_key)?;
+    let external = candidates
+        .iter()
+        .find(|source| source.kind.starts_with("external"))
+        .cloned();
+    let embedded = candidates
+        .iter()
+        .find(|source| matches!(source.kind.as_str(), "embedded_cached" | "pgs_cached"))
+        .cloned();
+
+    let Some(external) = external else {
+        return Ok(candidates.into_iter().next().map_or(
+            ExistingSourceResolution::None,
+            ExistingSourceResolution::Ready,
+        ));
+    };
+    let embedded = match embedded {
+        Some(source) => Some(source),
+        None => acquire_embedded_anchor(storage, video, cfg, acquisition_key)?,
+    };
+    let Some(embedded) = embedded else {
+        let external_path = external.path.as_deref().unwrap_or("unknown");
+        println!(
+            "subtitles source_evaluation video={} decision=pending_external_unverified external={external_path}",
+            video.path
+        );
+        return Ok(ExistingSourceResolution::Pending(format!(
+            "external_srt_unverified_no_embedded_english external={external_path}"
+        )));
+    };
+
+    let comparison = compare_sources(&external, &embedded, cfg)?;
+    let matches = comparison.timing_match_ratio
+        >= cfg.subtitles.external_srt_validation.min_timing_match_ratio
+        && comparison.text_similarity >= cfg.subtitles.external_srt_validation.min_text_similarity;
+    let external_wins = matches
+        && comparison.external_quality
+            >= comparison.embedded_quality
+                + cfg
+                    .subtitles
+                    .external_srt_validation
+                    .external_quality_margin;
+    let decision = if external_wins {
+        "external_verified_selected"
+    } else if matches {
+        "embedded_selected_external_match"
+    } else {
+        "embedded_selected_external_mismatch"
+    };
+    let external_path = external.path.clone().unwrap_or_else(|| "unknown".into());
+    let evidence = SubtitleSourceEvidence {
+        decision: decision.into(),
+        external_path: external_path.clone(),
+        embedded_kind: embedded.kind.clone(),
+        timing_match_ratio: comparison.timing_match_ratio,
+        text_similarity: comparison.text_similarity,
+        external_quality: comparison.external_quality,
+        embedded_quality: comparison.embedded_quality,
+    };
+    println!(
+        "subtitles source_evaluation video={} decision={decision} external={} embedded={} timing_match={:.3} text_similarity={:.3} external_quality={:.2} embedded_quality={:.2}",
+        video.path,
+        external_path,
+        embedded.kind,
+        comparison.timing_match_ratio,
+        comparison.text_similarity,
+        comparison.external_quality,
+        comparison.embedded_quality
+    );
+    let mut selected = if external_wins { external } else { embedded };
+    selected.evidence = Some(evidence);
+    Ok(ExistingSourceResolution::Ready(selected))
 }
 
-fn acquire_existing_source(
+fn acquire_existing_sources(
     storage: &dyn Storage,
     video: &FileEntry,
     by_directory: &HashMap<String, Vec<FileEntry>>,
     cfg: &Config,
     acquisition_key: &str,
-) -> Result<Option<SourceSubtitle>> {
+) -> Result<Vec<SourceSubtitle>> {
     let stem = file_stem(&video.path)?;
     let directory = parent(&video.path);
     let mut candidates = Vec::new();
@@ -431,13 +594,158 @@ fn acquire_existing_source(
     });
     Ok(candidates
         .into_iter()
-        .next()
         .map(|(_, _, path, kind, bytes)| SourceSubtitle {
             bytes,
             kind: kind.into(),
             path: Some(path),
             acquisition_key: acquisition_key.into(),
-        }))
+            evidence: None,
+        })
+        .collect())
+}
+
+fn acquire_embedded_anchor(
+    storage: &dyn Storage,
+    video: &FileEntry,
+    cfg: &Config,
+    acquisition_key: &str,
+) -> Result<Option<SourceSubtitle>> {
+    let scratch = tempfile::Builder::new()
+        .prefix("subtrans-anchor-")
+        .tempdir()?;
+    let local_video = materialize_local_video(storage, video, &scratch)?;
+    let tracks = probe_tracks(&local_video, cfg, &scratch)?;
+    let mut english: Vec<SubtitleTrack> = tracks.into_iter().filter(is_english_track).collect();
+    english.sort_by_key(track_rank);
+
+    for track in english
+        .iter()
+        .filter(|track| is_text_codec(&track.codec_name))
+    {
+        let output = scratch.path().join(format!("anchor-{}.srt", track.index));
+        let args = vec![
+            "-v".into(),
+            "error".into(),
+            "-y".into(),
+            "-i".into(),
+            local_video.to_string_lossy().into_owned(),
+            "-map".into(),
+            format!("0:{}", track.index),
+            "-f".into(),
+            "srt".into(),
+            output.to_string_lossy().into_owned(),
+        ];
+        if run_capture(
+            &cfg.subtitles.ffmpeg,
+            &args,
+            Duration::from_secs(cfg.subtitles.external_process_timeout_seconds),
+            scratch.path(),
+        )
+        .is_ok()
+            && let Some(source) = read_generated(&output, "embedded_live", acquisition_key)?
+        {
+            return Ok(Some(source));
+        }
+    }
+
+    if let Some(worker) = cfg
+        .subtitles
+        .pgs_ocr
+        .as_ref()
+        .filter(|worker| worker.enabled)
+        && let Some(track) = english
+            .iter()
+            .find(|track| is_bitmap_codec(&track.codec_name))
+    {
+        let output = scratch.path().join("anchor-pgs.srt");
+        if run_worker(
+            worker,
+            &local_video,
+            &output,
+            &cfg.translation.source_language,
+            Some(track.index),
+            cfg.subtitles.external_process_timeout_seconds,
+            scratch.path(),
+        )? && let Some(source) = read_generated(&output, "pgs_ocr_live", acquisition_key)?
+        {
+            return Ok(Some(source));
+        }
+    }
+    Ok(None)
+}
+
+fn compare_sources(
+    external: &SourceSubtitle,
+    embedded: &SourceSubtitle,
+    cfg: &Config,
+) -> Result<SourceComparison> {
+    let external_text =
+        std::str::from_utf8(&external.bytes).context("external English SRT is not valid UTF-8")?;
+    let embedded_text = std::str::from_utf8(&embedded.bytes)
+        .context("embedded English subtitle is not valid UTF-8")?;
+    let external_cues = srt::parse(external_text)?;
+    let embedded_cues = srt::parse(embedded_text)?;
+    let external_quality = quality::score_source(&external_cues, &cfg.translation.source_language)?;
+    let embedded_quality = quality::score_source(&embedded_cues, &cfg.translation.source_language)?;
+    let timing_match_ratio = bidirectional_timing_match(&external_cues, &embedded_cues);
+    let text_similarity = aligned_text_similarity(&external_cues, &embedded_cues);
+    Ok(SourceComparison {
+        timing_match_ratio,
+        text_similarity,
+        external_quality,
+        embedded_quality,
+    })
+}
+
+fn bidirectional_timing_match(external: &[Cue], embedded: &[Cue]) -> f32 {
+    let external_match = external
+        .iter()
+        .filter(|cue| embedded.iter().any(|other| cues_align(cue, other)))
+        .count() as f32
+        / external.len().max(1) as f32;
+    let embedded_match = embedded
+        .iter()
+        .filter(|cue| external.iter().any(|other| cues_align(cue, other)))
+        .count() as f32
+        / embedded.len().max(1) as f32;
+    external_match.min(embedded_match)
+}
+
+fn aligned_text_similarity(external: &[Cue], embedded: &[Cue]) -> f32 {
+    let total: f32 = external
+        .iter()
+        .map(|cue| {
+            let external_tokens = word_tokens(&cue.text);
+            let embedded_tokens: HashSet<String> = embedded
+                .iter()
+                .filter(|other| cues_align(cue, other))
+                .flat_map(|other| word_tokens(&other.text))
+                .collect();
+            dice_similarity(&external_tokens, &embedded_tokens)
+        })
+        .sum();
+    total / external.len().max(1) as f32
+}
+
+fn cues_align(left: &Cue, right: &Cue) -> bool {
+    const TOLERANCE_MS: u64 = 1_500;
+    left.start_ms <= right.end_ms.saturating_add(TOLERANCE_MS)
+        && right.start_ms <= left.end_ms.saturating_add(TOLERANCE_MS)
+}
+
+fn word_tokens(text: &str) -> HashSet<String> {
+    text.to_ascii_lowercase()
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn dice_similarity(left: &HashSet<String>, right: &HashSet<String>) -> f32 {
+    if left.is_empty() || right.is_empty() {
+        return 0.0;
+    }
+    2.0 * left.intersection(right).count() as f32 / (left.len() + right.len()) as f32
 }
 
 fn acquire_generated_source(
@@ -447,21 +755,7 @@ fn acquire_generated_source(
     acquisition_key: &str,
 ) -> Result<Option<SourceSubtitle>> {
     let scratch = tempfile::Builder::new().prefix("subtrans-").tempdir()?;
-    let local_video = if let Some(path) = storage.local_path(&video.path)? {
-        path
-    } else {
-        let required = video.size.saturating_add(128 * 1024 * 1024);
-        let available = fs2::available_space(scratch.path())?;
-        if available < required {
-            bail!("insufficient scratch space for {}", video.path);
-        }
-        let path = scratch.path().join(format!(
-            "input.{}",
-            extension(&video.path).unwrap_or("media")
-        ));
-        storage.download(&video.path, &path)?;
-        path
-    };
+    let local_video = materialize_local_video(storage, video, &scratch)?;
     let tracks = probe_tracks(&local_video, cfg, &scratch)?;
     let mut english: Vec<SubtitleTrack> = tracks.into_iter().filter(is_english_track).collect();
     english.sort_by_key(track_rank);
@@ -537,6 +831,27 @@ fn acquire_generated_source(
     Ok(None)
 }
 
+fn materialize_local_video(
+    storage: &dyn Storage,
+    video: &FileEntry,
+    scratch: &TempDir,
+) -> Result<PathBuf> {
+    if let Some(path) = storage.local_path(&video.path)? {
+        return Ok(path);
+    }
+    let required = video.size.saturating_add(128 * 1024 * 1024);
+    let available = fs2::available_space(scratch.path())?;
+    if available < required {
+        bail!("insufficient scratch space for {}", video.path);
+    }
+    let path = scratch.path().join(format!(
+        "input.{}",
+        extension(&video.path).unwrap_or("media")
+    ));
+    storage.download(&video.path, &path)?;
+    Ok(path)
+}
+
 fn probe_tracks(video: &Path, cfg: &Config, scratch: &TempDir) -> Result<Vec<SubtitleTrack>> {
     let args = vec![
         "-v".into(),
@@ -603,6 +918,7 @@ fn read_generated(
         kind: kind.into(),
         path: None,
         acquisition_key: acquisition_key.into(),
+        evidence: None,
     }))
 }
 
@@ -785,6 +1101,29 @@ fn index_files(entries: &[FileEntry]) -> HashMap<String, Vec<FileEntry>> {
     index
 }
 
+fn incomplete_marker(
+    video: &FileEntry,
+    by_directory: &HashMap<String, Vec<FileEntry>>,
+    cfg: &Config,
+) -> Option<String> {
+    let directory = parent(&video.path);
+    let video_name = basename(&video.path);
+    by_directory
+        .get(directory)
+        .into_iter()
+        .flatten()
+        .find(|entry| {
+            cfg.migration
+                .incomplete_marker_extensions
+                .iter()
+                .map(|extension| extension.trim_start_matches('.'))
+                .any(|extension| {
+                    basename(&entry.path).eq_ignore_ascii_case(&format!("{video_name}.{extension}"))
+                })
+        })
+        .map(|entry| entry.path.clone())
+}
+
 fn source_rank(path: &str, video_stem: &str) -> Option<(u32, &'static str)> {
     let name = basename(path).to_ascii_lowercase();
     let stem = video_stem.to_ascii_lowercase();
@@ -906,5 +1245,92 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("exceeded"));
+    }
+
+    #[test]
+    fn incomplete_marker_must_match_the_exact_video_name() {
+        let cfg: Config = toml::from_str(include_str!("../../config.example.toml")).unwrap();
+        let video = FileEntry {
+            path: "Show/episode.mkv".into(),
+            size: 100,
+            is_dir: false,
+            modified: None,
+        };
+        let mut entries = vec![
+            video.clone(),
+            FileEntry {
+                path: "Show/other.mkv.aria2".into(),
+                size: 1,
+                is_dir: false,
+                modified: None,
+            },
+        ];
+        assert!(incomplete_marker(&video, &index_files(&entries), &cfg).is_none());
+
+        entries.push(FileEntry {
+            path: "Show/episode.mkv.ARIA2".into(),
+            size: 1,
+            is_dir: false,
+            modified: None,
+        });
+        assert_eq!(
+            incomplete_marker(&video, &index_files(&entries), &cfg).as_deref(),
+            Some("Show/episode.mkv.ARIA2")
+        );
+    }
+
+    #[test]
+    fn source_comparison_requires_both_timing_and_dialogue_agreement() {
+        let matching_external = vec![
+            Cue {
+                index: 1,
+                start_ms: 1_000,
+                end_ms: 2_000,
+                text: "Hello there".into(),
+            },
+            Cue {
+                index: 2,
+                start_ms: 4_000,
+                end_ms: 5_000,
+                text: "General Kenobi".into(),
+            },
+        ];
+        let matching_embedded = vec![
+            Cue {
+                index: 1,
+                start_ms: 1_100,
+                end_ms: 2_100,
+                text: "Hello there!".into(),
+            },
+            Cue {
+                index: 2,
+                start_ms: 4_100,
+                end_ms: 5_100,
+                text: "General Kenobi.".into(),
+            },
+        ];
+        assert_eq!(
+            bidirectional_timing_match(&matching_external, &matching_embedded),
+            1.0
+        );
+        assert_eq!(
+            aligned_text_similarity(&matching_external, &matching_embedded),
+            1.0
+        );
+
+        let wrong_dialogue = vec![Cue {
+            index: 1,
+            start_ms: 1_000,
+            end_ms: 5_000,
+            text: "Completely unrelated words".into(),
+        }];
+        assert_eq!(
+            bidirectional_timing_match(&wrong_dialogue, &matching_embedded),
+            1.0
+        );
+        assert_eq!(
+            aligned_text_similarity(&wrong_dialogue, &matching_embedded),
+            0.0
+        );
     }
 }

@@ -7,7 +7,19 @@ use sha2::{Digest, Sha256};
 
 use crate::storage::{FileEntry, Storage};
 
-pub const ARTIFACT_SCHEMA: u32 = 2;
+pub const ARTIFACT_SCHEMA: u32 = 3;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubtitleSourceEvidence {
+    pub decision: String,
+    pub external_path: String,
+    pub embedded_kind: String,
+    pub timing_match_ratio: f32,
+    pub text_similarity: f32,
+    pub external_quality: f32,
+    pub embedded_quality: f32,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -22,6 +34,8 @@ pub struct SubtitleArtifact {
     pub acquisition_key: String,
     pub source_kind: String,
     pub source_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_evidence: Option<SubtitleSourceEvidence>,
     pub created_unix_seconds: u64,
 }
 

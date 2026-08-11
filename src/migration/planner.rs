@@ -7,19 +7,24 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::artifact::{read_ready_artifact, video_identity};
-use crate::config::{Config, MigrationOverride, OverrideKind, StorageConfig};
+use crate::config::{
+    Config, MigrationLayout, MigrationOverride, MigrationTitleRoute, OverrideKind, StorageConfig,
+};
 use crate::storage::{FileEntry, Storage, open_storage, validate_relative_path};
 
 use super::classifier::{Classification, Evidence, MediaKind, RULE_VERSION, classify_path};
 
-const PLAN_SCHEMA_VERSION: u32 = 2;
+const PLAN_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceFingerprint {
     pub size_bytes: u64,
     pub modified_unix_seconds: Option<u64>,
     pub identity_sha256: String,
-    pub content_sha256: String,
+    /// Full content hash is present only on executable actions. Pending review
+    /// items deliberately avoid reading multi-gigabyte media that cannot be
+    /// applied; any resolution requires generating a fresh, fully hashed plan.
+    pub content_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +46,9 @@ pub struct PlanItem {
     pub source: String,
     pub source_fingerprint: SourceFingerprint,
     pub classification: Classification,
+    /// Auditable routing preview. This may be present on a pending item but is
+    /// never returned by `actions()` and therefore can never be applied.
+    pub proposed_destination: Option<String>,
     pub destination: Option<String>,
     pub sidecar_actions: Vec<FileAction>,
     pub status: PlanStatus,
@@ -197,6 +205,12 @@ pub fn build_plan(config: &Config, limit: Option<usize>) -> Result<PlanDocument>
         .iter()
         .map(|value| value.trim_start_matches('.').to_ascii_lowercase())
         .collect();
+    let incomplete_marker_extensions: Vec<String> = config
+        .migration
+        .incomplete_marker_extensions
+        .iter()
+        .map(|value| value.trim_start_matches('.').to_ascii_lowercase())
+        .collect();
     let videos: Vec<&FileEntry> = entries
         .iter()
         .filter(|entry| {
@@ -213,49 +227,72 @@ pub fn build_plan(config: &Config, limit: Option<usize>) -> Result<PlanDocument>
         let classification = decision
             .map(|decision| classification_from_override(video, decision))
             .unwrap_or_else(|| classify_path(&video.path));
-        let source_fingerprint = fingerprint(storage.as_ref(), video)?;
-        let destination = destination_for(config, &video.path, &classification)?;
+        let destination_resolution = destination_for(config, &video.path, &classification)?;
         let subtitle_ready = read_ready_artifact(storage.as_ref(), video)?;
         let allow_untranslated = decision.is_some_and(|decision| decision.allow_untranslated);
+        let incomplete_marker = entries.iter().find(|entry| {
+            !entry.is_dir
+                && incomplete_marker_extensions.iter().any(|extension| {
+                    entry
+                        .path
+                        .eq_ignore_ascii_case(&format!("{}.{}", video.path, extension))
+                })
+        });
 
-        let status = if config.migration.require_translated_subtitle
-            && subtitle_ready.is_none()
-            && !allow_untranslated
-        {
-            PlanStatus::Pending {
-                reason: "valid translated subtitle artifact is required before migration".into(),
-            }
-        } else if classification.is_pending() {
-            PlanStatus::Pending {
-                reason: classification
+        let mut blockers = Vec::new();
+        if let Some(marker) = incomplete_marker {
+            blockers.push(format!(
+                "incomplete download marker is present: {}",
+                marker.path
+            ));
+        }
+        if classification.is_pending() {
+            blockers.push(
+                classification
                     .pending_reason
                     .clone()
                     .unwrap_or_else(|| "classification requires confirmation".into()),
-            }
+            );
         } else if classification.confidence < config.migration.auto_apply_confidence {
-            PlanStatus::Pending {
-                reason: format!(
-                    "classification confidence {:.2} is below configured threshold {:.2}",
-                    classification.confidence, config.migration.auto_apply_confidence
-                ),
-            }
-        } else if destination.is_none() {
-            PlanStatus::Pending {
-                reason: "classification lacks destination naming fields".into(),
-            }
-        } else {
+            blockers.push(format!(
+                "classification confidence {:.2} is below configured threshold {:.2}",
+                classification.confidence, config.migration.auto_apply_confidence
+            ));
+        } else if destination_resolution.destination.is_none() {
+            blockers.push(
+                destination_resolution
+                    .pending_reason
+                    .clone()
+                    .unwrap_or_else(|| "classification lacks destination naming fields".into()),
+            );
+        }
+        if config.migration.require_translated_subtitle
+            && subtitle_ready.is_none()
+            && !allow_untranslated
+        {
+            blockers.push("valid translated subtitle artifact is required before migration".into());
+        }
+        let status = if blockers.is_empty() {
             PlanStatus::Ready
+        } else {
+            PlanStatus::Pending {
+                reason: blockers.join("; "),
+            }
         };
 
+        let proposed_destination = destination_resolution.destination;
         let destination = matches!(status, PlanStatus::Ready)
-            .then_some(destination)
+            .then_some(proposed_destination.clone())
             .flatten();
+        let source_fingerprint =
+            fingerprint(storage.as_ref(), video, matches!(status, PlanStatus::Ready))?;
         let sidecar_actions = if let Some(target) = destination.as_deref() {
             sidecars_for(
                 storage.as_ref(),
                 &entries,
                 &video.path,
                 target,
+                &classification,
                 &sidecar_extensions,
             )?
         } else {
@@ -265,6 +302,7 @@ pub fn build_plan(config: &Config, limit: Option<usize>) -> Result<PlanDocument>
             source: video.path.clone(),
             source_fingerprint,
             classification,
+            proposed_destination,
             destination,
             sidecar_actions,
             status,
@@ -300,74 +338,202 @@ fn classification_from_override(video: &FileEntry, decision: &MigrationOverride)
     }
 }
 
+struct DestinationResolution {
+    destination: Option<String>,
+    pending_reason: Option<String>,
+}
+
+impl DestinationResolution {
+    fn pending(reason: impl Into<String>) -> Self {
+        Self {
+            destination: None,
+            pending_reason: Some(reason.into()),
+        }
+    }
+
+    fn ready(destination: String) -> Self {
+        Self {
+            destination: Some(destination),
+            pending_reason: None,
+        }
+    }
+}
+
 fn destination_for(
     config: &Config,
     source: &str,
     classification: &Classification,
-) -> Result<Option<String>> {
-    let extension = Path::new(source)
+) -> Result<DestinationResolution> {
+    let source_path = Path::new(source);
+    let extension = source_path
         .extension()
         .and_then(|value| value.to_str())
         .context("video extension is not valid UTF-8")?;
-    let Some(title) = classification.title.as_deref().map(safe_component) else {
-        return Ok(None);
+    let source_file = source_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .context("video file name is not valid UTF-8")?;
+    let source_stem = source_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .context("video stem is not valid UTF-8")?;
+    let Some(classified_title) = classification.title.as_deref() else {
+        return Ok(DestinationResolution::pending(
+            "classification has no title for destination rendering",
+        ));
     };
-    let (root, directory_parts, normalized_stem) = match classification.kind {
+    let route = title_route(config, classified_title);
+    let title = route
+        .and_then(|value| value.title.as_deref())
+        .unwrap_or(classified_title);
+    let title = safe_component(title);
+    if title.is_empty() {
+        return Ok(DestinationResolution::pending(
+            "configured destination title is empty after path sanitization",
+        ));
+    }
+    let layout = match classification.kind {
+        MediaKind::Movie if classification.is_4k => &config.migration.layouts.movie_4k,
+        MediaKind::Movie => &config.migration.layouts.movie_other,
+        MediaKind::Tv if classification.is_4k => &config.migration.layouts.tv_4k,
+        MediaKind::Tv => &config.migration.layouts.tv_other,
+        MediaKind::Unknown => {
+            return Ok(DestinationResolution::pending(
+                "unknown media type has no destination layout",
+            ));
+        }
+    };
+    let mut values = HashMap::from([
+        ("title", title.clone()),
+        ("title_dot", dotify(&title)),
+        ("source_file", safe_component(source_file)),
+        ("source_file_dot", dotify(source_file)),
+        ("source_stem", safe_component(source_stem)),
+        ("source_stem_dot", dotify(source_stem)),
+        ("extension", extension.to_owned()),
+        (
+            "release_dir",
+            release_directory(config, source_path, source_stem),
+        ),
+    ]);
+
+    match classification.kind {
         MediaKind::Movie => {
             let Some(year) = classification.year else {
-                return Ok(None);
+                return Ok(DestinationResolution::pending(
+                    "movie classification has no release year",
+                ));
             };
-            let root = if classification.is_4k {
-                &config.migration.movie_4k_root
-            } else {
-                &config.migration.movie_1080_root
-            };
-            let year_bucket = if year >= config.migration.year_split {
+            let decade = format!("{}0s", year / 10);
+            let year_bucket = if layout
+                .recent_year_from
+                .is_none_or(|recent_year_from| year >= recent_year_from)
+            {
                 year.to_string()
             } else {
-                format!("{}0s", year / 10)
+                decade.clone()
             };
-            let folder = format!("{title} ({year})");
-            let stem = if config.migration.normalize_names {
-                format!("{}.{}", dotify(&title), year)
-            } else {
-                Path::new(source)
-                    .file_stem()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or(&title)
-                    .to_owned()
-            };
-            (root.as_str(), vec![year_bucket, folder], stem)
+            values.insert("year", year.to_string());
+            values.insert("decade", decade);
+            values.insert("year_bucket", year_bucket);
         }
         MediaKind::Tv => {
             let (Some(season), Some(episode)) = (classification.season, classification.episode)
             else {
-                return Ok(None);
+                return Ok(DestinationResolution::pending(
+                    "TV classification requires both season and episode",
+                ));
             };
-            let root = if classification.is_4k {
-                &config.migration.tv_4k_root
-            } else {
-                &config.migration.tv_1080_root
-            };
-            let stem = if config.migration.normalize_names {
-                format!("{}.S{season:02}E{episode:02}", dotify(&title))
-            } else {
-                Path::new(source)
-                    .file_stem()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or(&title)
-                    .to_owned()
-            };
-            (root.as_str(), vec![title, format!("S{season:02}")], stem)
+            values.insert("season", season.to_string());
+            values.insert("season_padded", format!("{season:02}"));
+            values.insert("episode", episode.to_string());
+            values.insert("episode_padded", format!("{episode:02}"));
+            if layout.directory_template.contains("{alpha_group}") {
+                let group = route
+                    .and_then(|value| value.group.as_deref())
+                    .map(safe_component)
+                    .or_else(|| alphabet_group(layout, &title));
+                let Some(group) = group else {
+                    return Ok(DestinationResolution::pending(format!(
+                        "TV title {title:?} has no configured alphabet group or title route"
+                    )));
+                };
+                values.insert("alpha_group", group);
+            }
         }
-        MediaKind::Unknown => return Ok(None),
-    };
-    let mut parts = vec![root.to_owned()];
-    parts.extend(directory_parts);
-    parts.push(format!("{normalized_stem}.{extension}"));
-    let destination = join_storage_path(&parts.iter().map(String::as_str).collect::<Vec<_>>());
+        MediaKind::Unknown => unreachable!("unknown media was handled before rendering"),
+    }
+
+    let directory = render_template(&layout.directory_template, &values)?;
+    let filename = render_template(&layout.filename_template, &values)?;
+    let destination = join_storage_path(&[&layout.root, &directory, &filename]);
     validate_relative_path(&destination)?;
-    Ok(Some(destination))
+    Ok(DestinationResolution::ready(destination))
+}
+
+fn title_route<'a>(config: &'a Config, title: &str) -> Option<&'a MigrationTitleRoute> {
+    config
+        .migration
+        .title_routes
+        .iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(title))
+        .map(|(_, route)| route)
+}
+
+fn release_directory(config: &Config, source: &Path, source_stem: &str) -> String {
+    let parent = source
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|value| value.to_str());
+    let parent_is_generic = parent.is_none_or(|parent| {
+        config
+            .migration
+            .generic_source_directories
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(parent))
+    });
+    safe_component(if parent_is_generic {
+        source_stem
+    } else {
+        parent.unwrap_or(source_stem)
+    })
+}
+
+fn alphabet_group(layout: &MigrationLayout, title: &str) -> Option<String> {
+    let initial = title
+        .chars()
+        .find(|value| value.is_ascii_alphabetic())?
+        .to_ascii_uppercase();
+    layout
+        .alphabet_groups
+        .iter()
+        .find(|group| {
+            group
+                .letters
+                .chars()
+                .any(|letter| letter.to_ascii_uppercase() == initial)
+        })
+        .map(|group| safe_component(&group.directory))
+}
+
+fn render_template(template: &str, values: &HashMap<&str, String>) -> Result<String> {
+    let mut rendered = String::new();
+    let mut remainder = template;
+    while let Some(start) = remainder.find('{') {
+        rendered.push_str(&remainder[..start]);
+        let tail = &remainder[start + 1..];
+        let end = tail
+            .find('}')
+            .context("validated migration template has an unclosed placeholder")?;
+        let placeholder = &tail[..end];
+        let value = values.get(placeholder).with_context(|| {
+            format!("migration template field {{{placeholder}}} is unavailable")
+        })?;
+        rendered.push_str(value);
+        remainder = &tail[end + 1..];
+    }
+    rendered.push_str(remainder);
+    Ok(rendered)
 }
 
 fn sidecars_for(
@@ -375,6 +541,7 @@ fn sidecars_for(
     entries: &[FileEntry],
     source: &str,
     target: &str,
+    classification: &Classification,
     extensions: &HashSet<String>,
 ) -> Result<Vec<FileAction>> {
     let source_path = Path::new(source);
@@ -404,26 +571,45 @@ fn sidecars_for(
         let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
             continue;
         };
-        let suffix = if stem == video_stem {
-            String::new()
+        let destination_name = if stem == video_stem {
+            format!("{target_stem}.{extension}")
         } else if let Some(suffix) = stem.strip_prefix(&format!("{video_stem}.")) {
-            format!(".{suffix}")
+            format!("{target_stem}.{suffix}.{extension}")
+        } else if is_same_episode_sidecar(classification, &entry.path) {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .context("sidecar file name is not valid UTF-8")?
+                .to_owned()
         } else {
             continue;
         };
-        let destination_name = format!("{target_stem}{suffix}.{extension}");
+        let destination_name = dotify(&destination_name);
         let destination =
             join_storage_path(&[target_parent.to_str().unwrap_or(""), &destination_name]);
         actions.push(FileAction {
             source: entry.path.clone(),
             destination,
-            source_fingerprint: fingerprint(storage, entry)?,
+            source_fingerprint: fingerprint(storage, entry, true)?,
         });
     }
     Ok(actions)
 }
 
-fn fingerprint(storage: &dyn Storage, entry: &FileEntry) -> Result<SourceFingerprint> {
+fn is_same_episode_sidecar(video: &Classification, sidecar_path: &str) -> bool {
+    if video.kind != MediaKind::Tv {
+        return false;
+    }
+    let sidecar = classify_path(sidecar_path);
+    sidecar.kind == MediaKind::Tv
+        && sidecar.season == video.season
+        && sidecar.episode == video.episode
+}
+
+fn fingerprint(
+    storage: &dyn Storage,
+    entry: &FileEntry,
+    include_content: bool,
+) -> Result<SourceFingerprint> {
     let modified_unix_seconds = entry
         .modified
         .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
@@ -432,9 +618,13 @@ fn fingerprint(storage: &dyn Storage, entry: &FileEntry) -> Result<SourceFingerp
         size_bytes: entry.size,
         modified_unix_seconds,
         identity_sha256: video_identity(entry),
-        content_sha256: storage
-            .sha256(&entry.path)
-            .with_context(|| format!("failed to hash planned source {}", entry.path))?,
+        content_sha256: include_content
+            .then(|| {
+                storage
+                    .sha256(&entry.path)
+                    .with_context(|| format!("failed to hash planned source {}", entry.path))
+            })
+            .transpose()?,
     })
 }
 
@@ -496,14 +686,22 @@ pub fn storage_binding(config: &StorageConfig) -> Result<StorageBinding> {
         StorageConfig::Ftp {
             host,
             port,
-            username,
+            username_env,
             root,
             ..
-        } => StorageBinding {
-            kind: "ftp".into(),
-            endpoint: format!("{}@{}:{}", username, host.to_ascii_lowercase(), port),
-            root: format!("/{}", root.trim_matches('/')),
-        },
+        } => {
+            let username = crate::storage::resolve_ftp_username(username_env)?;
+            let account_hash = hex::encode(Sha256::digest(username.as_bytes()));
+            StorageBinding {
+                kind: "ftp".into(),
+                endpoint: format!(
+                    "{}:{}#account_sha256={account_hash}",
+                    host.to_ascii_lowercase(),
+                    port
+                ),
+                root: format!("/{}", root.trim_matches('/')),
+            }
+        }
     })
 }
 

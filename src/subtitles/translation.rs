@@ -1,5 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Read;
+use std::ops::Range;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -12,18 +13,32 @@ use crate::config::{LlmProvider, TranslationConfig};
 use super::quality::validate_translation_quality;
 use super::srt::{Cue, single_line};
 
-const PROMPT_VERSION: &str = "subtrans-translation-json-v2";
+const PROMPT_VERSION: &str = "subtrans-translation-context-json-v3";
 
 #[derive(Debug, Serialize)]
 struct PromptLine<'a> {
     index: u32,
     text: &'a str,
+    translate: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct AuditLine<'a> {
+    index: u32,
+    source: &'a str,
+    translation: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TranslationEnvelope {
     translations: Vec<TranslatedLine>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConsistencyEnvelope {
+    corrections: Vec<TranslatedLine>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,31 +58,18 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<Vec<Cue>> {
     let api_key = cfg.api_key()?;
     let mut translated = BTreeMap::new();
 
-    for batch in batches(cues, cfg.batch_size, cfg.max_batch_chars) {
-        let prompt = build_prompt(batch, cfg)?;
-        let mut last_error = None;
-        for attempt in 0..=cfg.max_retries {
-            match request(&client, cfg, api_key.as_deref(), &prompt)
-                .and_then(|response| parse_aligned(&response, batch))
-            {
-                Ok(values) => {
-                    translated.extend(values);
-                    last_error = None;
-                    break;
-                }
-                Err(error) => {
-                    last_error = Some(error);
-                    if attempt < cfg.max_retries {
-                        std::thread::sleep(Duration::from_millis(
-                            250_u64.saturating_mul(1_u64 << attempt.min(4)),
-                        ));
-                    }
-                }
-            }
-        }
-        if let Some(error) = last_error {
-            return Err(error).context("translation batch failed strict alignment checks");
-        }
+    for range in batch_ranges(cues, cfg.batch_size, cfg.max_batch_chars) {
+        translate_range_adaptive(
+            &client,
+            api_key.as_deref(),
+            cues,
+            range,
+            cfg,
+            &mut translated,
+        )?;
+    }
+    if cfg.consistency_check && cues.len() > 1 {
+        audit_consistency(&client, api_key.as_deref(), cues, &mut translated, cfg)?;
     }
     let output = render(cues, &translated, cfg.bilingual)?;
     validate_translation_quality(
@@ -79,7 +81,7 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<Vec<Cue>> {
     Ok(output)
 }
 
-fn batches(cues: &[Cue], max_count: usize, max_chars: usize) -> Vec<&[Cue]> {
+fn batch_ranges(cues: &[Cue], max_count: usize, max_chars: usize) -> Vec<Range<usize>> {
     let mut output = Vec::new();
     let mut start = 0usize;
     while start < cues.len() {
@@ -96,10 +98,70 @@ fn batches(cues: &[Cue], max_count: usize, max_chars: usize) -> Vec<&[Cue]> {
                 break;
             }
         }
-        output.push(&cues[start..end.max(start + 1)]);
+        output.push(start..end.max(start + 1));
         start = end.max(start + 1);
     }
     output
+}
+
+fn translate_range_adaptive(
+    client: &Client,
+    api_key: Option<&str>,
+    cues: &[Cue],
+    initial: Range<usize>,
+    cfg: &TranslationConfig,
+    translated: &mut BTreeMap<u32, String>,
+) -> Result<()> {
+    let mut pending = VecDeque::from([initial]);
+    while let Some(range) = pending.pop_front() {
+        let prompt = build_prompt(cues, range.clone(), cfg)?;
+        let expected = &cues[range.clone()];
+        let result = retry(cfg.max_retries, || {
+            request(client, cfg, api_key, &prompt)
+                .and_then(|response| parse_aligned(&response, expected))
+        });
+        match result {
+            Ok(values) => {
+                for (index, text) in values {
+                    if translated.insert(index, text).is_some() {
+                        bail!("translation batch produced duplicate cue index {index}");
+                    }
+                }
+            }
+            Err(_) if range.len() >= cfg.min_batch_size.saturating_mul(2) => {
+                let midpoint = range.start + range.len() / 2;
+                pending.push_front(midpoint..range.end);
+                pending.push_front(range.start..midpoint);
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "translation batch {}..{} failed strict checks and cannot be split without going below the configured minimum",
+                        range.start, range.end
+                    )
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn retry<T>(max_retries: u32, mut operation: impl FnMut() -> Result<T>) -> Result<T> {
+    let mut last_error = None;
+    for attempt in 0..=max_retries {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < max_retries {
+                    std::thread::sleep(Duration::from_millis(
+                        250_u64.saturating_mul(1_u64 << attempt.min(4)),
+                    ));
+                }
+            }
+        }
+    }
+    Err(last_error.expect("retry loop executes at least once"))
 }
 
 pub fn parse_aligned(response: &str, expected: &[Cue]) -> Result<BTreeMap<u32, String>> {
@@ -196,22 +258,117 @@ pub fn prompt_version() -> &'static str {
     PROMPT_VERSION
 }
 
-fn build_prompt(cues: &[Cue], cfg: &TranslationConfig) -> Result<String> {
-    let lines: Vec<PromptLine<'_>> = cues
+fn build_prompt(cues: &[Cue], core: Range<usize>, cfg: &TranslationConfig) -> Result<String> {
+    let context_start = core.start.saturating_sub(cfg.context_cues);
+    let context_end = core.end.saturating_add(cfg.context_cues).min(cues.len());
+    let lines: Vec<PromptLine<'_>> = cues[context_start..context_end]
         .iter()
-        .map(|cue| PromptLine {
+        .enumerate()
+        .map(|(offset, cue)| PromptLine {
             index: cue.index,
             text: &cue.text,
+            translate: (context_start + offset) >= core.start
+                && (context_start + offset) < core.end,
         })
         .collect();
     Ok(format!(
-        "Protocol: {PROMPT_VERSION}. Translate from {} to {}. Return exactly one JSON object with shape \
-         {{\"translations\":[{{\"index\":1,\"text\":\"translation\"}}]}}. Preserve each input index exactly once, \
-         emit no markdown or extra keys, and never copy untranslated source text. Input: {}",
+        "Protocol: {PROMPT_VERSION}. You are a professional {} ({}) to {} ({}) translator. \
+         Accurately convey meaning and nuances while following {} grammar, vocabulary, and cultural conventions. \
+         Input items with translate=false are read-only neighboring context: use them for pronouns, names, tone, and continuity, \
+         but do not return them. Return exactly one JSON object with shape \
+         {{\"translations\":[{{\"index\":1,\"text\":\"translation\"}}]}} containing every translate=true index exactly once. \
+         Produce only {} translations, with no markdown, explanations, extra keys, or untranslated source text. \
+         Please translate the following {} subtitle cues into {}:\n\n{}",
+        cfg.source_language,
+        cfg.source_language_code,
+        cfg.target_language,
+        cfg.target_language_code,
+        cfg.target_language,
+        cfg.target_language,
         cfg.source_language,
         cfg.target_language,
         serde_json::to_string(&lines)?
     ))
+}
+
+fn audit_consistency(
+    client: &Client,
+    api_key: Option<&str>,
+    cues: &[Cue],
+    translations: &mut BTreeMap<u32, String>,
+    cfg: &TranslationConfig,
+) -> Result<()> {
+    let characters = cues.iter().try_fold(0usize, |total, cue| {
+        let translation = translations
+            .get(&cue.index)
+            .with_context(|| format!("missing translation for consistency cue {}", cue.index))?;
+        Ok::<usize, anyhow::Error>(
+            total
+                .saturating_add(cue.text.chars().count())
+                .saturating_add(translation.chars().count()),
+        )
+    })?;
+    if characters > cfg.consistency_max_chars {
+        bail!(
+            "translation consistency input has {characters} characters, exceeding configured limit {}",
+            cfg.consistency_max_chars
+        );
+    }
+    let lines: Vec<AuditLine<'_>> = cues
+        .iter()
+        .map(|cue| {
+            Ok(AuditLine {
+                index: cue.index,
+                source: &cue.text,
+                translation: translations
+                    .get(&cue.index)
+                    .context("translation disappeared before consistency audit")?,
+            })
+        })
+        .collect::<Result<_>>()?;
+    let prompt = format!(
+        "Protocol: {PROMPT_VERSION}-consistency. You are a professional subtitle translation editor for {} ({}) to {} ({}). \
+         Review the complete subtitle for inconsistent character names, places, titles, terminology, pronouns, register, and recurring phrases. \
+         Do not rewrite lines that are already correct. Return exactly one JSON object \
+         {{\"corrections\":[{{\"index\":1,\"text\":\"corrected translation\"}}]}}. \
+         Use an empty corrections array when no change is needed. Each text must contain only the corrected target-language subtitle, never the source. \
+         Include only existing indices, with no markdown, reasons, or extra keys.\n\n{}",
+        cfg.source_language,
+        cfg.source_language_code,
+        cfg.target_language,
+        cfg.target_language_code,
+        serde_json::to_string(&lines)?
+    );
+    let expected: BTreeSet<u32> = cues.iter().map(|cue| cue.index).collect();
+    let corrections = retry(cfg.max_retries, || {
+        request(client, cfg, api_key, &prompt)
+            .and_then(|response| parse_consistency(&response, &expected))
+    })
+    .context("translation consistency audit failed strict checks")?;
+    translations.extend(corrections);
+    Ok(())
+}
+
+fn parse_consistency(response: &str, expected: &BTreeSet<u32>) -> Result<BTreeMap<u32, String>> {
+    let envelope: ConsistencyEnvelope = serde_json::from_str(response.trim())
+        .context("consistency response is not the required JSON object")?;
+    let mut corrections = BTreeMap::new();
+    for item in envelope.corrections {
+        if !expected.contains(&item.index) {
+            bail!(
+                "consistency response contains unexpected index {}",
+                item.index
+            );
+        }
+        let text = single_line(&item.text);
+        if text.is_empty() || corrections.insert(item.index, text).is_some() {
+            bail!(
+                "consistency response has an empty or duplicate index {}",
+                item.index
+            );
+        }
+    }
+    Ok(corrections)
 }
 
 fn request(
@@ -228,6 +385,7 @@ fn request(
                 "prompt": prompt,
                 "stream": false,
                 "format": "json",
+                "keep_alive": "10m",
                 "options": { "temperature": 0.0 }
             }),
             &["response"],
@@ -281,4 +439,76 @@ fn value_at<'a>(mut value: &'a Value, path: &[&str]) -> Option<&'a Value> {
         };
     }
     Some(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::TranslationConfig;
+
+    fn cues(count: usize) -> Vec<Cue> {
+        (1..=count)
+            .map(|index| Cue {
+                index: index as u32,
+                start_ms: index as u64 * 1_000,
+                end_ms: index as u64 * 1_000 + 900,
+                text: format!("Line {index}"),
+            })
+            .collect()
+    }
+
+    fn config() -> TranslationConfig {
+        toml::from_str(
+            r#"
+provider = "ollama"
+base_url = "http://127.0.0.1:11434"
+model = "translategemma:12b"
+source_language = "English"
+source_language_code = "en"
+target_language = "Simplified Chinese"
+target_language_code = "zh-CN"
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn batching_keeps_the_configured_maximum() {
+        let values = cues(85);
+        assert_eq!(batch_ranges(&values, 80, 8_000), vec![0..80, 80..85]);
+    }
+
+    #[test]
+    fn translation_prompt_marks_neighboring_context_as_read_only() {
+        let values = cues(8);
+        let mut cfg = config();
+        cfg.context_cues = 2;
+        let prompt = build_prompt(&values, 2..6, &cfg).unwrap();
+        assert!(prompt.contains("professional English (en) to Simplified Chinese (zh-CN)"));
+        assert!(prompt.contains("\"index\":1,\"text\":\"Line 1\",\"translate\":false"));
+        assert!(prompt.contains("\"index\":3,\"text\":\"Line 3\",\"translate\":true"));
+        assert!(prompt.contains("\n\n["));
+    }
+
+    #[test]
+    fn consistency_response_only_accepts_known_unique_indices() {
+        let expected = BTreeSet::from([1, 2]);
+        let corrections = parse_consistency(
+            r#"{"corrections":[{"index":2,"text":"修正译文"}]}"#,
+            &expected,
+        )
+        .unwrap();
+        assert_eq!(corrections.get(&2).map(String::as_str), Some("修正译文"));
+        assert!(parse_consistency(r#"{"corrections":[]}"#, &expected).is_ok());
+        assert!(
+            parse_consistency(r#"{"corrections":[{"index":3,"text":"越界"}]}"#, &expected).is_err()
+        );
+        assert!(
+            parse_consistency(
+                r#"{"corrections":[{"index":1,"text":"甲"},{"index":1,"text":"乙"}]}"#,
+                &expected
+            )
+            .is_err()
+        );
+    }
 }

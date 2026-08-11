@@ -4,25 +4,27 @@ version = 3
 database = "./state/subtrans.sqlite3"
 lease_seconds = 7200
 
-# 本地存储示例。FTP 示例见下方注释。
+# 生产媒体全部通过同一 FTP 账户访问。TOML 只保存服务器、端口和
+# 环境变量名；真实账号在进程启动时由 SUBTRANS_FTP_USERNAME 提供。
 [source]
-kind = "local"
-root = "/Volumes/media/incoming"
+kind = "ftp"
+host = "nas.example.internal"
+port = 10021
+username_env = "SUBTRANS_FTP_USERNAME"
+password_env = "SUBTRANS_FTP_PASSWORD"
+root = "/Downloads"
+timeout_seconds = 300
+allow_plaintext = true # 仅限隔离且可信的内网
 
 [destination]
-kind = "local"
-root = "/Volumes/media/library"
-
-# FTP 写法（密码只能通过环境变量提供）：
-# [source]
-# kind = "ftp"
-# host = "nas.local"
-# port = 21
-# username = "media"
-# password_env = "SUBTRANS_FTP_PASSWORD"
-# root = "/incoming"
-# timeout_seconds = 120
-# allow_plaintext = true # 仅限可信内网；优先使用 SMB/NFS 挂载目录
+kind = "ftp"
+host = "nas.example.internal"
+port = 10021
+username_env = "SUBTRANS_FTP_USERNAME"
+password_env = "SUBTRANS_FTP_PASSWORD"
+root = "/"
+timeout_seconds = 300
+allow_plaintext = true # 目标根下必须能看到 MOVIE、TV、X-Movie、X-TV
 
 [subtitles]
 video_extensions = ["mkv", "mp4", "avi", "mov", "m4v", "ts"]
@@ -30,6 +32,12 @@ min_video_bytes = 1048576
 ffmpeg = "ffmpeg"
 ffprobe = "ffprobe"
 external_process_timeout_seconds = 7200
+
+[subtitles.external_srt_validation]
+# 外置英文 SRT 必须与内置英文字幕交叉验证；质量接近时优先内置字幕。
+min_timing_match_ratio = 0.70
+min_text_similarity = 0.45
+external_quality_margin = 5.0
 
 # 可选 worker；subtrans 不会自动安装或下载它们。
 # [subtitles.asr]
@@ -49,16 +57,26 @@ external_process_timeout_seconds = 7200
 [translation]
 provider = "ollama"
 base_url = "http://127.0.0.1:11434"
-model = "qwen3:8b"
+model = "translategemma:12b"
 source_language = "English"
+source_language_code = "en"
 target_language = "Simplified Chinese"
+target_language_code = "zh-CN"
 bilingual = true
-batch_size = 20
+# 默认顺序处理 80 条；每批携带前后各 6 条只读上下文。严格校验失败时
+# 依次拆为 40/20 条，不并发争抢同一个 Ollama 模型。
+batch_size = 80
+min_batch_size = 20
+context_cues = 6
 timeout_seconds = 300
 max_retries = 2
 max_batch_chars = 8000
 max_response_bytes = 4194304
 min_target_script_ratio = 0.15
+# 初译完成后用完整字幕统一人名、术语和语气。超出字符上限会安全停止，
+# 不会跳过校对直接发布；长片可按已验证的模型上下文能力提高上限。
+consistency_check = true
+consistency_max_chars = 120000
 
 # OpenAI-compatible 示例：
 # provider = "openai_compatible"
@@ -66,15 +84,81 @@ min_target_script_ratio = 0.15
 # api_key_env = "SUBTRANS_LLM_API_KEY"
 
 [migration]
-movie_1080_root = "Movies"
-movie_4k_root = "Movies-4K"
-tv_1080_root = "TV"
-tv_4k_root = "TV-4K"
-year_split = 2024
 auto_apply_confidence = 0.95
 sidecar_extensions = ["srt", "ass", "ssa", "vtt", "nfo", "json"]
+# 字幕翻译和目录迁移都会跳过带有这些未完成下载标记的视频。
+incomplete_marker_extensions = ["aria2", "part", "crdownload"]
 require_translated_subtitle = true
-normalize_names = true
+
+# 下载根目录下用于混放散装资源的目录。在这些目录中的电影会用文件名
+# 作为发布目录名，避免所有电影都落入同一个 low_imdb/incoming 目录。
+generic_source_directories = ["incoming", "low_imdb"]
+
+# 四类媒体分别配置目标根、目录模板和文件名模板。模板只支持文档列出的
+# 受限字段；绝对路径、..、未知字段和未覆盖 A-Z 的字母分组会被拒绝。
+[migration.layouts.movie_4k]
+root = "MOVIE"
+directory_template = "{year_bucket}/{release_dir}"
+filename_template = "{source_file_dot}"
+# 1900 以后全部按精确年份分桶。
+recent_year_from = 1900
+
+[migration.layouts.movie_other]
+root = "X-Movie"
+directory_template = "{year_bucket}/{release_dir}"
+filename_template = "{source_file_dot}"
+# 2024 及以后使用精确年份，之前使用 1990s/2000s 等年代目录。
+recent_year_from = 2024
+
+[migration.layouts.tv_4k]
+root = "TV"
+directory_template = "{alpha_group}/{title_dot}/S{season_padded}"
+filename_template = "{source_file_dot}"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "ABC"
+directory = "[A.B.C]"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "DEF"
+directory = "[D.E.F]"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "GHIJK"
+directory = "[G.H.I.J.K]"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "LMN"
+directory = "[L.M.N]"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "OPQR"
+directory = "[O.P.Q.R]"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "S"
+directory = "[S]"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "T"
+directory = "[T]"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "UVWXYZ"
+directory = "[U.V.W.Y.Z]"
+
+[migration.layouts.tv_other]
+root = "X-TV"
+directory_template = "{title_dot}/S{season_padded}"
+filename_template = "{source_file_dot}"
+
+# 可选的剧名路由只改变目标展示名/特殊分组，不改变电影或电视剧分类。
+# [migration.title_routes."Lucky 2026"]
+# title = "Lucky"
+# group = "[L.M.N]"
+
+# [migration.title_routes."Loki"]
+# group = "[Marvels]"
 
 # 待确认项只能通过“源相对路径完全匹配”的显式覆盖解决。修改后必须重新生成计划。
 # [migration.overrides."incoming/Supergirl.2026.2160p.WEB-DL.mkv"]

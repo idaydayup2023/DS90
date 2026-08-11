@@ -31,7 +31,7 @@ impl FtpStorage {
         allow_plaintext: bool,
     ) -> Result<Self> {
         if host.trim().is_empty() || username.trim().is_empty() || password_env.trim().is_empty() {
-            bail!("FTP host, username, and password environment variable are required");
+            bail!("FTP host, resolved username, and password environment variable are required");
         }
         if root.contains('\0') || root.contains('\\') {
             bail!("FTP root contains an invalid separator or NUL");
@@ -41,7 +41,7 @@ impl FtpStorage {
         }
         if !allow_plaintext {
             bail!(
-                "plaintext FTP is disabled; use a mounted NAS path or explicitly allow it on a trusted network"
+                "plaintext FTP is disabled; explicitly allow it only on a trusted isolated network"
             );
         }
         let root = if root.trim().is_empty() || root == "/" {
@@ -62,12 +62,7 @@ impl FtpStorage {
     }
 
     fn connect(&self) -> Result<FtpStream> {
-        let password = std::env::var(&self.password_env).with_context(|| {
-            format!(
-                "missing FTP password environment variable {}",
-                self.password_env
-            )
-        })?;
+        let password = self.password()?;
         let address = (self.host.as_str(), self.port)
             .to_socket_addrs()
             .with_context(|| format!("failed to resolve FTP host {}", self.host))?
@@ -84,6 +79,57 @@ impl FtpStorage {
         Ok(ftp)
     }
 
+    fn password(&self) -> Result<String> {
+        match std::env::var(&self.password_env) {
+            Ok(password) if !password.is_empty() => return Ok(password),
+            Ok(_) => bail!(
+                "FTP password environment variable {} is empty",
+                self.password_env
+            ),
+            Err(std::env::VarError::NotUnicode(_)) => bail!(
+                "FTP password environment variable {} is not valid Unicode",
+                self.password_env
+            ),
+            Err(std::env::VarError::NotPresent) => {}
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let output = std::process::Command::new("/usr/bin/security")
+                .args([
+                    "find-internet-password",
+                    "-s",
+                    &self.host,
+                    "-P",
+                    &self.port.to_string(),
+                    "-a",
+                    &self.username,
+                    "-w",
+                ])
+                .output()
+                .context("failed to query macOS Keychain for the FTP password")?;
+            if output.status.success() {
+                let password = String::from_utf8(output.stdout)
+                    .context("FTP password from macOS Keychain is not valid Unicode")?;
+                let password = password.trim_end_matches(['\r', '\n']).to_owned();
+                if password.is_empty() {
+                    bail!("FTP password stored in macOS Keychain is empty");
+                }
+                return Ok(password);
+            }
+        }
+
+        bail!(
+            "missing FTP credential: set environment variable {}{}",
+            self.password_env,
+            if cfg!(target_os = "macos") {
+                " or add a matching macOS internet-password item"
+            } else {
+                ""
+            }
+        )
+    }
+
     pub fn check_connection(&self) -> Result<()> {
         let mut ftp = self.connect()?;
         // CWD is widely supported and avoids requiring MLST support merely to
@@ -92,6 +138,64 @@ impl FtpStorage {
             .with_context(|| format!("FTP root is not accessible: {}", self.root))?;
         ftp.quit()
             .context("failed to close FTP doctor connection")?;
+        Ok(())
+    }
+
+    /// Stream one FTP object directly into another storage backend. The media
+    /// never occupies a second full-sized file on the Apple host; the
+    /// destination backend still publishes through its own atomic temporary
+    /// name.
+    pub fn stream_to(
+        &self,
+        source_relative: &str,
+        destination: &dyn Storage,
+        destination_relative: &str,
+    ) -> Result<()> {
+        let remote = self.remote_path(source_relative)?;
+        let destination_relative = validate_relative_path(destination_relative)?;
+        let mut ftp = self.connect()?;
+        ftp.retr(&remote, |reader| {
+            destination
+                .upload_atomic(&destination_relative, reader)
+                .map_err(|error| {
+                    FtpError::ConnectionError(std::io::Error::other(format!("{error:#}")))
+                })
+        })
+        .with_context(|| {
+            format!("failed to stream FTP file {remote} to destination {destination_relative}")
+        })?;
+        let _ = ftp.quit();
+        Ok(())
+    }
+
+    /// Verify remote write and delete permission with a unique empty probe.
+    /// This is used only by `doctor`; normal scans never create probe files.
+    pub fn check_writable(&self, relative: &str, label: &str) -> Result<()> {
+        let normalized = validate_relative_path(relative)?;
+        let metadata = self
+            .metadata(&normalized)?
+            .with_context(|| format!("{label} does not exist"))?;
+        if !metadata.is_dir {
+            bail!("{label} is not a directory");
+        }
+        let probe_name = format!(
+            ".subtrans-write-probe-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let probe = if normalized.is_empty() {
+            probe_name
+        } else {
+            format!("{normalized}/{probe_name}")
+        };
+        let mut empty = std::io::Cursor::new(Vec::<u8>::new());
+        self.upload_atomic(&probe, &mut empty)
+            .with_context(|| format!("{label} is not writable"))?;
+        self.remove(&probe)
+            .with_context(|| format!("{label} write probe could not be removed"))?;
         Ok(())
     }
 

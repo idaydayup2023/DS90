@@ -24,6 +24,9 @@ fn translation_artifact_is_a_hard_gate_unless_explicitly_overridden() {
         pending.items[0].status,
         PlanStatus::Pending { .. }
     ));
+    assert!(pending.items[0].proposed_destination.is_some());
+    assert!(pending.items[0].destination.is_none());
+    assert!(pending.items[0].source_fingerprint.content_sha256.is_none());
 
     support::write_ready_artifact(&source, video);
     assert_eq!(build_plan(&cfg, None).unwrap().pending_count(), 0);
@@ -113,7 +116,35 @@ fn destination_collisions_are_detected_before_apply() {
     fs::write(source.join("b").join(name), b"two").unwrap();
     let mut cfg = support::config(root.path(), &source, &destination);
     cfg.migration.require_translated_subtitle = false;
+    cfg.migration.generic_source_directories = vec!["a".into(), "b".into()];
     let plan = build_plan(&cfg, None).unwrap();
     assert_eq!(plan.pending_count(), 2);
     assert!(plan.items.iter().all(|item| item.destination.is_none()));
+}
+
+#[test]
+fn active_download_markers_block_migration_until_removed() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let video = "Movie.2026.2160p.WEB-DL.mkv";
+    fs::write(source.join(video), b"video").unwrap();
+    fs::write(source.join(format!("{video}.aria2")), b"active").unwrap();
+    let mut cfg = support::config(root.path(), &source, &destination);
+    cfg.migration.require_translated_subtitle = false;
+
+    let blocked = build_plan(&cfg, None).unwrap();
+    assert!(blocked.items[0].is_pending());
+    assert!(blocked.items[0].source_fingerprint.content_sha256.is_none());
+    let PlanStatus::Pending { reason } = &blocked.items[0].status else {
+        unreachable!()
+    };
+    assert!(reason.contains("incomplete download marker"));
+
+    fs::remove_file(source.join(format!("{video}.aria2"))).unwrap();
+    let ready = build_plan(&cfg, None).unwrap();
+    assert!(!ready.items[0].is_pending());
+    assert!(ready.items[0].source_fingerprint.content_sha256.is_some());
 }

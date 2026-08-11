@@ -1,8 +1,10 @@
+mod support;
+
 use std::fs;
 
 use subtrans::config::{
-    Config, LlmProvider, MigrationConfig, StateConfig, StorageConfig, SubtitleConfig,
-    TranslationConfig,
+    AlphabetGroup, Config, ExternalSrtValidationConfig, LlmProvider, MigrationTitleRoute,
+    StateConfig, StorageConfig, SubtitleConfig, TranslationConfig,
 };
 use subtrans::migration::{MediaKind, PlanDocument, PlanStatus, build_plan, classify_path};
 use tempfile::TempDir;
@@ -121,6 +123,7 @@ fn plan_contains_fingerprint_evidence_sidecars_and_stable_hash() {
     let item = &plan.items[0];
     assert!(matches!(item.status, PlanStatus::Ready));
     assert!(!item.source_fingerprint.identity_sha256.is_empty());
+    assert!(item.source_fingerprint.content_sha256.is_some());
     assert!(!item.classification.evidence.is_empty());
     assert_eq!(item.sidecar_actions.len(), 1);
     assert!(
@@ -156,6 +159,165 @@ fn pending_plan_has_no_destination_or_sidecar_actions() {
     assert_eq!(plan.pending_count(), 1);
     assert!(plan.items[0].destination.is_none());
     assert!(plan.items[0].sidecar_actions.is_empty());
+    assert!(plan.items[0].source_fingerprint.content_sha256.is_none());
+}
+
+#[test]
+fn db90_layouts_route_all_four_media_classes_from_configuration() {
+    let fixture = TempDir::new().unwrap();
+    let source = fixture.path().join("source");
+    let destination = fixture.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let inputs = [
+        (
+            "Supergirl.2026.2160p.WEB-DL/Supergirl.2026.2160p.WEB-DL.HEVC.mkv",
+            "MOVIE/2026/Supergirl.2026.2160p.WEB-DL/Supergirl.2026.2160p.WEB-DL.HEVC.mkv",
+        ),
+        (
+            "House.S03.2160p/House of the Dragon S03E01 2160p WEB-DL.mkv",
+            "TV/[G.H.I.J.K]/House.of.the.Dragon/S03/House.of.the.Dragon.S03E01.2160p.WEB-DL.mkv",
+        ),
+        (
+            "low_imdb/the.hudsucker.proxy.1994.1080p.bluray.mkv",
+            "X-Movie/1990s/the.hudsucker.proxy.1994.1080p.bluray/the.hudsucker.proxy.1994.1080p.bluray.mkv",
+        ),
+        (
+            "download/Desperate.Housewives.S01E02.1080p.WEB-DL.mkv",
+            "X-TV/Desperate.Housewives/S01/Desperate.Housewives.S01E02.1080p.WEB-DL.mkv",
+        ),
+    ];
+    for (input, _) in inputs {
+        let path = source.join(input);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, input.as_bytes()).unwrap();
+    }
+
+    let mut cfg = config_for(fixture.path(), &source, &destination);
+    configure_db90_layouts(&mut cfg);
+    let plan = build_plan(&cfg, None).unwrap();
+    assert_eq!(plan.pending_count(), 0);
+    for (input, expected) in inputs {
+        let item = plan.items.iter().find(|item| item.source == input).unwrap();
+        assert_eq!(item.destination.as_deref(), Some(expected));
+    }
+}
+
+#[test]
+fn title_routes_change_library_name_and_group_without_changing_media_kind() {
+    let fixture = TempDir::new().unwrap();
+    let source = fixture.path().join("source");
+    let destination = fixture.path().join("destination");
+    fs::create_dir_all(source.join("Lucky.Release")).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let input = "Lucky.Release/Lucky.2026.S01E02.2160p.WEB-DL.mkv";
+    fs::write(source.join(input), b"episode").unwrap();
+    let mut cfg = config_for(fixture.path(), &source, &destination);
+    configure_db90_layouts(&mut cfg);
+    cfg.migration.title_routes.insert(
+        "Lucky 2026".into(),
+        MigrationTitleRoute {
+            title: Some("Lucky".into()),
+            group: Some("[L.M.N]".into()),
+        },
+    );
+
+    let plan = build_plan(&cfg, None).unwrap();
+    assert_eq!(plan.items[0].classification.kind, MediaKind::Tv);
+    assert_eq!(
+        plan.items[0].destination.as_deref(),
+        Some("TV/[L.M.N]/Lucky/S01/Lucky.2026.S01E02.2160p.WEB-DL.mkv")
+    );
+}
+
+#[test]
+fn episode_marked_sidecars_with_a_different_title_are_kept_with_the_episode() {
+    let fixture = TempDir::new().unwrap();
+    let source = fixture.path().join("source");
+    let destination = fixture.path().join("destination");
+    let release = source.join("Show.Release");
+    fs::create_dir_all(&release).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let video = "Show.Release/House.of.the.Dragon.S03E02.2160p.WEB-DL.mkv";
+    let subtitle = "Show.Release/龙之家族 第三季 House of the Dragon S03E02 简中.srt";
+    fs::write(source.join(video), b"episode").unwrap();
+    fs::write(source.join(subtitle), b"subtitle").unwrap();
+    let mut cfg = config_for(fixture.path(), &source, &destination);
+    configure_db90_layouts(&mut cfg);
+
+    let plan = build_plan(&cfg, None).unwrap();
+    let item = &plan.items[0];
+    assert_eq!(item.sidecar_actions.len(), 1);
+    assert_eq!(item.sidecar_actions[0].source, subtitle);
+    assert_eq!(
+        item.sidecar_actions[0].destination,
+        "TV/[G.H.I.J.K]/House.of.the.Dragon/S03/龙之家族.第三季.House.of.the.Dragon.S03E02.简中.srt"
+    );
+}
+
+#[test]
+fn unsafe_or_incomplete_layout_templates_are_rejected() {
+    let fixture = TempDir::new().unwrap();
+    let source = fixture.path().join("source");
+    let destination = fixture.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let mut cfg = config_for(fixture.path(), &source, &destination);
+    cfg.migration.layouts.movie_4k.directory_template = "../{release_dir}".into();
+    assert!(cfg.validate().is_err());
+
+    let mut cfg = config_for(fixture.path(), &source, &destination);
+    cfg.migration.layouts.tv_4k.alphabet_groups = vec![AlphabetGroup {
+        letters: "ABC".into(),
+        directory: "[A.B.C]".into(),
+    }];
+    assert!(cfg.validate().is_err());
+}
+
+fn configure_db90_layouts(cfg: &mut Config) {
+    cfg.migration.layouts.movie_4k.root = "MOVIE".into();
+    cfg.migration.layouts.movie_other.root = "X-Movie".into();
+    cfg.migration.layouts.tv_4k.root = "TV".into();
+    cfg.migration.layouts.tv_other.root = "X-TV".into();
+    cfg.migration.layouts.movie_4k.filename_template = "{source_file_dot}".into();
+    cfg.migration.layouts.movie_other.filename_template = "{source_file_dot}".into();
+    cfg.migration.layouts.tv_4k.filename_template = "{source_file_dot}".into();
+    cfg.migration.layouts.tv_other.filename_template = "{source_file_dot}".into();
+    cfg.migration.generic_source_directories = vec!["low_imdb".into(), "download".into()];
+    cfg.migration.layouts.tv_4k.alphabet_groups = vec![
+        AlphabetGroup {
+            letters: "ABC".into(),
+            directory: "[A.B.C]".into(),
+        },
+        AlphabetGroup {
+            letters: "DEF".into(),
+            directory: "[D.E.F]".into(),
+        },
+        AlphabetGroup {
+            letters: "GHIJK".into(),
+            directory: "[G.H.I.J.K]".into(),
+        },
+        AlphabetGroup {
+            letters: "LMN".into(),
+            directory: "[L.M.N]".into(),
+        },
+        AlphabetGroup {
+            letters: "OPQR".into(),
+            directory: "[O.P.Q.R]".into(),
+        },
+        AlphabetGroup {
+            letters: "S".into(),
+            directory: "[S]".into(),
+        },
+        AlphabetGroup {
+            letters: "T".into(),
+            directory: "[T]".into(),
+        },
+        AlphabetGroup {
+            letters: "UVWXYZ".into(),
+            directory: "[U.V.W.Y.Z]".into(),
+        },
+    ];
 }
 
 fn config_for(
@@ -181,6 +343,7 @@ fn config_for(
             ffmpeg: "ffmpeg".to_owned(),
             ffprobe: "ffprobe".to_owned(),
             external_process_timeout_seconds: 120,
+            external_srt_validation: ExternalSrtValidationConfig::default(),
             asr: None,
             pgs_ocr: None,
         },
@@ -190,26 +353,21 @@ fn config_for(
             model: "test".to_owned(),
             api_key_env: None,
             source_language: "English".to_owned(),
+            source_language_code: "en".to_owned(),
             target_language: "Simplified Chinese".to_owned(),
+            target_language_code: "zh-CN".to_owned(),
             bilingual: true,
-            batch_size: 20,
+            batch_size: 80,
+            min_batch_size: 20,
+            context_cues: 6,
             timeout_seconds: 30,
             max_retries: 0,
             max_batch_chars: 8_000,
             max_response_bytes: 1024 * 1024,
             min_target_script_ratio: 0.15,
+            consistency_check: false,
+            consistency_max_chars: 120_000,
         },
-        migration: MigrationConfig {
-            movie_1080_root: "Movies".to_owned(),
-            movie_4k_root: "Movies4K".to_owned(),
-            tv_1080_root: "TV".to_owned(),
-            tv_4k_root: "TV4K".to_owned(),
-            year_split: 2024,
-            auto_apply_confidence: 0.95,
-            sidecar_extensions: vec!["srt".to_owned(), "nfo".to_owned(), "json".to_owned()],
-            require_translated_subtitle: false,
-            normalize_names: true,
-            overrides: Default::default(),
-        },
+        migration: support::migration_config(false),
     }
 }

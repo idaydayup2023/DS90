@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::config::StorageConfig;
@@ -51,7 +51,7 @@ pub fn open_storage(config: &StorageConfig) -> Result<Box<dyn Storage>> {
         StorageConfig::Ftp {
             host,
             port,
-            username,
+            username_env,
             password_env,
             root,
             timeout_seconds,
@@ -59,7 +59,7 @@ pub fn open_storage(config: &StorageConfig) -> Result<Box<dyn Storage>> {
         } => Ok(Box::new(FtpStorage::new(
             host.clone(),
             *port,
-            username.clone(),
+            resolve_ftp_username(username_env)?,
             password_env.clone(),
             root.clone(),
             *timeout_seconds,
@@ -79,7 +79,7 @@ pub fn doctor(config: &StorageConfig) -> Result<()> {
         StorageConfig::Ftp {
             host,
             port,
-            username,
+            username_env,
             password_env,
             root,
             timeout_seconds,
@@ -87,13 +87,71 @@ pub fn doctor(config: &StorageConfig) -> Result<()> {
         } => FtpStorage::new(
             host.clone(),
             *port,
-            username.clone(),
+            resolve_ftp_username(username_env)?,
             password_env.clone(),
             root.clone(),
             *timeout_seconds,
             *allow_plaintext,
         )?
         .check_connection(),
+    }
+}
+
+/// Checks write permission. Local targets use `access(W_OK)`; FTP targets use
+/// a unique empty file that is immediately removed, proving both write and
+/// delete permission without touching media files.
+pub fn doctor_writable(config: &StorageConfig, relative: &str, label: &str) -> Result<()> {
+    let relative = validate_relative_path(relative)?;
+    match config {
+        StorageConfig::Local { root } => {
+            let path = relative
+                .split('/')
+                .filter(|component| !component.is_empty())
+                .fold(root.clone(), |path, component| path.join(component));
+            if !path.is_dir() {
+                bail!(
+                    "{label} does not exist or is not a directory: {}",
+                    path.display()
+                );
+            }
+            #[cfg(unix)]
+            {
+                use std::ffi::CString;
+                use std::os::unix::ffi::OsStrExt;
+
+                let native = CString::new(path.as_os_str().as_bytes())
+                    .context("storage path contains a NUL byte")?;
+                // SAFETY: `native` is a live NUL-terminated path and `access`
+                // does not retain the pointer or mutate the filesystem.
+                if unsafe { libc::access(native.as_ptr(), libc::W_OK) } != 0 {
+                    return Err(std::io::Error::last_os_error()).with_context(|| {
+                        format!(
+                            "{label} is not writable by the current user: {}",
+                            path.display()
+                        )
+                    });
+                }
+            }
+            Ok(())
+        }
+        StorageConfig::Ftp {
+            host,
+            port,
+            username_env,
+            password_env,
+            root,
+            timeout_seconds,
+            allow_plaintext,
+        } => FtpStorage::new(
+            host.clone(),
+            *port,
+            resolve_ftp_username(username_env)?,
+            password_env.clone(),
+            root.clone(),
+            *timeout_seconds,
+            *allow_plaintext,
+        )?
+        .check_writable(&relative, label),
     }
 }
 
@@ -111,7 +169,7 @@ pub fn try_server_side_rename(
         StorageConfig::Ftp {
             host: source_host,
             port: source_port,
-            username: source_username,
+            username_env: source_username_env,
             password_env: source_password_env,
             root: source_root,
             timeout_seconds: source_timeout,
@@ -120,7 +178,7 @@ pub fn try_server_side_rename(
         StorageConfig::Ftp {
             host: destination_host,
             port: destination_port,
-            username: destination_username,
+            username_env: destination_username_env,
             password_env: destination_password_env,
             root: destination_root,
             timeout_seconds: destination_timeout,
@@ -130,6 +188,8 @@ pub fn try_server_side_rename(
     else {
         return Ok(false);
     };
+    let source_username = resolve_ftp_username(source_username_env)?;
+    let destination_username = resolve_ftp_username(destination_username_env)?;
     if source_host != destination_host
         || source_port != destination_port
         || source_username != destination_username
@@ -141,17 +201,82 @@ pub fn try_server_side_rename(
     }
     let from = join_ftp_root(source_root, from)?;
     let to = join_ftp_root(destination_root, to)?;
-    FtpStorage::new(
+    let storage = FtpStorage::new(
         source_host.clone(),
         *source_port,
-        source_username.clone(),
+        source_username,
         source_password_env.clone(),
         "/".to_owned(),
         *source_timeout,
         *source_plaintext,
+    )?;
+    match storage.rename(&from, &to) {
+        Ok(()) => Ok(true),
+        Err(rename_error) => {
+            // Synology commonly rejects RNFR/RNTO across shared folders that
+            // live on different volumes. Re-check both ends before falling
+            // back: a lost final FTP reply must not cause a completed rename
+            // to be copied a second time.
+            let source_exists = storage.exists(&from)?;
+            let destination_exists = storage.exists(&to)?;
+            match (source_exists, destination_exists) {
+                (true, false) => {
+                    eprintln!(
+                        "FTP server-side rename is unavailable for {from} -> {to}; using verified streaming copy"
+                    );
+                    Ok(false)
+                }
+                (false, true) => Ok(true),
+                _ => Err(rename_error).with_context(|| {
+                    format!(
+                        "FTP rename left an ambiguous state for {from} -> {to}: source_exists={source_exists} destination_exists={destination_exists}"
+                    )
+                }),
+            }
+        }
+    }
+}
+
+/// Streams an FTP source into the configured destination without a full local
+/// staging file. Returns `false` for non-FTP sources.
+pub fn try_ftp_streaming_copy(
+    source: &StorageConfig,
+    destination: &dyn Storage,
+    from: &str,
+    to: &str,
+) -> Result<bool> {
+    let StorageConfig::Ftp {
+        host,
+        port,
+        username_env,
+        password_env,
+        root,
+        timeout_seconds,
+        allow_plaintext,
+    } = source
+    else {
+        return Ok(false);
+    };
+    FtpStorage::new(
+        host.clone(),
+        *port,
+        resolve_ftp_username(username_env)?,
+        password_env.clone(),
+        root.clone(),
+        *timeout_seconds,
+        *allow_plaintext,
     )?
-    .rename(&from, &to)?;
+    .stream_to(from, destination, to)?;
     Ok(true)
+}
+
+pub(crate) fn resolve_ftp_username(environment_name: &str) -> Result<String> {
+    let username = std::env::var(environment_name)
+        .with_context(|| format!("missing FTP username environment variable {environment_name}"))?;
+    if username.trim().is_empty() {
+        bail!("FTP username environment variable {environment_name} is empty");
+    }
+    Ok(username)
 }
 
 fn join_ftp_root(root: &str, relative: &str) -> Result<String> {

@@ -1,4 +1,5 @@
-use std::io::{Seek, SeekFrom};
+use std::fs::File;
+use std::io::{BufReader, Seek, SeekFrom};
 
 use anyhow::{Context, Result, bail};
 use serde_json::json;
@@ -7,7 +8,7 @@ use tempfile::NamedTempFile;
 
 use crate::config::{Config, StorageConfig};
 use crate::state::{ClaimResult, StateStore, process_owner};
-use crate::storage::{Storage, open_storage, try_server_side_rename};
+use crate::storage::{Storage, open_storage, try_ftp_streaming_copy, try_server_side_rename};
 
 use super::planner::{FileAction, PlanDocument, PlanItem, PlanStatus, SourceFingerprint};
 
@@ -125,13 +126,18 @@ fn apply_item(
         ClaimResult::Acquired => {}
     }
     for (index, action) in actions.iter().enumerate() {
+        let expected_hash = action
+            .source_fingerprint
+            .content_sha256
+            .as_deref()
+            .context("executable migration action is missing a content hash")?;
         state.register_action(
             &job_id,
             index,
             &action.source,
             &action.destination,
             &destination_reservation_key(destination.namespace, &action.destination),
-            &action.source_fingerprint.content_sha256,
+            expected_hash,
         )?;
     }
     state.transition(
@@ -236,6 +242,16 @@ fn promote_action(
         return Ok(());
     }
 
+    if try_ftp_streaming_copy(
+        source.config,
+        destination.storage,
+        &action.source,
+        &action.destination,
+    )? {
+        verify_destination(destination.storage, action)?;
+        return Ok(());
+    }
+
     if let (Some(source_path), Some(destination_path)) = (
         source.storage.local_path(&action.source)?,
         destination
@@ -256,11 +272,21 @@ fn promote_action(
                 });
             }
             Err(_) => {
-                // Cross-device and filesystems without hard links use the
-                // verified copy path. The source remains intact until every
-                // destination in the item has passed content verification.
+                // Separate mounted NAS shares are normally different devices.
+                // Stream directly from the mounted source into the target's
+                // atomic temporary file instead of consuming equally large
+                // staging space on the Apple host.
             }
         }
+        let mut reader = BufReader::new(
+            File::open(&source_path)
+                .with_context(|| format!("failed to open {}", source_path.display()))?,
+        );
+        destination
+            .storage
+            .upload_atomic(&action.destination, &mut reader)?;
+        verify_destination(destination.storage, action)?;
+        return Ok(());
     }
     copy_and_verify(source.storage, destination.storage, action)
 }
@@ -286,7 +312,8 @@ fn copy_and_verify(
     source.download(&action.source, temporary.path())?;
     temporary.as_file_mut().seek(SeekFrom::Start(0))?;
     let staged_hash = hash_reader(temporary.as_file_mut())?;
-    if staged_hash != action.source_fingerprint.content_sha256 {
+    let expected_hash = expected_content_hash(&action.source_fingerprint)?;
+    if staged_hash != expected_hash {
         bail!("staged copy hash mismatch for {}", action.source);
     }
     temporary.as_file_mut().seek(SeekFrom::Start(0))?;
@@ -302,7 +329,7 @@ fn verify_source(storage: &dyn Storage, path: &str, expected: &SourceFingerprint
         bail!("planned source size or type changed: {path}");
     }
     let hash = storage.sha256(path)?;
-    if hash != expected.content_sha256 {
+    if hash != expected_content_hash(expected)? {
         bail!("planned source content changed: {path}");
     }
     Ok(())
@@ -315,10 +342,17 @@ fn verify_destination(storage: &dyn Storage, action: &FileAction) -> Result<()> 
     if metadata.is_dir || metadata.size != action.source_fingerprint.size_bytes {
         bail!("destination size or type differs: {}", action.destination);
     }
-    if storage.sha256(&action.destination)? != action.source_fingerprint.content_sha256 {
+    if storage.sha256(&action.destination)? != expected_content_hash(&action.source_fingerprint)? {
         bail!("destination content differs: {}", action.destination);
     }
     Ok(())
+}
+
+fn expected_content_hash(fingerprint: &SourceFingerprint) -> Result<&str> {
+    fingerprint
+        .content_sha256
+        .as_deref()
+        .context("executable migration action is missing a content hash")
 }
 
 fn verify_all_destinations(storage: &dyn Storage, actions: &[FileAction]) -> Result<()> {

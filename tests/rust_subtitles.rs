@@ -22,14 +22,20 @@ fn translation_config() -> TranslationConfig {
         model: "model-a".to_owned(),
         api_key_env: None,
         source_language: "English".to_owned(),
+        source_language_code: "en".to_owned(),
         target_language: "Simplified Chinese".to_owned(),
+        target_language_code: "zh-CN".to_owned(),
         bilingual: true,
-        batch_size: 20,
+        batch_size: 80,
+        min_batch_size: 20,
+        context_cues: 6,
         timeout_seconds: 30,
         max_retries: 2,
         max_batch_chars: 8_000,
         max_response_bytes: 1024 * 1024,
         min_target_script_ratio: 0.15,
+        consistency_check: false,
+        consistency_max_chars: 120_000,
     }
 }
 

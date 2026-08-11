@@ -8,7 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sha2::{Digest, Sha256};
 use subtrans::artifact::{ARTIFACT_SCHEMA, SubtitleArtifact, artifact_paths, video_identity};
 use subtrans::config::{
-    Config, LlmProvider, MigrationConfig, StateConfig, StorageConfig, SubtitleConfig,
+    AlphabetGroup, Config, ExternalSrtValidationConfig, LlmProvider, MigrationConfig,
+    MigrationLayout, MigrationLayouts, StateConfig, StorageConfig, SubtitleConfig,
     TranslationConfig,
 };
 use subtrans::storage::{LocalStorage, Storage};
@@ -32,6 +33,7 @@ pub fn config(root: &Path, source: &Path, destination: &Path) -> Config {
             ffmpeg: "ffmpeg".into(),
             ffprobe: "ffprobe".into(),
             external_process_timeout_seconds: 120,
+            external_srt_validation: ExternalSrtValidationConfig::default(),
             asr: None,
             pgs_ocr: None,
         },
@@ -41,27 +43,67 @@ pub fn config(root: &Path, source: &Path, destination: &Path) -> Config {
             model: "test".into(),
             api_key_env: None,
             source_language: "English".into(),
+            source_language_code: "en".into(),
             target_language: "Simplified Chinese".into(),
+            target_language_code: "zh-CN".into(),
             bilingual: true,
-            batch_size: 20,
+            batch_size: 80,
+            min_batch_size: 20,
+            context_cues: 6,
             timeout_seconds: 30,
             max_retries: 0,
             max_batch_chars: 8_000,
             max_response_bytes: 1024 * 1024,
             min_target_script_ratio: 0.15,
+            consistency_check: false,
+            consistency_max_chars: 120_000,
         },
-        migration: MigrationConfig {
-            movie_1080_root: "Movies".into(),
-            movie_4k_root: "Movies4K".into(),
-            tv_1080_root: "TV".into(),
-            tv_4k_root: "TV4K".into(),
-            year_split: 2024,
-            auto_apply_confidence: 0.95,
-            sidecar_extensions: vec!["srt".into(), "nfo".into(), "json".into()],
-            require_translated_subtitle: true,
-            normalize_names: true,
-            overrides: BTreeMap::new(),
+        migration: migration_config(true),
+    }
+}
+
+pub fn migration_config(require_translated_subtitle: bool) -> MigrationConfig {
+    MigrationConfig {
+        layouts: MigrationLayouts {
+            movie_4k: MigrationLayout {
+                root: "Movies4K".into(),
+                directory_template: "{year_bucket}/{release_dir}".into(),
+                filename_template: "{source_file}".into(),
+                recent_year_from: Some(1900),
+                alphabet_groups: Vec::new(),
+            },
+            movie_other: MigrationLayout {
+                root: "Movies".into(),
+                directory_template: "{year_bucket}/{release_dir}".into(),
+                filename_template: "{source_file}".into(),
+                recent_year_from: Some(2024),
+                alphabet_groups: Vec::new(),
+            },
+            tv_4k: MigrationLayout {
+                root: "TV4K".into(),
+                directory_template: "{alpha_group}/{title_dot}/S{season_padded}".into(),
+                filename_template: "{source_file}".into(),
+                recent_year_from: None,
+                alphabet_groups: vec![AlphabetGroup {
+                    letters: "ABCDEFGHIJKLMNOPQRSTUVWXYZ".into(),
+                    directory: "[A-Z]".into(),
+                }],
+            },
+            tv_other: MigrationLayout {
+                root: "TV".into(),
+                directory_template: "{title_dot}/S{season_padded}".into(),
+                filename_template: "{source_file}".into(),
+                recent_year_from: None,
+                alphabet_groups: Vec::new(),
+            },
         },
+        auto_apply_confidence: 0.95,
+        sidecar_extensions: vec!["srt".into(), "nfo".into(), "json".into()],
+        incomplete_marker_extensions: vec!["aria2".into(), "part".into()],
+        require_translated_subtitle,
+        generic_source_directories: vec!["incoming".into()],
+        title_routes: BTreeMap::new(),
+        overrides: BTreeMap::new(),
     }
 }
 
@@ -97,6 +139,7 @@ pub fn write_ready_artifact(source_root: &Path, video_path: &str) {
         acquisition_key: "test-acquisition".into(),
         source_kind: "external_english".into(),
         source_path: Some(source_path),
+        source_evidence: None,
         created_unix_seconds: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
