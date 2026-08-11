@@ -20,6 +20,7 @@ fn translation_config() -> TranslationConfig {
         provider: LlmProvider::Ollama,
         base_url: "http://127.0.0.1:11434".to_owned(),
         model: "model-a".to_owned(),
+        consistency_model: None,
         api_key_env: None,
         source_language: "English".to_owned(),
         source_language_code: "en".to_owned(),
@@ -33,9 +34,12 @@ fn translation_config() -> TranslationConfig {
         max_retries: 2,
         max_batch_chars: 8_000,
         max_response_bytes: 1024 * 1024,
+        max_output_tokens: 4_096,
         min_target_script_ratio: 0.15,
         consistency_check: false,
         consistency_max_chars: 120_000,
+        consistency_max_corrections: 64,
+        consistency_max_output_tokens: 4_096,
     }
 }
 

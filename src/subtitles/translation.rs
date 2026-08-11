@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Read;
 use std::ops::Range;
@@ -67,8 +68,14 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<Vec<Cue>> {
             cfg,
             &mut translated,
         )?;
+        println!(
+            "translation progress translated={}/{}",
+            translated.len(),
+            cues.len()
+        );
     }
     if cfg.consistency_check && cues.len() > 1 {
+        println!("translation consistency_check cues={}", cues.len());
         audit_consistency(&client, api_key.as_deref(), cues, &mut translated, cfg)?;
     }
     let output = render(cues, &translated, cfg.bilingual)?;
@@ -116,16 +123,48 @@ fn translate_range_adaptive(
     while let Some(range) = pending.pop_front() {
         let prompt = build_prompt(cues, range.clone(), cfg)?;
         let expected = &cues[range.clone()];
+        let context = prompt_context_range(cues.len(), range.clone(), cfg.context_cues);
+        let ignored_context_indices: BTreeSet<u32> = cues[context]
+            .iter()
+            .filter(|cue| !expected.iter().any(|item| item.index == cue.index))
+            .map(|cue| cue.index)
+            .collect();
+        // Retry transport/service failures, but split deterministic malformed
+        // model output immediately instead of asking for the same bad JSON.
         let result = retry(cfg.max_retries, || {
-            request(client, cfg, api_key, &prompt)
-                .and_then(|response| parse_aligned(&response, expected))
+            request(
+                client,
+                cfg,
+                api_key,
+                &cfg.model,
+                &prompt,
+                cfg.max_output_tokens,
+            )
+        })
+        .and_then(|response| parse_valid_indices(&response, expected, &ignored_context_indices))
+        .and_then(|values| {
+            if values.is_empty() {
+                bail!("translation response contains no requested cue indices");
+            }
+            Ok(values)
         });
         match result {
             Ok(values) => {
+                let missing: Vec<Range<usize>> = range
+                    .clone()
+                    .filter(|position| !values.contains_key(&cues[*position].index))
+                    .map(|position| position..position + 1)
+                    .collect();
                 for (index, text) in values {
                     if translated.insert(index, text).is_some() {
                         bail!("translation batch produced duplicate cue index {index}");
                     }
+                }
+                // TranslateGemma can occasionally collapse repeated short cues
+                // even though their indices differ. Keep every valid item and
+                // repair only omitted indices with the same neighboring context.
+                for missing_range in missing.into_iter().rev() {
+                    pending.push_front(missing_range);
                 }
             }
             Err(_) if range.len() >= cfg.min_batch_size.saturating_mul(2) => {
@@ -165,15 +204,32 @@ fn retry<T>(max_retries: u32, mut operation: impl FnMut() -> Result<T>) -> Resul
 }
 
 pub fn parse_aligned(response: &str, expected: &[Cue]) -> Result<BTreeMap<u32, String>> {
-    let envelope: TranslationEnvelope = serde_json::from_str(response.trim())
-        .context("translation response is not the required JSON object")?;
-    if envelope.translations.len() != expected.len() {
-        bail!("translation response item count differs from request");
+    let output = parse_valid_indices(response, expected, &BTreeSet::new())?;
+    if output.len() != expected.len() {
+        bail!(
+            "translation response item count differs from request: expected {}, received {}",
+            expected.len(),
+            output.len()
+        );
     }
+    Ok(output)
+}
+
+fn parse_valid_indices(
+    response: &str,
+    expected: &[Cue],
+    ignored_context_indices: &BTreeSet<u32>,
+) -> Result<BTreeMap<u32, String>> {
+    let normalized = normalize_known_json_keys(response);
+    let envelope: TranslationEnvelope = serde_json::from_str(normalized.trim())
+        .context("translation response is not the required JSON object")?;
     let expected_indices: BTreeSet<u32> = expected.iter().map(|cue| cue.index).collect();
     let mut output = BTreeMap::new();
     for item in envelope.translations {
         if !expected_indices.contains(&item.index) {
+            if ignored_context_indices.contains(&item.index) {
+                continue;
+            }
             bail!(
                 "translation response contains unexpected index {}",
                 item.index
@@ -186,9 +242,6 @@ pub fn parse_aligned(response: &str, expected: &[Cue]) -> Result<BTreeMap<u32, S
                 item.index
             );
         }
-    }
-    if output.keys().copied().collect::<BTreeSet<_>>() != expected_indices {
-        bail!("translation response is missing cue indices");
     }
     Ok(output)
 }
@@ -259,8 +312,9 @@ pub fn prompt_version() -> &'static str {
 }
 
 fn build_prompt(cues: &[Cue], core: Range<usize>, cfg: &TranslationConfig) -> Result<String> {
-    let context_start = core.start.saturating_sub(cfg.context_cues);
-    let context_end = core.end.saturating_add(cfg.context_cues).min(cues.len());
+    let context = prompt_context_range(cues.len(), core.clone(), cfg.context_cues);
+    let context_start = context.start;
+    let context_end = context.end;
     let lines: Vec<PromptLine<'_>> = cues[context_start..context_end]
         .iter()
         .enumerate()
@@ -289,6 +343,10 @@ fn build_prompt(cues: &[Cue], core: Range<usize>, cfg: &TranslationConfig) -> Re
         cfg.target_language,
         serde_json::to_string(&lines)?
     ))
+}
+
+fn prompt_context_range(cue_count: usize, core: Range<usize>, context_cues: usize) -> Range<usize> {
+    core.start.saturating_sub(context_cues)..core.end.saturating_add(context_cues).min(cue_count)
 }
 
 fn audit_consistency(
@@ -328,8 +386,9 @@ fn audit_consistency(
         .collect::<Result<_>>()?;
     let prompt = format!(
         "Protocol: {PROMPT_VERSION}-consistency. You are a professional subtitle translation editor for {} ({}) to {} ({}). \
-         Review the complete subtitle for inconsistent character names, places, titles, terminology, pronouns, register, and recurring phrases. \
-         Do not rewrite lines that are already correct. Return exactly one JSON object \
+         This is a consistency-only audit, not retranslation or proofreading. Correct only a cross-line conflict where the same named entity, title, \
+         place, relationship, or recurring term has incompatible target renderings. Never change a line only for fluency, wording, punctuation, or style. \
+         Do not rewrite lines that are already correct. Return at most {} corrections in exactly one JSON object \
          {{\"corrections\":[{{\"index\":1,\"text\":\"corrected translation\"}}]}}. \
          Use an empty corrections array when no change is needed. Each text must contain only the corrected target-language subtitle, never the source. \
          Include only existing indices, with no markdown, reasons, or extra keys.\n\n{}",
@@ -337,21 +396,42 @@ fn audit_consistency(
         cfg.source_language_code,
         cfg.target_language,
         cfg.target_language_code,
+        cfg.consistency_max_corrections,
         serde_json::to_string(&lines)?
     );
     let expected: BTreeSet<u32> = cues.iter().map(|cue| cue.index).collect();
-    let corrections = retry(cfg.max_retries, || {
-        request(client, cfg, api_key, &prompt)
-            .and_then(|response| parse_consistency(&response, &expected))
+    let model = cfg.consistency_model.as_deref().unwrap_or(&cfg.model);
+    let response = retry(cfg.max_retries, || {
+        request(
+            client,
+            cfg,
+            api_key,
+            model,
+            &prompt,
+            cfg.consistency_max_output_tokens,
+        )
     })
-    .context("translation consistency audit failed strict checks")?;
+    .context("translation consistency service request failed")?;
+    let corrections = parse_consistency(&response, &expected, cfg.consistency_max_corrections)
+        .context("translation consistency audit failed strict checks")?;
     translations.extend(corrections);
     Ok(())
 }
 
-fn parse_consistency(response: &str, expected: &BTreeSet<u32>) -> Result<BTreeMap<u32, String>> {
-    let envelope: ConsistencyEnvelope = serde_json::from_str(response.trim())
+fn parse_consistency(
+    response: &str,
+    expected: &BTreeSet<u32>,
+    max_corrections: usize,
+) -> Result<BTreeMap<u32, String>> {
+    let normalized = normalize_known_json_keys(response);
+    let envelope: ConsistencyEnvelope = serde_json::from_str(normalized.trim())
         .context("consistency response is not the required JSON object")?;
+    if envelope.corrections.len() > max_corrections {
+        bail!(
+            "consistency response contains {} corrections, exceeding configured maximum {max_corrections}",
+            envelope.corrections.len()
+        );
+    }
     let mut corrections = BTreeMap::new();
     for item in envelope.corrections {
         if !expected.contains(&item.index) {
@@ -371,31 +451,45 @@ fn parse_consistency(response: &str, expected: &BTreeSet<u32>) -> Result<BTreeMa
     Ok(corrections)
 }
 
+fn normalize_known_json_keys(response: &str) -> Cow<'_, str> {
+    if response.contains("\"text:\":") {
+        Cow::Owned(response.replace("\"text:\":", "\"text\":"))
+    } else {
+        Cow::Borrowed(response)
+    }
+}
+
 fn request(
     client: &Client,
     cfg: &TranslationConfig,
     api_key: Option<&str>,
+    model: &str,
     prompt: &str,
+    max_output_tokens: u32,
 ) -> Result<String> {
     let (url, body, response_path): (String, Value, &[&str]) = match &cfg.provider {
         LlmProvider::Ollama => (
             endpoint(&cfg.base_url, "api/generate"),
             json!({
-                "model": cfg.model,
+                "model": model,
                 "prompt": prompt,
                 "stream": false,
                 "format": "json",
                 "keep_alive": "10m",
-                "options": { "temperature": 0.0 }
+                "options": {
+                    "temperature": 0.0,
+                    "num_predict": max_output_tokens
+                }
             }),
             &["response"],
         ),
         LlmProvider::OpenaiCompatible => (
             endpoint(&cfg.base_url, "chat/completions"),
             json!({
-                "model": cfg.model,
+                "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.0,
+                "max_tokens": max_output_tokens,
                 "response_format": {"type": "json_object"}
             }),
             &["choices", "0", "message", "content"],
@@ -496,17 +590,48 @@ target_language_code = "zh-CN"
         let corrections = parse_consistency(
             r#"{"corrections":[{"index":2,"text":"修正译文"}]}"#,
             &expected,
+            2,
         )
         .unwrap();
         assert_eq!(corrections.get(&2).map(String::as_str), Some("修正译文"));
-        assert!(parse_consistency(r#"{"corrections":[]}"#, &expected).is_ok());
+        assert!(parse_consistency(r#"{"corrections":[]}"#, &expected, 2).is_ok());
         assert!(
-            parse_consistency(r#"{"corrections":[{"index":3,"text":"越界"}]}"#, &expected).is_err()
+            parse_consistency(
+                r#"{"corrections":[{"index":3,"text":"越界"}]}"#,
+                &expected,
+                2
+            )
+            .is_err()
         );
         assert!(
             parse_consistency(
                 r#"{"corrections":[{"index":1,"text":"甲"},{"index":1,"text":"乙"}]}"#,
-                &expected
+                &expected,
+                2
+            )
+            .is_err()
+        );
+        assert!(
+            parse_consistency(
+                r#"{"corrections":[{"index":1,"text":"甲"},{"index":2,"text":"乙"}]}"#,
+                &expected,
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            parse_consistency(
+                r#"{"corrections":[{"index":2,"text:":"修正译文"}]}"#,
+                &expected,
+                2
+            )
+            .is_ok()
+        );
+        assert!(
+            parse_consistency(
+                r#"{"corrections":[{"index":2,"translation":"未知字段"}]}"#,
+                &expected,
+                2
             )
             .is_err()
         );

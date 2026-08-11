@@ -110,6 +110,8 @@ pub struct TranslationConfig {
     pub base_url: String,
     pub model: String,
     #[serde(default)]
+    pub consistency_model: Option<String>,
+    #[serde(default)]
     pub api_key_env: Option<String>,
     #[serde(default = "default_source_language")]
     pub source_language: String,
@@ -135,12 +137,18 @@ pub struct TranslationConfig {
     pub max_batch_chars: usize,
     #[serde(default = "default_max_response_bytes")]
     pub max_response_bytes: usize,
+    #[serde(default = "default_max_output_tokens")]
+    pub max_output_tokens: u32,
     #[serde(default = "default_min_target_script_ratio")]
     pub min_target_script_ratio: f32,
     #[serde(default = "default_true")]
     pub consistency_check: bool,
     #[serde(default = "default_consistency_max_chars")]
     pub consistency_max_chars: usize,
+    #[serde(default = "default_consistency_max_corrections")]
+    pub consistency_max_corrections: usize,
+    #[serde(default = "default_consistency_max_output_tokens")]
+    pub consistency_max_output_tokens: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -258,7 +266,10 @@ impl Config {
         {
             bail!("translation and external process timeouts must be greater than zero");
         }
-        if self.translation.max_batch_chars == 0 || self.translation.max_response_bytes < 1024 {
+        if self.translation.max_batch_chars == 0
+            || self.translation.max_response_bytes < 1024
+            || self.translation.max_output_tokens == 0
+        {
             bail!("translation size limits must be positive and max_response_bytes >= 1024");
         }
         if self.translation.consistency_check
@@ -267,6 +278,12 @@ impl Config {
             bail!(
                 "translation.consistency_max_chars must be at least max_batch_chars when consistency_check is enabled"
             );
+        }
+        if self.translation.consistency_check
+            && (self.translation.consistency_max_corrections == 0
+                || self.translation.consistency_max_output_tokens == 0)
+        {
+            bail!("translation consistency output limits must be positive when enabled");
         }
         for (name, value) in [
             ("source_language", &self.translation.source_language),
@@ -283,6 +300,15 @@ impl Config {
             if value.trim().is_empty() {
                 bail!("translation.{name} must not be empty");
             }
+        }
+        if self.translation.consistency_check
+            && self
+                .translation
+                .consistency_model
+                .as_deref()
+                .is_some_and(|model| model.trim().is_empty())
+        {
+            bail!("translation.consistency_model must not be empty when configured");
         }
         if !(0.0..=1.0).contains(&self.translation.min_target_script_ratio) {
             bail!("translation.min_target_script_ratio must be between 0 and 1");
@@ -691,7 +717,7 @@ fn default_batch_size() -> usize {
     80
 }
 fn default_min_batch_size() -> usize {
-    20
+    1
 }
 fn default_context_cues() -> usize {
     6
@@ -708,11 +734,20 @@ fn default_max_batch_chars() -> usize {
 fn default_max_response_bytes() -> usize {
     4 * 1024 * 1024
 }
+fn default_max_output_tokens() -> u32 {
+    4_096
+}
 fn default_min_target_script_ratio() -> f32 {
     0.15
 }
 fn default_consistency_max_chars() -> usize {
     120_000
+}
+fn default_consistency_max_corrections() -> usize {
+    64
+}
+fn default_consistency_max_output_tokens() -> u32 {
+    4_096
 }
 fn default_auto_apply_confidence() -> f32 {
     0.95

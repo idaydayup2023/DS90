@@ -189,6 +189,75 @@ fn failed_large_translation_batch_is_split_and_retried_sequentially() {
 }
 
 #[test]
+fn malformed_model_json_is_split_immediately_instead_of_retried_unchanged() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let stem = "Malformed.Json.Movie.2026.WEB-DL";
+    fs::write(source.join(format!("{stem}.mkv")), b"video").unwrap();
+    let srt = "1\n00:00:01,000 --> 00:00:02,000\nOne\n\n2\n00:00:03,000 --> 00:00:04,000\nTwo\n\n3\n00:00:05,000 --> 00:00:06,000\nThree\n\n4\n00:00:07,000 --> 00:00:08,000\nFour\n\n";
+    fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
+    fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
+    let (base_url, server) = ollama_server(vec![
+        Reply::Malformed(r#"{"translations":[{"index":1,"translation":"坏结构"}]}"#),
+        Reply::Translations(vec![(1, "一"), (2, "二")]),
+        Reply::Translations(vec![(3, "三"), (4, "四")]),
+    ]);
+    let mut cfg = support::config(root.path(), &source, &destination);
+    cfg.translation.base_url = base_url;
+    cfg.translation.batch_size = 4;
+    cfg.translation.min_batch_size = 1;
+    cfg.translation.max_retries = 2;
+
+    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
+    server.join().unwrap();
+
+    let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
+    for text in ["一", "二", "三", "四"] {
+        assert!(output.contains(text));
+    }
+}
+
+#[test]
+fn omitted_repeated_cue_is_repaired_without_retranslating_valid_items() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let stem = "Repeated.Dialogue.Movie.2026.WEB-DL";
+    fs::write(source.join(format!("{stem}.mkv")), b"video").unwrap();
+    let srt = "1\n00:00:01,000 --> 00:00:02,000\nJace.\n\n2\n00:00:03,000 --> 00:00:04,000\nJace.\n\n3\n00:00:05,000 --> 00:00:06,000\nWhat have you done?\n\n4\n00:00:07,000 --> 00:00:08,000\nWhat have you done?\n\n5\n00:00:09,000 --> 00:00:10,000\nAnswer me.\n\n";
+    fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
+    fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
+    let (base_url, server) = ollama_server(vec![
+        Reply::Translations(vec![
+            (1, "杰斯。"),
+            (3, "你做了什么？"),
+            (4, "你做了什么？"),
+            (5, "回答我。"),
+        ]),
+        Reply::Translations(vec![(2, "杰斯。")]),
+        Reply::Translations(vec![(5, "回答我。")]),
+    ]);
+    let mut cfg = support::config(root.path(), &source, &destination);
+    cfg.translation.base_url = base_url;
+    cfg.translation.batch_size = 4;
+    cfg.translation.min_batch_size = 2;
+    cfg.translation.context_cues = 1;
+
+    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
+    server.join().unwrap();
+
+    let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
+    assert_eq!(output.matches("杰斯。").count(), 2);
+    assert_eq!(output.matches("你做了什么？").count(), 2);
+    assert_eq!(output.matches("回答我。").count(), 1);
+}
+
+#[test]
 fn complete_subtitle_consistency_review_applies_only_returned_corrections() {
     let root = tempdir().unwrap();
     let source = root.path().join("source");
@@ -220,6 +289,7 @@ fn complete_subtitle_consistency_review_applies_only_returned_corrections() {
 enum Reply<'a> {
     Translations(Vec<(u32, &'a str)>),
     Corrections(Vec<(u32, &'a str)>),
+    Malformed(&'a str),
     Error(u16),
 }
 
@@ -249,6 +319,10 @@ fn ollama_server(replies: Vec<Reply<'static>>) -> (String, thread::JoinHandle<()
                             .collect::<Vec<_>>()
                     });
                     let body = serde_json::json!({"response": generated.to_string()}).to_string();
+                    write_response(&mut stream, 200, &body);
+                }
+                Reply::Malformed(generated) => {
+                    let body = serde_json::json!({"response": generated}).to_string();
                     write_response(&mut stream, 200, &body);
                 }
                 Reply::Error(status) => {

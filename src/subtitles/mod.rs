@@ -432,11 +432,19 @@ pub fn doctor(cfg: &Config) -> Result<()> {
         request = request.bearer_auth(key);
     }
     let body = request.send()?.error_for_status()?.text()?;
-    if !body.contains(&cfg.translation.model) {
-        bail!(
-            "translation service is reachable but configured model {:?} was not advertised",
-            cfg.translation.model
-        );
+    let mut required_models = vec![cfg.translation.model.as_str()];
+    if cfg.translation.consistency_check
+        && let Some(model) = cfg.translation.consistency_model.as_deref()
+        && model != cfg.translation.model
+    {
+        required_models.push(model);
+    }
+    for model in required_models {
+        if !body.contains(model) {
+            bail!(
+                "translation service is reachable but configured model {model:?} was not advertised"
+            );
+        }
     }
     Ok(())
 }
