@@ -69,31 +69,59 @@ pub fn validate_translation_quality(
     target_language: &str,
     min_target_script_ratio: f32,
 ) -> Result<()> {
-    let targets: Vec<String> = source
+    let targets: Vec<(String, bool)> = source
         .iter()
         .zip(output)
-        .map(|(_source, output)| output.text.lines().next().unwrap_or("").trim().to_owned())
+        .map(|(source, output)| {
+            let target = output.text.lines().next().unwrap_or("").trim().to_owned();
+            let line_count = output
+                .text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .count();
+            let english_fallback = line_count == 1
+                && single_line(&source.text).eq_ignore_ascii_case(&single_line(&target));
+            (target, english_fallback)
+        })
         .collect();
     let same = source
         .iter()
         .zip(&targets)
-        .filter(|(source, target)| {
-            single_line(&source.text).eq_ignore_ascii_case(&single_line(target))
+        .filter(|(source, (target, english_fallback))| {
+            !english_fallback
+                && single_line(&source.text).eq_ignore_ascii_case(&single_line(target))
         })
         .count();
     if source.len() >= 5 && same * 2 >= source.len() {
         bail!("too many translations repeat the source text unchanged");
     }
     let mut counts = HashMap::new();
-    for target in &targets {
+    for (target, english_fallback) in &targets {
+        if *english_fallback {
+            continue;
+        }
         *counts.entry(target.to_ascii_lowercase()).or_insert(0usize) += 1;
     }
-    if targets.len() >= 10 && counts.values().copied().max().unwrap_or(0) * 10 >= targets.len() * 7
+    let translated_count = targets
+        .iter()
+        .filter(|(_, english_fallback)| !english_fallback)
+        .count();
+    if translated_count >= 10
+        && counts.values().copied().max().unwrap_or(0) * 10 >= translated_count * 7
     {
         bail!("translated subtitle is dominated by repeated output");
     }
     if target_language.to_ascii_lowercase().contains("chinese") {
-        let joined = targets.join("");
+        let joined = targets
+            .iter()
+            .filter(|(_, english_fallback)| !english_fallback)
+            .map(|(target, _)| target.as_str())
+            .collect::<Vec<_>>()
+            .join("");
+        if joined.is_empty() {
+            return Ok(());
+        }
         let visible = joined
             .chars()
             .filter(|ch| !ch.is_whitespace())

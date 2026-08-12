@@ -66,6 +66,7 @@ pub fn config(root: &Path, source: &Path, destination: &Path) -> Config {
             alignment_batch_size: 32,
             alignment_context_cues: 6,
             alignment_max_corrections: 32,
+            alignment_max_attempts: 3,
             alignment_max_output_tokens: 4_096,
         },
         migration: migration_config(true),

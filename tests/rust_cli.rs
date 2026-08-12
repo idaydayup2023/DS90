@@ -16,7 +16,7 @@ fn single_binary_reports_name_version_and_help() {
     assert!(version.status.success());
     assert_eq!(
         String::from_utf8_lossy(&version.stdout).trim(),
-        "subtrans 3.1.0"
+        format!("subtrans {}", env!("CARGO_PKG_VERSION"))
     );
 
     let help = subtrans().arg("--help").output().unwrap();

@@ -159,6 +159,8 @@ pub struct TranslationConfig {
     pub alignment_context_cues: usize,
     #[serde(default = "default_alignment_max_corrections")]
     pub alignment_max_corrections: usize,
+    #[serde(default = "default_alignment_max_attempts")]
+    pub alignment_max_attempts: u32,
     #[serde(default = "default_alignment_max_output_tokens")]
     pub alignment_max_output_tokens: u32,
 }
@@ -302,6 +304,7 @@ impl Config {
                 || self.translation.alignment_max_corrections == 0
                 || self.translation.alignment_max_corrections
                     > self.translation.alignment_batch_size
+                || self.translation.alignment_max_attempts == 0
                 || self.translation.alignment_max_output_tokens == 0)
         {
             bail!(
@@ -794,6 +797,9 @@ fn default_alignment_context_cues() -> usize {
 }
 fn default_alignment_max_corrections() -> usize {
     8
+}
+fn default_alignment_max_attempts() -> u32 {
+    3
 }
 fn default_alignment_max_output_tokens() -> u32 {
     4_096

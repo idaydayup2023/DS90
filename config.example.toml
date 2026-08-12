@@ -34,7 +34,8 @@ ffprobe = "ffprobe"
 external_process_timeout_seconds = 7200
 
 [subtitles.external_srt_validation]
-# 外置英文 SRT 必须与内置英文字幕交叉验证；质量接近时优先内置字幕。
+# 有内置英文字幕时必须与外置英文 SRT 交叉验证；没有内置英文时直接信任
+# 已通过 UTF-8/SRT/语言质量门的外置英文字幕。
 min_timing_match_ratio = 0.70
 min_text_similarity = 0.45
 external_quality_margin = 5.0
@@ -79,19 +80,21 @@ max_response_bytes = 4194304
 # 限制单次生成，避免模型输出跑偏后占满整个请求超时窗口。
 max_output_tokens = 4096
 min_target_script_ratio = 0.15
-# 初译完成后用完整字幕统一人名、术语和语气。超出字符上限会安全停止，
-# 不会跳过校对直接发布；长片可按已验证的模型上下文能力提高上限。
+# 初译完成后用完整字幕统一人名、术语和语气。审校是建议层：服务不可用、
+# 语境不确定或返回结构无效时会记录警告，但不会阻断已经通过硬质量门的字幕。
 consistency_check = true
 consistency_max_chars = 120000
 # 校对只允许有限数量的跨行一致性修正，禁止把它变成全文重译。
 consistency_max_corrections = 64
 consistency_max_output_tokens = 4096
 # 术语校对完成后每次最多审 8 条；上下文只用于理解，不允许把相邻字幕内容
-# 移入当前句。结构或编号失败会继续拆小，单条仍不合法才停止发布。
+# 移入当前句。结构或编号失败会继续拆小；单条仍无法判定时保留当前译文并发布。
 alignment_check = true
 alignment_batch_size = 8
 alignment_context_cues = 6
 alignment_max_corrections = 8
+# 同一编号连续 3 次仍被校对模型否决时，保留该条英文原文并继续发布。
+alignment_max_attempts = 3
 alignment_max_output_tokens = 4096
 
 # OpenAI-compatible 示例：

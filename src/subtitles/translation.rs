@@ -14,7 +14,7 @@ use crate::config::{LlmProvider, TranslationConfig};
 use super::quality::validate_translation_quality;
 use super::srt::{Cue, single_line};
 
-const PROMPT_VERSION: &str = "subtrans-translation-cue-binding-json-v4";
+const PROMPT_VERSION: &str = "subtrans-translation-cue-binding-json-v5";
 
 #[derive(Debug, Serialize)]
 struct PromptLine<'a> {
@@ -57,6 +57,19 @@ struct TranslatedLine {
     text: String,
 }
 
+#[derive(Debug)]
+struct AlignmentTask {
+    positions: Vec<usize>,
+    attempts: u32,
+}
+
+#[derive(Debug, Default)]
+struct AlignmentOutcome {
+    corrected: usize,
+    english_fallback: BTreeSet<u32>,
+    unresolved: usize,
+}
+
 pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<Vec<Cue>> {
     if cues.is_empty() || cfg.batch_size == 0 || cfg.max_batch_chars == 0 {
         bail!("source cues and translation batch limits must be non-empty");
@@ -84,15 +97,26 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<Vec<Cue>> {
     }
     if cfg.consistency_check && cues.len() > 1 {
         println!("translation consistency_check cues={}", cues.len());
-        let corrected = audit_consistency(&client, api_key.as_deref(), cues, &mut translated, cfg)?;
-        println!("translation consistency_check corrected={corrected}");
+        match audit_consistency(&client, api_key.as_deref(), cues, &mut translated, cfg) {
+            Ok(corrected) => println!("translation consistency_check corrected={corrected}"),
+            Err(error) => eprintln!(
+                "translation consistency_check unresolved=true action=continue_without_consistency_corrections error={error:#}"
+            ),
+        }
     }
+    let mut english_fallback = BTreeSet::new();
     if cfg.alignment_check {
         println!("translation alignment_check cues={}", cues.len());
-        let corrected = audit_alignment(&client, api_key.as_deref(), cues, &mut translated, cfg)?;
-        println!("translation alignment_check corrected={corrected}");
+        let outcome = audit_alignment(&client, api_key.as_deref(), cues, &mut translated, cfg)?;
+        println!(
+            "translation alignment_check corrected={} english_fallback={} unresolved={}",
+            outcome.corrected,
+            outcome.english_fallback.len(),
+            outcome.unresolved
+        );
+        english_fallback = outcome.english_fallback;
     }
-    let output = render(cues, &translated, cfg.bilingual)?;
+    let output = render_with_fallback(cues, &translated, cfg.bilingual, &english_fallback)?;
     validate_translation_quality(
         cues,
         &output,
@@ -265,6 +289,15 @@ pub fn render(
     translations: &BTreeMap<u32, String>,
     bilingual: bool,
 ) -> Result<Vec<Cue>> {
+    render_with_fallback(source, translations, bilingual, &BTreeSet::new())
+}
+
+fn render_with_fallback(
+    source: &[Cue],
+    translations: &BTreeMap<u32, String>,
+    bilingual: bool,
+    english_fallback: &BTreeSet<u32>,
+) -> Result<Vec<Cue>> {
     let mut output = Vec::with_capacity(source.len());
     for cue in source {
         let target = single_line(
@@ -280,7 +313,9 @@ pub fn render(
             index: cue.index,
             start_ms: cue.start_ms,
             end_ms: cue.end_ms,
-            text: if bilingual {
+            text: if english_fallback.contains(&cue.index) {
+                original
+            } else if bilingual {
                 format!("{target}\n{original}")
             } else {
                 target
@@ -311,7 +346,10 @@ pub fn validate_output(source: &[Cue], output: &[Cue], bilingual: bool) -> Resul
             .map(str::trim)
             .filter(|line| !line.is_empty())
             .count();
-        if line_count != if bilingual { 2 } else { 1 } {
+        let deliberate_english_fallback = bilingual
+            && line_count == 1
+            && single_line(&output_cue.text).eq_ignore_ascii_case(&single_line(&source_cue.text));
+        if !deliberate_english_fallback && line_count != if bilingual { 2 } else { 1 } {
             bail!(
                 "translated cue {} has an invalid line structure",
                 source_cue.index
@@ -445,20 +483,32 @@ fn audit_alignment(
     cues: &[Cue],
     translations: &mut BTreeMap<u32, String>,
     cfg: &TranslationConfig,
-) -> Result<usize> {
+) -> Result<AlignmentOutcome> {
     let model = cfg
         .alignment_model
         .as_deref()
         .or(cfg.consistency_model.as_deref())
         .unwrap_or(&cfg.model);
-    let mut corrected = 0usize;
-    let mut pending = VecDeque::from(batch_ranges(
-        cues,
-        cfg.alignment_batch_size,
-        cfg.max_batch_chars,
-    ));
-    while let Some(core) = pending.pop_front() {
-        let context = prompt_context_range(core.clone(), cfg.alignment_context_cues);
+    let mut outcome = AlignmentOutcome::default();
+    let mut pending: VecDeque<AlignmentTask> =
+        batch_ranges(cues, cfg.alignment_batch_size, cfg.max_batch_chars)
+            .into_iter()
+            .map(|range| AlignmentTask {
+                positions: range.collect(),
+                attempts: 0,
+            })
+            .collect();
+    while let Some(task) = pending.pop_front() {
+        let first = *task
+            .positions
+            .first()
+            .context("alignment task unexpectedly contains no positions")?;
+        let last = *task
+            .positions
+            .last()
+            .context("alignment task unexpectedly contains no positions")?;
+        let context = prompt_context_range(first..last + 1, cfg.alignment_context_cues);
+        let review_positions: BTreeSet<usize> = task.positions.iter().copied().collect();
         let lines: Vec<AlignmentLine<'_>> = cues[context.clone()]
             .iter()
             .enumerate()
@@ -470,7 +520,7 @@ fn audit_alignment(
                     translation: translations.get(&cue.index).with_context(|| {
                         format!("missing translation for alignment cue {}", cue.index)
                     })?,
-                    review: position >= core.start && position < core.end,
+                    review: review_positions.contains(&position),
                 })
             })
             .collect::<Result<_>>()?;
@@ -479,7 +529,8 @@ fn audit_alignment(
              For every item with review=true, decide whether translation faithfully translates only the source at the SAME index. \
              Items with review=false are read-only context. Context may clarify names, pronouns, tone, and an incomplete sentence, but its words must never be \
              added to, moved into, or substituted for a reviewed index. Correct a reviewed item when its translation belongs wholly or partly to a neighboring \
-             cue, omits or invents a speaker or clause, changes the meaning, or completes a fragment with content absent from that source. Preserve fragments \
+             cue, omits or invents a speaker or clause, changes the meaning, or completes a fragment with content absent from that source. If context is \
+             insufficient or the intended meaning is genuinely ambiguous, do not guess and do not return a correction for that item. Preserve fragments \
              as fragments and preserve every speaker and clause that actually occurs at the reviewed index. Account for every content-bearing action, object, \
              negation, title, and domain term; reject a generic paraphrase that drops or replaces one of them. Do not change a faithful line merely for style. \
              Return at most {} corrections in exactly one JSON object \
@@ -491,10 +542,14 @@ fn audit_alignment(
             cfg.target_language,
             cfg.target_language_code,
             cfg.alignment_max_corrections,
-            cues[core.start].index,
+            cues[first].index,
             serde_json::to_string(&lines)?
         );
-        let expected: BTreeSet<u32> = cues[core.clone()].iter().map(|cue| cue.index).collect();
+        let expected: BTreeSet<u32> = task
+            .positions
+            .iter()
+            .map(|position| cues[*position].index)
+            .collect();
         let result = request_audit_corrections(
             client,
             cfg,
@@ -504,26 +559,57 @@ fn audit_alignment(
             cfg.alignment_max_output_tokens,
             &expected,
             cfg.alignment_max_corrections,
-            &format!("alignment cues {}..{}", core.start, core.end),
+            &format!("alignment cue indices {expected:?}"),
         );
         match result {
             Ok(corrections) => {
-                corrected = corrected.saturating_add(corrections.len());
-                translations.extend(corrections);
+                for (index, correction) in corrections {
+                    let position = cues
+                        .iter()
+                        .position(|cue| cue.index == index)
+                        .with_context(|| format!("alignment returned unknown cue {index}"))?;
+                    let next_attempt = task.attempts.saturating_add(1);
+                    if next_attempt >= cfg.alignment_max_attempts {
+                        translations.insert(index, single_line(&cues[position].text));
+                        outcome.english_fallback.insert(index);
+                        eprintln!(
+                            "translation alignment_fallback index={index} attempts={next_attempt} action=keep_english"
+                        );
+                    } else {
+                        translations.insert(index, correction);
+                        outcome.corrected = outcome.corrected.saturating_add(1);
+                        pending.push_back(AlignmentTask {
+                            positions: vec![position],
+                            attempts: next_attempt,
+                        });
+                    }
+                }
             }
-            Err(_) if core.len() > 1 => {
-                let midpoint = core.start + core.len() / 2;
+            Err(_) if task.positions.len() > 1 => {
+                let midpoint = task.positions.len() / 2;
                 println!(
-                    "translation alignment_check split={}..{} at={midpoint}",
-                    core.start, core.end
+                    "translation alignment_check split_indices={:?} at={midpoint}",
+                    task.positions
                 );
-                pending.push_front(midpoint..core.end);
-                pending.push_front(core.start..midpoint);
+                pending.push_front(AlignmentTask {
+                    positions: task.positions[midpoint..].to_vec(),
+                    attempts: task.attempts,
+                });
+                pending.push_front(AlignmentTask {
+                    positions: task.positions[..midpoint].to_vec(),
+                    attempts: task.attempts,
+                });
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                outcome.unresolved = outcome.unresolved.saturating_add(1);
+                eprintln!(
+                    "translation alignment_check unresolved_index={} action=keep_current_translation error={error:#}",
+                    cues[first].index
+                );
+            }
         }
     }
-    Ok(corrected)
+    Ok(outcome)
 }
 
 #[cfg(test)]
@@ -701,7 +787,20 @@ fn request(
     if let Some(key) = api_key {
         request = request.bearer_auth(key);
     }
-    let response = request.send()?.error_for_status()?;
+    let response = request
+        .send()
+        .with_context(|| {
+            format!(
+                "translation model request failed for model {model:?} at {}. Start/verify the configured service and model, check network/API-key settings, then run `subtrans doctor --config <CONFIG>`",
+                cfg.base_url
+            )
+        })?
+        .error_for_status()
+        .with_context(|| {
+            format!(
+                "translation service rejected model {model:?}. Verify the model is installed/enabled (for Ollama: `ollama pull {model}` and `ollama list`), then run `subtrans doctor --config <CONFIG>`"
+            )
+        })?;
     let mut bytes = Vec::new();
     response
         .take(cfg.max_response_bytes as u64 + 1)

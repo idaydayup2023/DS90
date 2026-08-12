@@ -145,7 +145,6 @@ enum VideoOutcome {
 
 enum ExistingSourceResolution {
     Ready(SourceSubtitle),
-    Pending(String),
     None,
 }
 
@@ -183,7 +182,6 @@ fn process_video(
         resolve_existing_source(storage, video, by_directory, cfg, &acquisition_key)?;
     let existing_source = match existing_source {
         ExistingSourceResolution::Ready(source) => Some(source),
-        ExistingSourceResolution::Pending(reason) => return Ok(VideoOutcome::Pending(reason)),
         ExistingSourceResolution::None => None,
     };
     if dry_run {
@@ -426,12 +424,29 @@ pub fn doctor(cfg: &Config) -> Result<()> {
     };
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(cfg.translation.timeout_seconds.min(30)))
-        .build()?;
+        .build()
+        .context("failed to initialize the translation HTTP client")?;
     let mut request = client.get(url);
     if let Some(key) = cfg.translation.api_key()? {
         request = request.bearer_auth(key);
     }
-    let body = request.send()?.error_for_status()?.text()?;
+    let service_guidance = match cfg.translation.provider {
+        LlmProvider::Ollama => format!(
+            "Start Ollama, verify `ollama list`, install the configured model with `ollama pull {}`, and confirm translation.base_url={}. On macOS Ollama can be installed with `brew install --cask ollama`.",
+            cfg.translation.model, cfg.translation.base_url
+        ),
+        LlmProvider::OpenaiCompatible => format!(
+            "Verify translation.base_url={}, network access, and the environment variable named by translation.api_key_env. Confirm the endpoint implements the OpenAI-compatible models and chat/completions APIs.",
+            cfg.translation.base_url
+        ),
+    };
+    let body = request
+        .send()
+        .with_context(|| format!("translation service is unreachable. {service_guidance}"))?
+        .error_for_status()
+        .with_context(|| format!("translation service health check failed. {service_guidance}"))?
+        .text()
+        .context("translation service health response could not be read")?;
     let mut required_models = vec![cfg.translation.model.as_str()];
     if cfg.translation.consistency_check
         && let Some(model) = cfg.translation.consistency_model.as_deref()
@@ -452,7 +467,7 @@ pub fn doctor(cfg: &Config) -> Result<()> {
     for model in required_models {
         if !body.contains(model) {
             bail!(
-                "translation service is reachable but configured model {model:?} was not advertised"
+                "translation service is reachable but configured model {model:?} was not advertised. For Ollama run `ollama pull {model}` and verify `ollama list`; otherwise install/enable that model on the configured provider, update the model setting if its name differs, then rerun `subtrans doctor --config <CONFIG>`."
             );
         }
     }
@@ -524,14 +539,27 @@ fn resolve_existing_source(
         None => acquire_embedded_anchor(storage, video, cfg, acquisition_key)?,
     };
     let Some(embedded) = embedded else {
-        let external_path = external.path.as_deref().unwrap_or("unknown");
+        let external_path = external.path.clone().unwrap_or_else(|| "unknown".into());
+        let external_text = std::str::from_utf8(&external.bytes)
+            .context("external English SRT is not valid UTF-8")?;
+        let external_cues = srt::parse(external_text)?;
+        let external_quality =
+            quality::score_source(&external_cues, &cfg.translation.source_language)?;
         println!(
-            "subtitles source_evaluation video={} decision=pending_external_unverified external={external_path}",
+            "subtitles source_evaluation video={} decision=external_selected_no_embedded_english external={external_path} external_quality={external_quality:.2}",
             video.path
         );
-        return Ok(ExistingSourceResolution::Pending(format!(
-            "external_srt_unverified_no_embedded_english external={external_path}"
-        )));
+        let mut selected = external;
+        selected.evidence = Some(SubtitleSourceEvidence {
+            decision: "external_selected_no_embedded_english".into(),
+            external_path,
+            embedded_kind: "none".into(),
+            timing_match_ratio: 0.0,
+            text_similarity: 0.0,
+            external_quality,
+            embedded_quality: 0.0,
+        });
+        return Ok(ExistingSourceResolution::Ready(selected));
     };
 
     let comparison = compare_sources(&external, &embedded, cfg)?;
@@ -636,6 +664,7 @@ fn acquire_embedded_anchor(
     let mut english: Vec<SubtitleTrack> = tracks.into_iter().filter(is_english_track).collect();
     english.sort_by_key(track_rank);
 
+    let mut extraction_failures = Vec::new();
     for track in english
         .iter()
         .filter(|track| is_text_codec(&track.codec_name))
@@ -653,17 +682,35 @@ fn acquire_embedded_anchor(
             "srt".into(),
             output.to_string_lossy().into_owned(),
         ];
-        if run_capture(
+        if let Err(error) = run_capture(
             &cfg.subtitles.ffmpeg,
             &args,
             Duration::from_secs(cfg.subtitles.external_process_timeout_seconds),
             scratch.path(),
         )
-        .is_ok()
-            && let Some(source) = read_generated(&output, "embedded_live", acquisition_key)?
-        {
-            return Ok(Some(source));
+        .with_context(|| {
+            format!(
+                "failed to extract embedded English subtitle stream {} for external-SRT validation",
+                track.index
+            )
+        }) {
+            extraction_failures.push(format!("stream {}: {error:#}", track.index));
+            continue;
         }
+        match read_generated(&output, "embedded_live", acquisition_key) {
+            Ok(Some(source)) => return Ok(Some(source)),
+            Ok(None) => extraction_failures.push(format!(
+                "stream {}: ffmpeg output was not a valid UTF-8 SRT",
+                track.index
+            )),
+            Err(error) => extraction_failures.push(format!("stream {}: {error:#}", track.index)),
+        }
+    }
+    if !extraction_failures.is_empty() {
+        bail!(
+            "all embedded English text streams failed extraction for external-SRT validation: {}. Inspect the stream/codec, verify `ffmpeg -version`, and rerun `subtrans doctor --config <CONFIG>`",
+            extraction_failures.join(" | ")
+        );
     }
 
     if let Some(worker) = cfg
@@ -676,7 +723,8 @@ fn acquire_embedded_anchor(
             .find(|track| is_bitmap_codec(&track.codec_name))
     {
         let output = scratch.path().join("anchor-pgs.srt");
-        if run_worker(
+        if run_optional_worker(
+            "PGS OCR",
             worker,
             &local_video,
             &output,
@@ -684,7 +732,7 @@ fn acquire_embedded_anchor(
             Some(track.index),
             cfg.subtitles.external_process_timeout_seconds,
             scratch.path(),
-        )? && let Some(source) = read_generated(&output, "pgs_ocr_live", acquisition_key)?
+        ) && let Some(source) = read_generated(&output, "pgs_ocr_live", acquisition_key)?
         {
             return Ok(Some(source));
         }
@@ -778,6 +826,7 @@ fn acquire_generated_source(
     let mut english: Vec<SubtitleTrack> = tracks.into_iter().filter(is_english_track).collect();
     english.sort_by_key(track_rank);
 
+    let mut extraction_failures = Vec::new();
     for track in english
         .iter()
         .filter(|track| is_text_codec(&track.codec_name))
@@ -795,17 +844,35 @@ fn acquire_generated_source(
             "srt".into(),
             output.to_string_lossy().into_owned(),
         ];
-        if run_capture(
+        if let Err(error) = run_capture(
             &cfg.subtitles.ffmpeg,
             &args,
             Duration::from_secs(cfg.subtitles.external_process_timeout_seconds),
             scratch.path(),
         )
-        .is_ok()
-            && let Some(source) = read_generated(&output, "embedded", acquisition_key)?
-        {
-            return persist_generated(storage, video, source, "emb.srt");
+        .with_context(|| {
+            format!(
+                "failed to extract embedded English subtitle stream {}",
+                track.index
+            )
+        }) {
+            extraction_failures.push(format!("stream {}: {error:#}", track.index));
+            continue;
         }
+        match read_generated(&output, "embedded", acquisition_key) {
+            Ok(Some(source)) => return persist_generated(storage, video, source, "emb.srt"),
+            Ok(None) => extraction_failures.push(format!(
+                "stream {}: ffmpeg output was not a valid UTF-8 SRT",
+                track.index
+            )),
+            Err(error) => extraction_failures.push(format!("stream {}: {error:#}", track.index)),
+        }
+    }
+    if !extraction_failures.is_empty() {
+        bail!(
+            "all embedded English text streams failed extraction: {}. Inspect the stream/codec, verify `ffmpeg -version`, and rerun `subtrans doctor --config <CONFIG>`",
+            extraction_failures.join(" | ")
+        );
     }
 
     if let Some(worker) = cfg
@@ -818,7 +885,8 @@ fn acquire_generated_source(
             .find(|track| is_bitmap_codec(&track.codec_name))
     {
         let output = scratch.path().join("pgs.srt");
-        if run_worker(
+        if run_optional_worker(
+            "PGS OCR",
             worker,
             &local_video,
             &output,
@@ -826,14 +894,14 @@ fn acquire_generated_source(
             Some(track.index),
             cfg.subtitles.external_process_timeout_seconds,
             scratch.path(),
-        )? && let Some(source) = read_generated(&output, "pgs_ocr", acquisition_key)?
+        ) && let Some(source) = read_generated(&output, "pgs_ocr", acquisition_key)?
         {
             return persist_generated(storage, video, source, "pgs.srt");
         }
     }
     if let Some(worker) = cfg.subtitles.asr.as_ref().filter(|worker| worker.enabled) {
         let output = scratch.path().join("asr.srt");
-        if run_worker(
+        run_worker(
             worker,
             &local_video,
             &output,
@@ -841,12 +909,19 @@ fn acquire_generated_source(
             None,
             cfg.subtitles.external_process_timeout_seconds,
             scratch.path(),
-        )? && let Some(source) = read_generated(&output, "asr", acquisition_key)?
-        {
+        )?;
+        if let Some(source) = read_generated(&output, "asr", acquisition_key)? {
             return persist_generated(storage, video, source, "asr.srt");
         }
+        bail!(
+            "ASR worker completed but did not create a valid UTF-8 SRT at {}. Check the worker log and its --output handling; then run `subtrans doctor --config <CONFIG>`.",
+            output.display()
+        );
     }
-    Ok(None)
+    bail!(
+        "no external or embedded English subtitle was found for {}; ASR is required. Configure and enable [subtitles.asr] with a stable worker command, args containing {{input}}/{{output}}, version_args, and version. Install the worker and its model first (for example whisper.cpp plus an English-capable model), then run `subtrans doctor --config <CONFIG>`.",
+        video.path
+    )
 }
 
 fn materialize_local_video(
@@ -949,7 +1024,7 @@ fn run_worker(
     stream: Option<u32>,
     timeout_seconds: u64,
     scratch: &Path,
-) -> Result<bool> {
+) -> Result<()> {
     validate_worker_args(worker)?;
     let args: Vec<String> = worker
         .args
@@ -964,19 +1039,42 @@ fn run_worker(
                 )
         })
         .collect();
-    match run_capture(
+    run_capture(
         &worker.command,
         &args,
         Duration::from_secs(timeout_seconds),
         scratch,
+    )
+    .map(|_| ())
+    .with_context(|| worker_recovery_guidance(worker))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_optional_worker(
+    name: &str,
+    worker: &ExternalWorkerConfig,
+    input: &Path,
+    output: &Path,
+    language: &str,
+    stream: Option<u32>,
+    timeout_seconds: u64,
+    scratch: &Path,
+) -> bool {
+    match run_worker(
+        worker,
+        input,
+        output,
+        language,
+        stream,
+        timeout_seconds,
+        scratch,
     ) {
-        Ok(_) => Ok(true),
+        Ok(()) => true,
         Err(error) => {
             eprintln!(
-                "optional worker failed command={} version={} error={error:#}",
-                worker.command, worker.version
+                "{name} worker unavailable; continuing with the next permitted subtitle source.\n{error:#}"
             );
-            Ok(false)
+            false
         }
     }
 }
@@ -1004,7 +1102,12 @@ fn run_capture(
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
         .spawn()
-        .with_context(|| format!("failed to launch {program}"))?;
+        .with_context(|| {
+            format!(
+                "failed to launch {program}. {}",
+                executable_install_guidance(program)
+            )
+        })?;
     let deadline = std::time::Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait()? {
@@ -1022,9 +1125,10 @@ fn run_capture(
     };
     let stderr = read_limited(&stderr_path, 64 * 1024)?;
     if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr);
         bail!(
-            "external process {program} failed with {status}: {}",
-            String::from_utf8_lossy(&stderr)
+            "external process {program} failed with {status}: {stderr}\n{}",
+            process_failure_guidance(program, &stderr)
         );
     }
     read_limited(&stdout_path, 16 * 1024 * 1024)
@@ -1211,13 +1315,58 @@ fn ensure_executable(command: &str) -> Result<PathBuf> {
         if candidate.is_file() {
             return Ok(candidate.to_owned());
         }
-        bail!("{} does not exist", candidate.display());
+        bail!(
+            "configured executable {} does not exist. {}",
+            candidate.display(),
+            executable_install_guidance(command)
+        );
     }
-    let path = std::env::var_os("PATH").context("PATH is not set")?;
+    let path = std::env::var_os("PATH").with_context(|| {
+        format!(
+            "PATH is not set, so {command} cannot be located. {}",
+            executable_install_guidance(command)
+        )
+    })?;
     std::env::split_paths(&path)
         .map(|directory| directory.join(command))
         .find(|candidate| candidate.is_file())
-        .with_context(|| format!("{command} was not found on PATH"))
+        .with_context(|| {
+            format!(
+                "{command} was not found on PATH. {}",
+                executable_install_guidance(command)
+            )
+        })
+}
+
+fn executable_install_guidance(command: &str) -> String {
+    let name = Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(command)
+        .to_ascii_lowercase();
+    match name.as_str() {
+        "ffmpeg" | "ffprobe" => format!(
+            "On macOS install both tools with `brew install ffmpeg`, verify `{name} -version`, or set [subtitles].{name} to an executable absolute path; then run `subtrans doctor --config <CONFIG>`."
+        ),
+        "python" | "python3" => "Install Python with `brew install python`, create/activate the worker virtual environment, install the module named in the error with `python3 -m pip install <PACKAGE>`, and configure the worker command as that environment's absolute Python path.".into(),
+        _ => format!(
+            "Install the required component, verify `{command} --version`, ensure it is executable and on PATH, or configure its absolute path. For ASR/PGS workers also set enabled=true, args with {{input}}/{{output}}, version_args, and a matching stable version; then run `subtrans doctor --config <CONFIG>`."
+        ),
+    }
+}
+
+fn process_failure_guidance(program: &str, stderr: &str) -> String {
+    if stderr.contains("ModuleNotFoundError") || stderr.contains("No module named") {
+        return "A Python module is missing. Activate the exact virtual environment used by the configured worker, install the module named above with `python3 -m pip install <PACKAGE>`, verify the worker's version command, and rerun `subtrans doctor --config <CONFIG>`. subtrans will not install modules automatically.".into();
+    }
+    executable_install_guidance(program)
+}
+
+fn worker_recovery_guidance(worker: &ExternalWorkerConfig) -> String {
+    format!(
+        "Worker command {:?} (configured version {:?}) could not produce subtitles. Check its detailed stderr above; install its executable, Python modules and model data manually, keep command/model paths absolute for offline use, confirm args contain {{input}} and {{output}}, confirm version_args reports the configured version, and run `subtrans doctor --config <CONFIG>`. subtrans never installs workers or models automatically.",
+        worker.command, worker.version
+    )
 }
 
 fn endpoint(base: &str, suffix: &str) -> String {
@@ -1263,6 +1412,38 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("exceeded"));
+    }
+
+    #[test]
+    fn missing_ffmpeg_error_contains_install_and_verification_steps() {
+        let error = ensure_executable("ffmpeg-subtrans-definitely-missing").unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("was not found on PATH"));
+        assert!(message.contains("Install the required component"));
+        assert!(message.contains("subtrans doctor"));
+
+        let guidance = executable_install_guidance("ffmpeg");
+        assert!(guidance.contains("brew install ffmpeg"));
+        assert!(guidance.contains("ffmpeg -version"));
+    }
+
+    #[test]
+    fn missing_python_module_error_contains_manual_pip_guidance() {
+        let scratch = tempfile::tempdir().unwrap();
+        let error = run_capture(
+            "/bin/sh",
+            &[
+                "-c".into(),
+                "echo \"ModuleNotFoundError: No module named 'whisper'\" >&2; exit 1".into(),
+            ],
+            Duration::from_secs(5),
+            scratch.path(),
+        )
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("No module named 'whisper'"));
+        assert!(message.contains("python3 -m pip install"));
+        assert!(message.contains("will not install modules automatically"));
     }
 
     #[test]

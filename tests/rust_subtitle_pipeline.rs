@@ -3,6 +3,8 @@ mod support;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::thread;
 use std::time::Duration;
 
@@ -10,6 +12,14 @@ use subtrans::artifact::read_ready_artifact;
 use subtrans::migration::build_plan;
 use subtrans::storage::{LocalStorage, Storage};
 use tempfile::tempdir;
+
+#[cfg(unix)]
+fn executable_script(path: &std::path::Path, contents: &str) {
+    fs::write(path, contents).unwrap();
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
+}
 
 #[test]
 fn translated_artifact_unlocks_migration_and_is_reused_without_llm() {
@@ -153,6 +163,110 @@ fn mismatched_external_srt_is_rejected_in_favor_of_embedded_english() {
     );
     assert_eq!(evidence.timing_match_ratio, 0.0);
     assert_eq!(evidence.text_similarity, 0.0);
+}
+
+#[cfg(unix)]
+#[test]
+fn external_english_is_trusted_when_video_has_no_embedded_english() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let stem = "External.Only.Movie.2026.WEB-DL";
+    let video = format!("{stem}.mkv");
+    fs::write(source.join(&video), b"video").unwrap();
+    fs::write(
+        source.join(format!("{stem}.en.srt")),
+        "1\n00:00:01,000 --> 00:00:02,000\nHello\n\n",
+    )
+    .unwrap();
+    let ffprobe = root.path().join("fake-ffprobe");
+    executable_script(&ffprobe, "#!/bin/sh\nprintf '{\"streams\":[]}'\n");
+    let (base_url, server) = ollama_server(vec![Reply::Translations(vec![(1, "你好")])]);
+    let mut cfg = support::config(root.path(), &source, &destination);
+    cfg.subtitles.ffprobe = ffprobe.to_string_lossy().into_owned();
+    cfg.translation.base_url = base_url;
+
+    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
+    server.join().unwrap();
+
+    let storage = LocalStorage::new(&source).unwrap();
+    let entry = storage.metadata(&video).unwrap().unwrap();
+    let manifest = read_ready_artifact(&storage, &entry).unwrap().unwrap();
+    assert_eq!(manifest.source_kind, "external_english");
+    let evidence = manifest.source_evidence.unwrap();
+    assert_eq!(evidence.decision, "external_selected_no_embedded_english");
+    assert_eq!(evidence.embedded_kind, "none");
+}
+
+#[cfg(unix)]
+#[test]
+fn asr_is_used_when_external_and_embedded_english_are_both_absent() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let stem = "Asr.Only.Movie.2026.WEB-DL";
+    let video = format!("{stem}.mkv");
+    fs::write(source.join(&video), b"video").unwrap();
+    let ffprobe = root.path().join("fake-ffprobe");
+    executable_script(&ffprobe, "#!/bin/sh\nprintf '{\"streams\":[]}'\n");
+    let asr = root.path().join("fake-asr");
+    executable_script(
+        &asr,
+        "#!/bin/sh\noutput=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output' ]; then output=$2; shift 2; else shift; fi\ndone\nprintf '1\\n00:00:01,000 --> 00:00:02,000\\nRecognized speech\\n\\n' > \"$output\"\n",
+    );
+    let (base_url, server) = ollama_server(vec![Reply::Translations(vec![(1, "识别出的语音")])]);
+    let mut cfg = support::config(root.path(), &source, &destination);
+    cfg.subtitles.ffprobe = ffprobe.to_string_lossy().into_owned();
+    cfg.subtitles.asr = Some(subtrans::config::ExternalWorkerConfig {
+        command: asr.to_string_lossy().into_owned(),
+        args: vec![
+            "--input".into(),
+            "{input}".into(),
+            "--output".into(),
+            "{output}".into(),
+            "--language".into(),
+            "{language}".into(),
+        ],
+        version_args: vec!["--version".into()],
+        enabled: true,
+        version: "fake-asr-1".into(),
+    });
+    cfg.translation.base_url = base_url;
+
+    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
+    server.join().unwrap();
+
+    let storage = LocalStorage::new(&source).unwrap();
+    let entry = storage.metadata(&video).unwrap().unwrap();
+    let manifest = read_ready_artifact(&storage, &entry).unwrap().unwrap();
+    assert_eq!(manifest.source_kind, "asr");
+    assert!(source.join(format!("{stem}.asr.srt")).is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_asr_configuration_reports_exact_recovery_steps() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    fs::write(source.join("No.Subtitles.Movie.2026.mkv"), b"video").unwrap();
+    let ffprobe = root.path().join("fake-ffprobe");
+    executable_script(&ffprobe, "#!/bin/sh\nprintf '{\"streams\":[]}'\n");
+    let mut cfg = support::config(root.path(), &source, &destination);
+    cfg.subtitles.ffprobe = ffprobe.to_string_lossy().into_owned();
+
+    let error = subtrans::subtitles::run(&cfg, false, false, None).unwrap_err();
+    let message = format!("{error:#}");
+    assert!(message.contains("ASR is required"));
+    assert!(message.contains("[subtitles.asr]"));
+    assert!(message.contains("whisper.cpp"));
+    assert!(message.contains("subtrans doctor"));
 }
 
 #[test]
@@ -301,6 +415,9 @@ fn cue_alignment_review_repairs_neighbor_shift_without_changing_source_timing() 
     let (base_url, server) = ollama_server(vec![
         Reply::Translations(vec![(1, "现在离开。"), (2, "回答我。"), (3, "把它砸碎。")]),
         Reply::Corrections(vec![(1, "把它砸碎。"), (2, "现在离开。"), (3, "回答我。")]),
+        Reply::Corrections(vec![]),
+        Reply::Corrections(vec![]),
+        Reply::Corrections(vec![]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
     cfg.translation.base_url = base_url;
@@ -344,6 +461,10 @@ fn malformed_alignment_batch_is_split_until_exact_indices_are_auditable() {
         Reply::Malformed("still-not-json"),
         Reply::Corrections(vec![(1, "第一。"), (2, "第二。")]),
         Reply::Corrections(vec![(3, "第三。"), (4, "第四。")]),
+        Reply::Corrections(vec![]),
+        Reply::Corrections(vec![]),
+        Reply::Corrections(vec![]),
+        Reply::Corrections(vec![]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
     cfg.translation.base_url = base_url;
@@ -360,6 +481,78 @@ fn malformed_alignment_batch_is_split_until_exact_indices_are_auditable() {
     assert!(output.contains("第二。\nSecond."));
     assert!(output.contains("第三。\nThird."));
     assert!(output.contains("第四。\nFourth."));
+}
+
+#[test]
+fn repeated_alignment_rejection_keeps_only_that_cue_in_english_and_publishes() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let stem = "Ambiguous.Context.Movie.2026.WEB-DL";
+    fs::write(source.join(format!("{stem}.mkv")), b"video").unwrap();
+    let srt =
+        "1\n00:00:01,000 --> 00:00:02,000\nDuck!\n\n2\n00:00:03,000 --> 00:00:04,000\nRun now.\n\n";
+    fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
+    fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
+    let (base_url, server) = ollama_server(vec![
+        Reply::Translations(vec![(1, "鸭子！"), (2, "快跑。")]),
+        Reply::Corrections(vec![(1, "低头！")]),
+        Reply::Corrections(vec![(1, "闪开！")]),
+        Reply::Corrections(vec![(1, "趴下！")]),
+    ]);
+    let mut cfg = support::config(root.path(), &source, &destination);
+    cfg.translation.base_url = base_url;
+    cfg.translation.alignment_check = true;
+    cfg.translation.alignment_batch_size = 2;
+    cfg.translation.alignment_context_cues = 1;
+    cfg.translation.alignment_max_corrections = 2;
+    cfg.translation.alignment_max_attempts = 3;
+
+    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
+    server.join().unwrap();
+
+    let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
+    let cues = subtrans::subtitles::parse_srt(&output).unwrap();
+    assert_eq!(cues[0].text, "Duck!");
+    assert_eq!(cues[1].text, "快跑。\nRun now.");
+    assert!(
+        source
+            .join(format!("{stem}.ai.srt.subtrans.json"))
+            .is_file()
+    );
+}
+
+#[test]
+fn undecidable_single_cue_audit_error_does_not_block_publication() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let stem = "Uncertain.Audit.Movie.2026.WEB-DL";
+    fs::write(source.join(format!("{stem}.mkv")), b"video").unwrap();
+    let srt = "1\n00:00:01,000 --> 00:00:02,000\nFine.\n\n";
+    fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
+    fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
+    let (base_url, server) = ollama_server(vec![
+        Reply::Translations(vec![(1, "好吧。")]),
+        Reply::Malformed("uncertain"),
+        Reply::Malformed("still-uncertain"),
+    ]);
+    let mut cfg = support::config(root.path(), &source, &destination);
+    cfg.translation.base_url = base_url;
+    cfg.translation.alignment_check = true;
+    cfg.translation.alignment_batch_size = 1;
+    cfg.translation.alignment_context_cues = 0;
+    cfg.translation.alignment_max_corrections = 1;
+
+    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
+    server.join().unwrap();
+
+    let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
+    assert!(output.contains("好吧。\nFine."));
 }
 
 enum Reply<'a> {
