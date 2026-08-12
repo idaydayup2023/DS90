@@ -112,6 +112,8 @@ pub struct TranslationConfig {
     #[serde(default)]
     pub consistency_model: Option<String>,
     #[serde(default)]
+    pub alignment_model: Option<String>,
+    #[serde(default)]
     pub api_key_env: Option<String>,
     #[serde(default = "default_source_language")]
     pub source_language: String,
@@ -149,6 +151,16 @@ pub struct TranslationConfig {
     pub consistency_max_corrections: usize,
     #[serde(default = "default_consistency_max_output_tokens")]
     pub consistency_max_output_tokens: u32,
+    #[serde(default = "default_true")]
+    pub alignment_check: bool,
+    #[serde(default = "default_alignment_batch_size")]
+    pub alignment_batch_size: usize,
+    #[serde(default = "default_alignment_context_cues")]
+    pub alignment_context_cues: usize,
+    #[serde(default = "default_alignment_max_corrections")]
+    pub alignment_max_corrections: usize,
+    #[serde(default = "default_alignment_max_output_tokens")]
+    pub alignment_max_output_tokens: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -285,6 +297,22 @@ impl Config {
         {
             bail!("translation consistency output limits must be positive when enabled");
         }
+        if self.translation.alignment_check
+            && (self.translation.alignment_batch_size == 0
+                || self.translation.alignment_max_corrections == 0
+                || self.translation.alignment_max_corrections
+                    > self.translation.alignment_batch_size
+                || self.translation.alignment_max_output_tokens == 0)
+        {
+            bail!(
+                "translation alignment limits must be positive and max_corrections must not exceed batch_size when enabled"
+            );
+        }
+        if self.translation.alignment_check
+            && self.translation.alignment_context_cues > self.translation.alignment_batch_size
+        {
+            bail!("translation.alignment_context_cues must not exceed alignment_batch_size");
+        }
         for (name, value) in [
             ("source_language", &self.translation.source_language),
             ("target_language", &self.translation.target_language),
@@ -309,6 +337,15 @@ impl Config {
                 .is_some_and(|model| model.trim().is_empty())
         {
             bail!("translation.consistency_model must not be empty when configured");
+        }
+        if self.translation.alignment_check
+            && self
+                .translation
+                .alignment_model
+                .as_deref()
+                .is_some_and(|model| model.trim().is_empty())
+        {
+            bail!("translation.alignment_model must not be empty when configured");
         }
         if !(0.0..=1.0).contains(&self.translation.min_target_script_ratio) {
             bail!("translation.min_target_script_ratio must be between 0 and 1");
@@ -714,7 +751,7 @@ fn default_true() -> bool {
     true
 }
 fn default_batch_size() -> usize {
-    80
+    32
 }
 fn default_min_batch_size() -> usize {
     1
@@ -747,6 +784,18 @@ fn default_consistency_max_corrections() -> usize {
     64
 }
 fn default_consistency_max_output_tokens() -> u32 {
+    4_096
+}
+fn default_alignment_batch_size() -> usize {
+    8
+}
+fn default_alignment_context_cues() -> usize {
+    6
+}
+fn default_alignment_max_corrections() -> usize {
+    8
+}
+fn default_alignment_max_output_tokens() -> u32 {
     4_096
 }
 fn default_auto_apply_confidence() -> f32 {

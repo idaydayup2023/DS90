@@ -21,6 +21,9 @@ enum Command {
     Subtitles {
         #[arg(long)]
         config: PathBuf,
+        /// Translate media in this local directory instead of configured source storage.
+        #[arg(long, value_name = "DIRECTORY")]
+        local_dir: Option<PathBuf>,
         #[arg(long)]
         dry_run: bool,
         #[arg(long)]
@@ -72,11 +75,21 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Subtitles {
             config,
+            local_dir,
             dry_run,
             force,
             limit,
         } => {
-            let cfg = load_runtime_config(config)?;
+            let mut cfg = load_runtime_config(config)?;
+            if let Some(local_dir) = local_dir {
+                cfg.source = subtrans::config::StorageConfig::Local {
+                    root: local_dir.clone(),
+                };
+                println!(
+                    "subtitles local_mode root={} migration=disabled",
+                    local_dir.display()
+                );
+            }
             subtrans::subtitles::run(&cfg, dry_run, force, limit)
         }
         Command::Migrate { command } => match command {

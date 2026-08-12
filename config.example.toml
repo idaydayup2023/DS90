@@ -59,15 +59,17 @@ provider = "ollama"
 base_url = "http://127.0.0.1:11434"
 model = "translategemma:12b"
 # TranslateGemma 负责翻译；通用模型负责整片编辑审校。
-consistency_model = "gemma4:12b"
+consistency_model = "gemma4:12b-mlx"
+# 实片对照表明 TranslateGemma 不适合自审：会漏掉大量串句，因此保留独立通用模型。
+alignment_model = "gemma4:12b-mlx"
 source_language = "English"
 source_language_code = "en"
 target_language = "Simplified Chinese"
 target_language_code = "zh-CN"
 bilingual = true
-# 默认顺序处理 80 条；每批携带前后各 6 条只读上下文。结构校验失败时
+# 默认顺序处理 32 条；每批只携带前 6 条只读上下文。结构校验失败时
 # 立即拆小，极端情况下单条补译；仅缺少合法索引时不重译整批。
-batch_size = 80
+batch_size = 32
 min_batch_size = 1
 context_cues = 6
 timeout_seconds = 300
@@ -84,6 +86,13 @@ consistency_max_chars = 120000
 # 校对只允许有限数量的跨行一致性修正，禁止把它变成全文重译。
 consistency_max_corrections = 64
 consistency_max_output_tokens = 4096
+# 术语校对完成后每次最多审 8 条；上下文只用于理解，不允许把相邻字幕内容
+# 移入当前句。结构或编号失败会继续拆小，单条仍不合法才停止发布。
+alignment_check = true
+alignment_batch_size = 8
+alignment_context_cues = 6
+alignment_max_corrections = 8
+alignment_max_output_tokens = 4096
 
 # OpenAI-compatible 示例：
 # provider = "openai_compatible"

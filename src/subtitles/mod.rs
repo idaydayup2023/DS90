@@ -439,6 +439,16 @@ pub fn doctor(cfg: &Config) -> Result<()> {
     {
         required_models.push(model);
     }
+    if cfg.translation.alignment_check
+        && let Some(model) = cfg
+            .translation
+            .alignment_model
+            .as_deref()
+            .or(cfg.translation.consistency_model.as_deref())
+        && !required_models.contains(&model)
+    {
+        required_models.push(model);
+    }
     for model in required_models {
         if !body.contains(model) {
             bail!(

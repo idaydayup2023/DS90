@@ -21,6 +21,7 @@ fn translation_config() -> TranslationConfig {
         base_url: "http://127.0.0.1:11434".to_owned(),
         model: "model-a".to_owned(),
         consistency_model: None,
+        alignment_model: None,
         api_key_env: None,
         source_language: "English".to_owned(),
         source_language_code: "en".to_owned(),
@@ -40,6 +41,11 @@ fn translation_config() -> TranslationConfig {
         consistency_max_chars: 120_000,
         consistency_max_corrections: 64,
         consistency_max_output_tokens: 4_096,
+        alignment_check: false,
+        alignment_batch_size: 32,
+        alignment_context_cues: 6,
+        alignment_max_corrections: 32,
+        alignment_max_output_tokens: 4_096,
     }
 }
 

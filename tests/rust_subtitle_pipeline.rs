@@ -237,7 +237,6 @@ fn omitted_repeated_cue_is_repaired_without_retranslating_valid_items() {
             (1, "杰斯。"),
             (3, "你做了什么？"),
             (4, "你做了什么？"),
-            (5, "回答我。"),
         ]),
         Reply::Translations(vec![(2, "杰斯。")]),
         Reply::Translations(vec![(5, "回答我。")]),
@@ -271,6 +270,7 @@ fn complete_subtitle_consistency_review_applies_only_returned_corrections() {
     fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
     let (base_url, server) = ollama_server(vec![
         Reply::Translations(vec![(1, "你好，约翰"), (2, "再见，强")]),
+        Reply::Malformed(r#"{"corrections":[{"index":2,"text":"再见，约翰"," ":"invalid"}]}"#),
         Reply::Corrections(vec![(2, "再见，约翰")]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
@@ -284,6 +284,82 @@ fn complete_subtitle_consistency_review_applies_only_returned_corrections() {
     assert!(output.contains("你好，约翰"));
     assert!(output.contains("再见，约翰"));
     assert!(!output.contains("再见，强"));
+}
+
+#[test]
+fn cue_alignment_review_repairs_neighbor_shift_without_changing_source_timing() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let stem = "Alignment.Movie.2026.WEB-DL";
+    fs::write(source.join(format!("{stem}.mkv")), b"video").unwrap();
+    let srt = "1\n00:00:01,000 --> 00:00:02,000\nSmash it to pieces.\n\n2\n00:00:03,000 --> 00:00:04,000\nLeave now.\n\n3\n00:00:05,000 --> 00:00:06,000\nAnswer me.\n\n";
+    fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
+    fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
+    let (base_url, server) = ollama_server(vec![
+        Reply::Translations(vec![(1, "现在离开。"), (2, "回答我。"), (3, "把它砸碎。")]),
+        Reply::Corrections(vec![(1, "把它砸碎。"), (2, "现在离开。"), (3, "回答我。")]),
+    ]);
+    let mut cfg = support::config(root.path(), &source, &destination);
+    cfg.translation.base_url = base_url;
+    cfg.translation.alignment_check = true;
+    cfg.translation.alignment_batch_size = 3;
+    cfg.translation.alignment_context_cues = 1;
+    cfg.translation.alignment_max_corrections = 3;
+
+    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
+    server.join().unwrap();
+
+    let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
+    let cues = subtrans::subtitles::parse_srt(&output).unwrap();
+    assert_eq!(cues.len(), 3);
+    assert_eq!(cues[0].start_ms, 1_000);
+    assert_eq!(cues[0].text, "把它砸碎。\nSmash it to pieces.");
+    assert_eq!(cues[1].text, "现在离开。\nLeave now.");
+    assert_eq!(cues[2].text, "回答我。\nAnswer me.");
+}
+
+#[test]
+fn malformed_alignment_batch_is_split_until_exact_indices_are_auditable() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let stem = "Adaptive.Alignment.Movie.2026.WEB-DL";
+    fs::write(source.join(format!("{stem}.mkv")), b"video").unwrap();
+    let srt = "1\n00:00:01,000 --> 00:00:02,000\nFirst.\n\n2\n00:00:03,000 --> 00:00:04,000\nSecond.\n\n3\n00:00:05,000 --> 00:00:06,000\nThird.\n\n4\n00:00:07,000 --> 00:00:08,000\nFourth.\n\n";
+    fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
+    fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
+    let (base_url, server) = ollama_server(vec![
+        Reply::Translations(vec![
+            (1, "第二。"),
+            (2, "第三。"),
+            (3, "第四。"),
+            (4, "第一。"),
+        ]),
+        Reply::Malformed("not-json"),
+        Reply::Malformed("still-not-json"),
+        Reply::Corrections(vec![(1, "第一。"), (2, "第二。")]),
+        Reply::Corrections(vec![(3, "第三。"), (4, "第四。")]),
+    ]);
+    let mut cfg = support::config(root.path(), &source, &destination);
+    cfg.translation.base_url = base_url;
+    cfg.translation.alignment_check = true;
+    cfg.translation.alignment_batch_size = 4;
+    cfg.translation.alignment_context_cues = 1;
+    cfg.translation.alignment_max_corrections = 4;
+
+    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
+    server.join().unwrap();
+
+    let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
+    assert!(output.contains("第一。\nFirst."));
+    assert!(output.contains("第二。\nSecond."));
+    assert!(output.contains("第三。\nThird."));
+    assert!(output.contains("第四。\nFourth."));
 }
 
 enum Reply<'a> {

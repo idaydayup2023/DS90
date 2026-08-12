@@ -14,7 +14,7 @@ use crate::config::{LlmProvider, TranslationConfig};
 use super::quality::validate_translation_quality;
 use super::srt::{Cue, single_line};
 
-const PROMPT_VERSION: &str = "subtrans-translation-context-json-v3";
+const PROMPT_VERSION: &str = "subtrans-translation-cue-binding-json-v4";
 
 #[derive(Debug, Serialize)]
 struct PromptLine<'a> {
@@ -28,6 +28,14 @@ struct AuditLine<'a> {
     index: u32,
     source: &'a str,
     translation: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct AlignmentLine<'a> {
+    index: u32,
+    source: &'a str,
+    translation: &'a str,
+    review: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,7 +84,13 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<Vec<Cue>> {
     }
     if cfg.consistency_check && cues.len() > 1 {
         println!("translation consistency_check cues={}", cues.len());
-        audit_consistency(&client, api_key.as_deref(), cues, &mut translated, cfg)?;
+        let corrected = audit_consistency(&client, api_key.as_deref(), cues, &mut translated, cfg)?;
+        println!("translation consistency_check corrected={corrected}");
+    }
+    if cfg.alignment_check {
+        println!("translation alignment_check cues={}", cues.len());
+        let corrected = audit_alignment(&client, api_key.as_deref(), cues, &mut translated, cfg)?;
+        println!("translation alignment_check corrected={corrected}");
     }
     let output = render(cues, &translated, cfg.bilingual)?;
     validate_translation_quality(
@@ -123,7 +137,7 @@ fn translate_range_adaptive(
     while let Some(range) = pending.pop_front() {
         let prompt = build_prompt(cues, range.clone(), cfg)?;
         let expected = &cues[range.clone()];
-        let context = prompt_context_range(cues.len(), range.clone(), cfg.context_cues);
+        let context = prompt_context_range(range.clone(), cfg.context_cues);
         let ignored_context_indices: BTreeSet<u32> = cues[context]
             .iter()
             .filter(|cue| !expected.iter().any(|item| item.index == cue.index))
@@ -312,7 +326,11 @@ pub fn prompt_version() -> &'static str {
 }
 
 fn build_prompt(cues: &[Cue], core: Range<usize>, cfg: &TranslationConfig) -> Result<String> {
-    let context = prompt_context_range(cues.len(), core.clone(), cfg.context_cues);
+    let example_index = cues
+        .get(core.start)
+        .context("translation prompt core range starts outside source cues")?
+        .index;
+    let context = prompt_context_range(core.clone(), cfg.context_cues);
     let context_start = context.start;
     let context_end = context.end;
     let lines: Vec<PromptLine<'_>> = cues[context_start..context_end]
@@ -329,8 +347,11 @@ fn build_prompt(cues: &[Cue], core: Range<usize>, cfg: &TranslationConfig) -> Re
         "Protocol: {PROMPT_VERSION}. You are a professional {} ({}) to {} ({}) translator. \
          Accurately convey meaning and nuances while following {} grammar, vocabulary, and cultural conventions. \
          Input items with translate=false are read-only neighboring context: use them for pronouns, names, tone, and continuity, \
-         but do not return them. Return exactly one JSON object with shape \
-         {{\"translations\":[{{\"index\":1,\"text\":\"translation\"}}]}} containing every translate=true index exactly once. \
+         but never copy, translate, complete, or move any of their content into another item. Every index is an indivisible source-to-target binding: \
+         each returned text must translate only the source text at that same index. Never merge adjacent cues, split one cue across indices, shift dialogue, \
+         or borrow words from a previous or next cue. If a source cue is a sentence fragment, preserve it as a fragment instead of completing it from context. \
+         Preserve every speaker and clause present inside that cue. Return exactly one JSON object with shape \
+         {{\"translations\":[{{\"index\":{example_index},\"text\":\"translation\"}}]}} containing every translate=true index exactly once. \
          Produce only {} translations, with no markdown, explanations, extra keys, or untranslated source text. \
          Please translate the following {} subtitle cues into {}:\n\n{}",
         cfg.source_language,
@@ -345,8 +366,8 @@ fn build_prompt(cues: &[Cue], core: Range<usize>, cfg: &TranslationConfig) -> Re
     ))
 }
 
-fn prompt_context_range(cue_count: usize, core: Range<usize>, context_cues: usize) -> Range<usize> {
-    core.start.saturating_sub(context_cues)..core.end.saturating_add(context_cues).min(cue_count)
+fn prompt_context_range(core: Range<usize>, context_cues: usize) -> Range<usize> {
+    core.start.saturating_sub(context_cues)..core.end
 }
 
 fn audit_consistency(
@@ -355,7 +376,7 @@ fn audit_consistency(
     cues: &[Cue],
     translations: &mut BTreeMap<u32, String>,
     cfg: &TranslationConfig,
-) -> Result<()> {
+) -> Result<usize> {
     let characters = cues.iter().try_fold(0usize, |total, cue| {
         let translation = translations
             .get(&cue.index)
@@ -389,7 +410,7 @@ fn audit_consistency(
          This is a consistency-only audit, not retranslation or proofreading. Correct only a cross-line conflict where the same named entity, title, \
          place, relationship, or recurring term has incompatible target renderings. Never change a line only for fluency, wording, punctuation, or style. \
          Do not rewrite lines that are already correct. Return at most {} corrections in exactly one JSON object \
-         {{\"corrections\":[{{\"index\":1,\"text\":\"corrected translation\"}}]}}. \
+         {{\"corrections\":[{{\"index\":{},\"text\":\"corrected translation\"}}]}}. \
          Use an empty corrections array when no change is needed. Each text must contain only the corrected target-language subtitle, never the source. \
          Include only existing indices, with no markdown, reasons, or extra keys.\n\n{}",
         cfg.source_language,
@@ -397,35 +418,161 @@ fn audit_consistency(
         cfg.target_language,
         cfg.target_language_code,
         cfg.consistency_max_corrections,
+        cues[0].index,
         serde_json::to_string(&lines)?
     );
     let expected: BTreeSet<u32> = cues.iter().map(|cue| cue.index).collect();
     let model = cfg.consistency_model.as_deref().unwrap_or(&cfg.model);
-    let response = retry(cfg.max_retries, || {
-        request(
+    let corrections = request_audit_corrections(
+        client,
+        cfg,
+        api_key,
+        model,
+        &prompt,
+        cfg.consistency_max_output_tokens,
+        &expected,
+        cfg.consistency_max_corrections,
+        "consistency",
+    )?;
+    let corrected = corrections.len();
+    translations.extend(corrections);
+    Ok(corrected)
+}
+
+fn audit_alignment(
+    client: &Client,
+    api_key: Option<&str>,
+    cues: &[Cue],
+    translations: &mut BTreeMap<u32, String>,
+    cfg: &TranslationConfig,
+) -> Result<usize> {
+    let model = cfg
+        .alignment_model
+        .as_deref()
+        .or(cfg.consistency_model.as_deref())
+        .unwrap_or(&cfg.model);
+    let mut corrected = 0usize;
+    let mut pending = VecDeque::from(batch_ranges(
+        cues,
+        cfg.alignment_batch_size,
+        cfg.max_batch_chars,
+    ));
+    while let Some(core) = pending.pop_front() {
+        let context = prompt_context_range(core.clone(), cfg.alignment_context_cues);
+        let lines: Vec<AlignmentLine<'_>> = cues[context.clone()]
+            .iter()
+            .enumerate()
+            .map(|(offset, cue)| {
+                let position = context.start + offset;
+                Ok(AlignmentLine {
+                    index: cue.index,
+                    source: &cue.text,
+                    translation: translations.get(&cue.index).with_context(|| {
+                        format!("missing translation for alignment cue {}", cue.index)
+                    })?,
+                    review: position >= core.start && position < core.end,
+                })
+            })
+            .collect::<Result<_>>()?;
+        let prompt = format!(
+            "Protocol: {PROMPT_VERSION}-alignment. You are a strict subtitle source-to-target alignment auditor for {} ({}) to {} ({}). \
+             For every item with review=true, decide whether translation faithfully translates only the source at the SAME index. \
+             Items with review=false are read-only context. Context may clarify names, pronouns, tone, and an incomplete sentence, but its words must never be \
+             added to, moved into, or substituted for a reviewed index. Correct a reviewed item when its translation belongs wholly or partly to a neighboring \
+             cue, omits or invents a speaker or clause, changes the meaning, or completes a fragment with content absent from that source. Preserve fragments \
+             as fragments and preserve every speaker and clause that actually occurs at the reviewed index. Account for every content-bearing action, object, \
+             negation, title, and domain term; reject a generic paraphrase that drops or replaces one of them. Do not change a faithful line merely for style. \
+             Return at most {} corrections in exactly one JSON object \
+             {{\"corrections\":[{{\"index\":{},\"text\":\"replacement translation\"}}]}}. Each replacement must be a complete translation of only the \
+             source at the same index. Return an empty corrections array when every reviewed item is aligned. Include only review=true indices, with no \
+             markdown, reasons, source text, or extra keys.\n\n{}",
+            cfg.source_language,
+            cfg.source_language_code,
+            cfg.target_language,
+            cfg.target_language_code,
+            cfg.alignment_max_corrections,
+            cues[core.start].index,
+            serde_json::to_string(&lines)?
+        );
+        let expected: BTreeSet<u32> = cues[core.clone()].iter().map(|cue| cue.index).collect();
+        let result = request_audit_corrections(
             client,
             cfg,
             api_key,
             model,
             &prompt,
-            cfg.consistency_max_output_tokens,
-        )
-    })
-    .context("translation consistency service request failed")?;
-    let corrections = parse_consistency(&response, &expected, cfg.consistency_max_corrections)
-        .context("translation consistency audit failed strict checks")?;
-    translations.extend(corrections);
-    Ok(())
+            cfg.alignment_max_output_tokens,
+            &expected,
+            cfg.alignment_max_corrections,
+            &format!("alignment cues {}..{}", core.start, core.end),
+        );
+        match result {
+            Ok(corrections) => {
+                corrected = corrected.saturating_add(corrections.len());
+                translations.extend(corrections);
+            }
+            Err(_) if core.len() > 1 => {
+                let midpoint = core.start + core.len() / 2;
+                println!(
+                    "translation alignment_check split={}..{} at={midpoint}",
+                    core.start, core.end
+                );
+                pending.push_front(midpoint..core.end);
+                pending.push_front(core.start..midpoint);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(corrected)
 }
 
+#[cfg(test)]
 fn parse_consistency(
     response: &str,
     expected: &BTreeSet<u32>,
     max_corrections: usize,
 ) -> Result<BTreeMap<u32, String>> {
+    validate_corrections(
+        parse_consistency_envelope(response)?,
+        expected,
+        max_corrections,
+    )
+}
+
+fn parse_consistency_envelope(response: &str) -> Result<ConsistencyEnvelope> {
     let normalized = normalize_known_json_keys(response);
-    let envelope: ConsistencyEnvelope = serde_json::from_str(normalized.trim())
-        .context("consistency response is not the required JSON object")?;
+    let trimmed = strip_single_json_fence(normalized.trim());
+    let value: Value = serde_json::from_str(trimmed)
+        .context("audit response is not valid JSON after safe wrapper normalization")?;
+    match value {
+        Value::Array(items) => Ok(ConsistencyEnvelope {
+            corrections: serde_json::from_value(Value::Array(items))
+                .context("audit correction array contains an invalid item")?,
+        }),
+        Value::Object(items) if items.is_empty() => Ok(ConsistencyEnvelope {
+            corrections: Vec::new(),
+        }),
+        value => serde_json::from_value(value)
+            .context("audit response is not the required corrections object or array"),
+    }
+}
+
+fn strip_single_json_fence(response: &str) -> &str {
+    let Some(inner) = response
+        .strip_prefix("```json")
+        .or_else(|| response.strip_prefix("```JSON"))
+        .or_else(|| response.strip_prefix("```"))
+    else {
+        return response;
+    };
+    inner.strip_suffix("```").map(str::trim).unwrap_or(response)
+}
+
+fn validate_corrections(
+    envelope: ConsistencyEnvelope,
+    expected: &BTreeSet<u32>,
+    max_corrections: usize,
+) -> Result<BTreeMap<u32, String>> {
     if envelope.corrections.len() > max_corrections {
         bail!(
             "consistency response contains {} corrections, exceeding configured maximum {max_corrections}",
@@ -449,6 +596,60 @@ fn parse_consistency(
         }
     }
     Ok(corrections)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn request_audit_corrections(
+    client: &Client,
+    cfg: &TranslationConfig,
+    api_key: Option<&str>,
+    model: &str,
+    prompt: &str,
+    max_output_tokens: u32,
+    expected: &BTreeSet<u32>,
+    max_corrections: usize,
+    audit_name: &str,
+) -> Result<BTreeMap<u32, String>> {
+    let response = retry(cfg.max_retries, || {
+        request(client, cfg, api_key, model, prompt, max_output_tokens)
+    })
+    .with_context(|| format!("translation {audit_name} service request failed"))?;
+    let envelope = match parse_consistency_envelope(&response) {
+        Ok(envelope) => envelope,
+        Err(first_error) => {
+            println!("translation {audit_name} response_reformat=true");
+            let repair_prompt = format!(
+                "Protocol: {PROMPT_VERSION}-audit-json-reformat. Your previous {audit_name} response was not valid under the required strict JSON schema. \
+                 Reformat the SAME intended corrections without adding, removing, renumbering, translating, or otherwise changing any index or text value. \
+                 Return exactly one JSON object {{\"corrections\":[{{\"index\":{},\"text\":\"corrected target text\"}}]}} with at most \
+                 {max_corrections} items and no markdown, reasons, or extra keys. Previous response as a JSON string:\n{}",
+                expected.iter().next().copied().unwrap_or_default(),
+                serde_json::to_string(&response)?
+            );
+            let repaired = retry(cfg.max_retries, || {
+                request(
+                    client,
+                    cfg,
+                    api_key,
+                    model,
+                    &repair_prompt,
+                    max_output_tokens,
+                )
+            })
+            .with_context(|| {
+                format!(
+                    "translation {audit_name} response reformat request failed after: {first_error:#}"
+                )
+            })?;
+            parse_consistency_envelope(&repaired).with_context(|| {
+                format!(
+                    "translation {audit_name} response remained structurally invalid after one reformat attempt; first error: {first_error:#}"
+                )
+            })?
+        }
+    };
+    validate_corrections(envelope, expected, max_corrections)
+        .with_context(|| format!("translation {audit_name} failed strict correction checks"))
 }
 
 fn normalize_known_json_keys(response: &str) -> Cow<'_, str> {
@@ -475,6 +676,7 @@ fn request(
                 "prompt": prompt,
                 "stream": false,
                 "format": "json",
+                "think": false,
                 "keep_alive": "10m",
                 "options": {
                     "temperature": 0.0,
@@ -581,6 +783,10 @@ target_language_code = "zh-CN"
         assert!(prompt.contains("professional English (en) to Simplified Chinese (zh-CN)"));
         assert!(prompt.contains("\"index\":1,\"text\":\"Line 1\",\"translate\":false"));
         assert!(prompt.contains("\"index\":3,\"text\":\"Line 3\",\"translate\":true"));
+        assert!(!prompt.contains("\"index\":7"));
+        assert!(prompt.contains("{\"translations\":[{\"index\":3,\"text\":\"translation\"}]}"));
+        assert!(prompt.contains("Every index is an indivisible source-to-target binding"));
+        assert!(prompt.contains("preserve it as a fragment"));
         assert!(prompt.contains("\n\n["));
     }
 
@@ -595,6 +801,9 @@ target_language_code = "zh-CN"
         .unwrap();
         assert_eq!(corrections.get(&2).map(String::as_str), Some("修正译文"));
         assert!(parse_consistency(r#"{"corrections":[]}"#, &expected, 2).is_ok());
+        assert!(parse_consistency(r#"[]"#, &expected, 2).is_ok());
+        assert!(parse_consistency(r#"{}"#, &expected, 2).is_ok());
+        assert!(parse_consistency("```json\n[]\n```", &expected, 2).is_ok());
         assert!(
             parse_consistency(
                 r#"{"corrections":[{"index":3,"text":"越界"}]}"#,
