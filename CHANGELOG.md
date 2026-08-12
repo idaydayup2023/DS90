@@ -1,13 +1,63 @@
 # Changelog
 
-## 3.0.0 - 2026-08-09
+本文件记录 `subtrans` 每个正式发布版本面向用户的变化。格式遵循
+[Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循
+[Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-- 将执行程序统一为 Rust `subtrans`，移除运行时自动安装和 Python 核心依赖。
-- 将范围收敛为字幕翻译与目录迁移，删除剧情生成、IMDB 泛化补全、旧智能体/MCP 包装及重复入口。
+## [Unreleased]
+
+### Changed
+
+- 后续变更在发布前先写入本节；发布时移动到带日期的版本章节。
+
+## [3.1.1] - 2026-08-12
+
+### Added
+
+- 当外置和内置英文字幕都不存在时，调用配置的 ASR worker；未配置 ASR 时给出可执行的安装、模型和配置指引。
+- 为 ffmpeg、ffprobe、Ollama、ASR/OCR worker 及 Python 模块缺失增加详细的命令行诊断信息。
+- 新增审校最大尝试次数 `translation.alignment_max_attempts`，默认值为 3。
+
+### Changed
+
+- 没有内置英文字幕时，采用已经通过 UTF-8、SRT 结构和英语内容质量检查的外置英文字幕。
+- 审校服务失败、返回无法解析或语境无法判定时记录警告并继续发布，不再阻断已经通过硬质量门的字幕。
+- 同一字幕编号连续 3 次仍被审校模型否决时，仅该条保留英文原文，其余字幕继续翻译和发布。
+- 内置英文文本流提取会依次尝试所有候选流，并在全部失败时汇总各流错误。
+
+## [3.1.0] - 2026-08-12
+
+### Added
+
+- 发布 Rust-first 的 `subtrans` 单文件命令行程序，核心范围为字幕翻译和安全目录迁移。
+- 支持 FTP 源和目标存储、原子上传、迁移计划哈希批准、断点状态以及四类可配置媒体目录布局。
+- 支持本地目录纯字幕翻译模式，不启用目录迁移。
+- 支持带只读前导语境的批量翻译、逐条索引绑定、术语一致性校对和对应性审校。
+- 支持内置文本字幕、PGS OCR 和 ASR 外部 worker，并将 worker 命令与版本纳入缓存身份。
+- 提供 Apple Silicon arm64 Release 二进制和 SHA-256 校验文件。
+
+### Changed
+
+- 目录迁移分类改为可审计的确定性规则；`4K`、`UHD`、`2160p`、`HEVC`、`HDR` 和 `DV` 仅作为画质证据，不决定电影或电视剧类型。
+- 不再依赖 NFS 自动挂载；Apple Silicon 执行端通过 FTP 访问群晖媒体。
+- 翻译失败只影响当前视频，后续视频继续处理；有效翻译产物可安全复用。
+
+## [3.0.0] - 2026-08-09
+
+### Added
+
+- 将执行程序统一为 Rust `subtrans`，将范围收敛为字幕翻译与目录迁移。
 - 新增严格 TOML 配置、环境变量密钥、local/FTP 存储抽象和 SQLite 可恢复状态。
 - 新增严格 SRT、结构化批次翻译、输出质量门、参数完整缓存与原子发布。
 - 新增可解释规则分类、不可变迁移计划、计划哈希批准、源指纹、冲突检测、SHA-256 校验与安全提交。
-- 计划绑定配置与存储端点；新增人工复核命令、逐路径强类型覆盖和字幕就绪门禁。
-- 新增 SQLite 租约、逐文件迁移进度、发布后崩溃恢复及同 NAS FTP 服务器端移动。
-- 新增 ffprobe 字幕轨选择、ASR/PGS 受控 worker、生成源缓存、外部进程超时与翻译质量门。
-- 将 4K/UHD/2160p/HEVC/HDR/DV 定义为中性画质证据；新增 4K 电影、4K 剧集、电影系列和 `Supergirl.2026.2160p...` 回归测试。
+- 新增 ffprobe 字幕轨选择、ASR/PGS 受控 worker、生成源缓存和外部进程超时。
+
+### Removed
+
+- 删除运行时自动安装、Python 核心依赖、剧情生成、IMDB 泛化补全、旧智能体/MCP 包装及重复入口。
+
+> `3.0.0` 是 V3 开发基线记录，未创建对应的 GitHub Release；正式 V3 Release 从 `3.1.0` 开始。
+
+[Unreleased]: https://github.com/idaydayup2023/DS90/compare/v3.1.1...HEAD
+[3.1.1]: https://github.com/idaydayup2023/DS90/compare/v3.1.0...v3.1.1
+[3.1.0]: https://github.com/idaydayup2023/DS90/releases/tag/v3.1.0

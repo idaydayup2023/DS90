@@ -1,5 +1,9 @@
 # subtrans V3
 
+版本变更记录见 [`CHANGELOG.md`](CHANGELOG.md)。每次正式 Release 都必须先把
+`[Unreleased]` 内容整理到与 Cargo 版本和 Git 标签一致的带日期章节；发布流程会
+校验该章节，并直接使用它生成 GitHub Release 说明。
+
 `subtrans` 是面向 Apple Silicon 一体化运行、兼容无容器 NAS 存储的单一 Rust 命令行程序，只保留两项能力：
 
 1. 获取、翻译并校验字幕；
