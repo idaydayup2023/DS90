@@ -1,5 +1,6 @@
 pub mod artifact;
 pub mod config;
+pub mod metadata;
 pub mod migration;
 pub mod state;
 pub mod storage;

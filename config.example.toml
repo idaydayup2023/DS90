@@ -26,6 +26,35 @@ root = "/"
 timeout_seconds = 300
 allow_plaintext = true # 目标根下必须能看到 MOVIE、TV、X-Movie、X-TV
 
+# 资料拉取使用 Infuse 自身默认的 TMDB 影片库。配置只保存 API Read Access
+# Token 的环境变量名，真实 Token 不得写入 TOML、日志或 Git。
+[metadata]
+enabled = true
+base_url = "https://api.themoviedb.org/3"
+image_base_url = "https://image.tmdb.org/t/p/original"
+api_token_env = "SUBTRANS_TMDB_READ_TOKEN"
+language = "zh-CN"
+fallback_language = "en-US"
+timeout_seconds = 30
+max_retries = 2
+max_response_bytes = 4194304
+max_image_bytes = 33554432
+match_threshold = 0.85
+ambiguity_gap = 0.08
+# TMDB 条款不允许把 API 数据无限期缓存；最大只能配置为 180 天。
+refresh_after_days = 180
+
+# 自动匹配有歧义时必须按源相对路径填写精确 ID。电视剧还必须给出季集。
+# [metadata.overrides."incoming/Supergirl.2026.2160p.WEB-DL.mkv"]
+# kind = "movie"
+# tmdb_id = 123456
+
+# [metadata.overrides."incoming/Show.Name.S01E02.2160p.WEB-DL.mkv"]
+# kind = "tv"
+# tmdb_id = 654321
+# season = 1
+# episode = 2
+
 [subtitles]
 video_extensions = ["mkv", "mp4", "avi", "mov", "m4v", "ts"]
 min_video_bytes = 1048576
@@ -104,7 +133,7 @@ alignment_max_output_tokens = 4096
 
 [migration]
 auto_apply_confidence = 0.95
-sidecar_extensions = ["srt", "ass", "ssa", "vtt", "nfo", "json"]
+sidecar_extensions = ["srt", "ass", "ssa", "vtt", "nfo", "json", "jpg", "png"]
 # 字幕翻译和目录迁移都会跳过带有这些未完成下载标记的视频。
 incomplete_marker_extensions = ["aria2", "part", "crdownload"]
 require_translated_subtitle = true

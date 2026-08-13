@@ -13,9 +13,75 @@ pub struct Config {
     pub state: StateConfig,
     pub source: StorageConfig,
     pub destination: StorageConfig,
+    pub metadata: MetadataConfig,
     pub subtitles: SubtitleConfig,
     pub translation: TranslationConfig,
     pub migration: MigrationConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MetadataConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_metadata_base_url")]
+    pub base_url: String,
+    #[serde(default = "default_metadata_image_base_url")]
+    pub image_base_url: String,
+    #[serde(default = "default_metadata_api_token_env")]
+    pub api_token_env: String,
+    #[serde(default = "default_metadata_language")]
+    pub language: String,
+    #[serde(default = "default_metadata_fallback_language")]
+    pub fallback_language: String,
+    #[serde(default = "default_metadata_timeout")]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_metadata_retries")]
+    pub max_retries: u32,
+    #[serde(default = "default_metadata_max_response_bytes")]
+    pub max_response_bytes: usize,
+    #[serde(default = "default_metadata_max_image_bytes")]
+    pub max_image_bytes: usize,
+    #[serde(default = "default_metadata_match_threshold")]
+    pub match_threshold: f32,
+    #[serde(default = "default_metadata_ambiguity_gap")]
+    pub ambiguity_gap: f32,
+    #[serde(default = "default_metadata_refresh_after_days")]
+    pub refresh_after_days: u16,
+    #[serde(default)]
+    pub overrides: BTreeMap<String, MetadataOverride>,
+}
+
+impl Default for MetadataConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: default_metadata_base_url(),
+            image_base_url: default_metadata_image_base_url(),
+            api_token_env: default_metadata_api_token_env(),
+            language: default_metadata_language(),
+            fallback_language: default_metadata_fallback_language(),
+            timeout_seconds: default_metadata_timeout(),
+            max_retries: default_metadata_retries(),
+            max_response_bytes: default_metadata_max_response_bytes(),
+            max_image_bytes: default_metadata_max_image_bytes(),
+            match_threshold: default_metadata_match_threshold(),
+            ambiguity_gap: default_metadata_ambiguity_gap(),
+            refresh_after_days: default_metadata_refresh_after_days(),
+            overrides: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MetadataOverride {
+    pub kind: OverrideKind,
+    pub tmdb_id: u64,
+    #[serde(default)]
+    pub season: Option<u16>,
+    #[serde(default)]
+    pub episode: Option<u16>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -376,6 +442,7 @@ impl Config {
         if !(0.0..=1.0).contains(&self.migration.auto_apply_confidence) {
             bail!("migration.auto_apply_confidence must be between 0 and 1");
         }
+        validate_metadata(&self.metadata)?;
         let translation_url = reqwest::Url::parse(&self.translation.base_url)
             .context("translation.base_url must be a valid absolute URL")?;
         if !matches!(translation_url.scheme(), "http" | "https") {
@@ -652,6 +719,129 @@ impl TranslationConfig {
     }
 }
 
+impl MetadataConfig {
+    pub fn api_token(&self) -> Result<String> {
+        match env::var(&self.api_token_env) {
+            Ok(token) if !token.trim().is_empty() => return Ok(token),
+            Ok(_) => bail!(
+                "TMDB API read token environment variable {} is empty. {}",
+                self.api_token_env,
+                tmdb_token_setup_guidance(&self.api_token_env)
+            ),
+            Err(env::VarError::NotUnicode(_)) => bail!(
+                "TMDB API read token environment variable {} is not valid Unicode. {}",
+                self.api_token_env,
+                tmdb_token_setup_guidance(&self.api_token_env)
+            ),
+            Err(env::VarError::NotPresent) => {}
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let output = std::process::Command::new("/bin/launchctl")
+                .args(["getenv", &self.api_token_env])
+                .output()
+                .context("failed to query the current macOS launchd environment for the TMDB API read token")?;
+            if output.status.success() {
+                let token = String::from_utf8(output.stdout).context(
+                    "TMDB API read token from the macOS launchd environment is not valid Unicode",
+                )?;
+                let token = token.trim_end_matches(['\r', '\n']).to_owned();
+                if !token.trim().is_empty() {
+                    return Ok(token);
+                }
+            }
+
+            let output = std::process::Command::new("/usr/bin/security")
+                .args([
+                    "find-generic-password",
+                    "-s",
+                    "subtrans.tmdb.read-token",
+                    "-w",
+                ])
+                .output()
+                .context("failed to query macOS Keychain for the TMDB API read token")?;
+            if output.status.success() {
+                let token = String::from_utf8(output.stdout)
+                    .context("TMDB API read token from macOS Keychain is not valid Unicode")?;
+                let token = token.trim_end_matches(['\r', '\n']).to_owned();
+                if !token.trim().is_empty() {
+                    return Ok(token);
+                }
+            }
+        }
+
+        bail!(
+            "missing TMDB API read token. {}",
+            tmdb_token_setup_guidance(&self.api_token_env)
+        )
+    }
+}
+
+fn tmdb_token_setup_guidance(environment_name: &str) -> String {
+    let mut guidance = format!(
+        "Get an API Read Access Token at https://www.themoviedb.org/settings/api, then set it for this shell with `read -s \"{environment_name}?TMDB read token: \"; export {environment_name}; echo`"
+    );
+    if cfg!(target_os = "macos") {
+        guidance.push_str(
+            &format!(
+                "; to make it available to current-user launchd jobs without exposing it in shell history, run `read -s \"{environment_name}?TMDB read token: \"; launchctl setenv {environment_name} \"${environment_name}\"; export {environment_name}; echo`; for restart-safe fallback reuse that environment value with `security add-generic-password -U -a \"$USER\" -s \"subtrans.tmdb.read-token\" -w \"${environment_name}\"`"
+            ),
+        );
+    }
+    guidance.push_str("; verify with `subtrans doctor --config subtrans.toml`");
+    guidance
+}
+
+fn validate_metadata(metadata: &MetadataConfig) -> Result<()> {
+    for (name, value) in [
+        ("base_url", metadata.base_url.as_str()),
+        ("image_base_url", metadata.image_base_url.as_str()),
+    ] {
+        let url = reqwest::Url::parse(value)
+            .with_context(|| format!("metadata.{name} must be a valid absolute URL"))?;
+        if !matches!(url.scheme(), "http" | "https") {
+            bail!("metadata.{name} must use http or https");
+        }
+    }
+    validate_environment_name(&metadata.api_token_env)
+        .context("metadata.api_token_env is invalid")?;
+    if metadata.language.trim().is_empty() || metadata.fallback_language.trim().is_empty() {
+        bail!("metadata language values must not be empty");
+    }
+    if metadata.timeout_seconds == 0
+        || metadata.max_response_bytes < 1024
+        || metadata.max_image_bytes < 1024
+    {
+        bail!("metadata timeout and size limits must be positive and size limits >= 1024");
+    }
+    if !(0.0..=1.0).contains(&metadata.match_threshold)
+        || !(0.0..=1.0).contains(&metadata.ambiguity_gap)
+    {
+        bail!("metadata matching thresholds must be between 0 and 1");
+    }
+    if metadata.refresh_after_days == 0 || metadata.refresh_after_days > 180 {
+        bail!("metadata.refresh_after_days must be between 1 and 180");
+    }
+    for (path, decision) in &metadata.overrides {
+        crate::storage::validate_relative_path(path)
+            .with_context(|| format!("unsafe metadata override path {path:?}"))?;
+        if decision.tmdb_id == 0 {
+            bail!("metadata override tmdb_id must be positive for {path}");
+        }
+        match decision.kind {
+            OverrideKind::Movie if decision.season.is_some() || decision.episode.is_some() => {
+                bail!("movie metadata override must not include season/episode for {path}")
+            }
+            OverrideKind::Tv if decision.season.is_none() || decision.episode.is_none() => {
+                bail!("TV metadata override requires season and episode for {path}")
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn validate_storage(storage: &StorageConfig, name: &str) -> Result<()> {
     match storage {
         StorageConfig::Local { root } if root.as_os_str().is_empty() => {
@@ -704,6 +894,42 @@ fn validate_environment_name(value: &str) -> Result<()> {
 
 fn default_ftp_port() -> u16 {
     21
+}
+fn default_metadata_base_url() -> String {
+    "https://api.themoviedb.org/3".to_owned()
+}
+fn default_metadata_image_base_url() -> String {
+    "https://image.tmdb.org/t/p/original".to_owned()
+}
+fn default_metadata_api_token_env() -> String {
+    "SUBTRANS_TMDB_READ_TOKEN".to_owned()
+}
+fn default_metadata_language() -> String {
+    "zh-CN".to_owned()
+}
+fn default_metadata_fallback_language() -> String {
+    "en-US".to_owned()
+}
+fn default_metadata_timeout() -> u64 {
+    30
+}
+fn default_metadata_retries() -> u32 {
+    2
+}
+fn default_metadata_max_response_bytes() -> usize {
+    4 * 1024 * 1024
+}
+fn default_metadata_max_image_bytes() -> usize {
+    32 * 1024 * 1024
+}
+fn default_metadata_match_threshold() -> f32 {
+    0.85
+}
+fn default_metadata_ambiguity_gap() -> f32 {
+    0.08
+}
+fn default_metadata_refresh_after_days() -> u16 {
+    180
 }
 fn default_ftp_timeout() -> u64 {
     120
@@ -816,7 +1042,7 @@ fn default_video_extensions() -> Vec<String> {
 }
 
 fn default_sidecar_extensions() -> Vec<String> {
-    ["srt", "ass", "ssa", "vtt", "nfo", "json"]
+    ["srt", "ass", "ssa", "vtt", "nfo", "json", "jpg", "png"]
         .into_iter()
         .map(str::to_owned)
         .collect()
@@ -839,6 +1065,7 @@ mod tests {
         cfg.validate().unwrap();
         assert_eq!(cfg.state.lease_seconds, 7_200);
         assert!(cfg.migration.require_translated_subtitle);
+        assert!(cfg.metadata.enabled);
         assert!(matches!(cfg.source, StorageConfig::Ftp { .. }));
         assert!(matches!(cfg.destination, StorageConfig::Ftp { .. }));
     }
@@ -881,6 +1108,8 @@ root = "in"
 [destination]
 kind = "local"
 root = "out"
+[metadata]
+enabled = false
 [subtitles]
 [translation]
 provider = "ollama"
@@ -920,6 +1149,8 @@ root = "in"
 [destination]
 kind = "local"
 root = "out"
+[metadata]
+enabled = false
 [subtitles]
 [translation]
 provider = "ollama"
@@ -945,5 +1176,16 @@ directory_template = "{title_dot}/S{season_padded}"
 filename_template = "{source_file}"
 "#;
         assert!(toml::from_str::<Config>(raw).is_err());
+    }
+
+    #[test]
+    fn missing_tmdb_token_guidance_is_actionable_and_secret_free() {
+        let guidance = tmdb_token_setup_guidance("SUBTRANS_TMDB_READ_TOKEN");
+        assert!(guidance.contains("https://www.themoviedb.org/settings/api"));
+        assert!(guidance.contains("SUBTRANS_TMDB_READ_TOKEN"));
+        assert!(guidance.contains("subtrans doctor"));
+        if cfg!(target_os = "macos") {
+            assert!(guidance.contains("subtrans.tmdb.read-token"));
+        }
     }
 }

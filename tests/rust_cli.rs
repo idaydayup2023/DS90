@@ -22,8 +22,9 @@ fn single_binary_reports_name_version_and_help() {
     let help = subtrans().arg("--help").output().unwrap();
     assert!(help.status.success());
     let help = String::from_utf8_lossy(&help.stdout);
-    assert!(help.contains("Subtitle translation and safe media migration"));
+    assert!(help.contains("TMDB metadata, subtitle translation, and safe media migration"));
     assert!(help.contains("subtitles"));
+    assert!(help.contains("metadata"));
     assert!(help.contains("migrate"));
 }
 

@@ -4,10 +4,11 @@
 `[Unreleased]` 内容整理到与 Cargo 版本和 Git 标签一致的带日期章节；发布流程会
 校验该章节，并直接使用它生成 GitHub Release 说明。
 
-`subtrans` 是面向 Apple Silicon 一体化运行、兼容无容器 NAS 存储的单一 Rust 命令行程序，只保留两项能力：
+`subtrans` 是面向 Apple Silicon 一体化运行、兼容无容器 NAS 存储的单一 Rust 命令行程序。核心结果仍只有字幕翻译和目录迁移，另以影片资料准备作为两条流程共用的强制前置阶段：
 
-1. 获取、翻译并校验字幕；
-2. 生成可审计的媒体目录迁移计划，并在显式批准后安全执行。
+1. 从 TMDB 拉取 Infuse 可识别的海报与影片资料；
+2. 获取、翻译并校验字幕；
+3. 生成可审计的媒体目录迁移计划，并在显式批准后安全执行。
 
 V3 不沿用 V2 的 Python 运行时、运行时自动安装、剧情生成、IMDB 补全或让 LLM 决定媒体类型。V2 仍保留在 `version2` 分支。
 
@@ -29,6 +30,13 @@ cp config.example.toml subtrans.toml
 # FTP 账号必须来自环境变量；密码可隐藏输入，生产部署建议存入钥匙串。
 export SUBTRANS_FTP_USERNAME='<FTP账号>'
 read -s "SUBTRANS_FTP_PASSWORD?FTP password: "; export SUBTRANS_FTP_PASSWORD; echo
+# 在 TMDB 账号的 API 页面创建“API Read Access Token”，优先放入运行环境。
+read -s "SUBTRANS_TMDB_READ_TOKEN?TMDB read token: "; export SUBTRANS_TMDB_READ_TOKEN
+launchctl setenv SUBTRANS_TMDB_READ_TOKEN "$SUBTRANS_TMDB_READ_TOKEN"; echo
+# macOS 持久后备：复用刚才的环境变量，不把 Token 明文写进 shell 历史。
+# 不要省略 -w 后的变量；security 的交互密码框可能截断较长的 TMDB JWT。
+security add-generic-password -U -a "$USER" -s "subtrans.tmdb.read-token" \
+  -w "$SUBTRANS_TMDB_READ_TOKEN"
 ```
 
 配置采用严格 TOML：未知字段、字符串形式的布尔值和错误版本都会被拒绝。FTP 账号由 `SUBTRANS_FTP_USERNAME` 提供，不写入配置或计划；计划只保存账号 SHA-256 以绑定执行身份。上面的隐藏输入不会回显密码，也不会把密码写进 shell 历史。macOS 生产运行可把 FTP 密码存为与服务器、端口、运行时账号匹配的系统“互联网密码”；密码环境变量优先于钥匙串。
@@ -54,6 +62,29 @@ subtrans doctor --config subtrans.toml
 
 生产建议是让 `subtrans`、ffmpeg、Ollama/ASR 都运行在 Apple Silicon，群晖只通过 FTP 提供媒体；状态库放 Apple 本机磁盘。这样翻译完成状态、分类计划和迁移执行仍在同一个事务域内，同时不再依赖 macOS 网络卷挂载。部署步骤见 `docs/APPLE_SILICON_DEPLOYMENT.md`。
 
+## 影片海报与资料
+
+字幕翻译和新迁移计划都会先执行资料准备；任何影片匹配失败、候选歧义、海报缺失或资料清单校验失败都会阻止后续流程。资料类型沿用确定性分类规则，TMDB 只负责在已经确认的电影/剧集类型中查找条目，不能改变媒体类型。自动匹配不确定时，命令会打印精确的 `[metadata.overrides."源相对路径"]` 配置键；填入 `kind`、`tmdb_id`，电视剧再填 `season`/`episode` 后重试。
+
+也可独立递归处理配置源或任意本机目录：
+
+```sh
+# 仅显示将处理的文件，不联网、不写文件
+subtrans metadata --config subtrans.toml --local-dir "/本机/影片" --dry-run
+# 默认：复用有效清单；发现非 subtrans 管理的同名资料时停止，避免覆盖人工文件
+subtrans metadata --config subtrans.toml --local-dir "/本机/影片"
+# 补档：保留已有海报/NFO，只补缺少项并建立清单
+subtrans metadata --config subtrans.toml --local-dir "/本机/影片" --supplement
+# 强制更新：重新拉取并覆盖同名海报/NFO
+subtrans metadata --config subtrans.toml --local-dir "/本机/影片" --force
+```
+
+每个电影生成 `<视频名>.jpg`、可用时的 `<视频名>-fanart.jpg`、`<视频名>.nfo` 和 `<视频名>.subtrans.metadata.json`；这些文件会随视频一起进入迁移计划。电视剧生成同名分集图片、背景图和 episode NFO，但 Infuse 当前不能只靠本地电视剧文本资料完成剧集分组，因此必须继续保留规范的 `S01E01` 文件名并开启 Infuse 的在线元数据匹配。缓存最长 180 天；`--supplement` 不覆盖人工文件，只有 `--force` 明确授权覆盖。
+
+TMDB Token 的读取顺序是：进程环境变量、当前用户 launchd 环境、macOS 登录钥匙串中的 `subtrans.tmdb.read-token`。两处环境变量都缺失且钥匙串也没有时，命令行会显示 TMDB 获取页面、当前 shell/launchd 设置、钥匙串持久保存和 `doctor` 验证命令，不会静默跳过资料阶段。
+
+资料由 TMDB 提供。This product uses the TMDB API but is not endorsed or certified by TMDB. TMDB 没有承诺正式 SLA；选择它是因为 Infuse 本身以 TMDB 为默认库，匹配结果和海报体系最一致，程序另以重试、本地校验清单和有界缓存处理短时故障。
+
 ## 字幕翻译
 
 ```sh
@@ -64,7 +95,7 @@ subtrans subtitles --config subtrans.toml --force
 subtrans subtitles --config subtrans.toml --local-dir "/本机/待翻译目录"
 ```
 
-程序先收集同目录英文 SRT 和内置字幕：两者都有时交叉验证，仅有合格外置 SRT 时直接采用；都没有时调用 ASR。默认使用 `translategemma:12b` 顺序翻译：每批最多 32 条、8000 字符，并只携带前 6 条只读上下文，而不是并发争抢同一个 Ollama 模型。每个字幕编号都是不可拆分的英文—中文绑定；上下文只能帮助理解，不能把相邻句内容移入当前编号。网络或服务错误按配置重试；确定性的 JSON 结构错误会立即拆小异常批次，极端情况下带前导上下文逐条补译。若模型只漏掉重复短句等少量合法索引，程序保留本批已验证译文，仅补译缺失项；模型误回的已知只读邻句会被丢弃，提示范围外索引仍会拒绝。全部初译完成后由 `consistency_model` 做整片术语一致性校对，再由 `alignment_model` 分批核对同编号原文和译文。审校属于建议层：语境不足、服务失败或单条返回无法解析会记录明确警告并保留当前译文，不阻断上传；同一编号连续三次仍被校对模型否决时，该编号输出为单行英文原文，不再翻译，其余字幕照常发布。
+资料准备完成后，程序先收集同目录英文 SRT 和内置字幕：两者都有时交叉验证，仅有合格外置 SRT 时直接采用；都没有时调用 ASR。默认使用 `translategemma:12b` 顺序翻译：每批最多 32 条、8000 字符，并只携带前 6 条只读上下文，而不是并发争抢同一个 Ollama 模型。每个字幕编号都是不可拆分的英文—中文绑定；上下文只能帮助理解，不能把相邻句内容移入当前编号。网络或服务错误按配置重试；确定性的 JSON 结构错误会立即拆小异常批次，极端情况下带前导上下文逐条补译。若模型只漏掉重复短句等少量合法索引，程序保留本批已验证译文，仅补译缺失项；模型误回的已知只读邻句会被丢弃，提示范围外索引仍会拒绝。全部初译完成后由 `consistency_model` 做整片术语一致性校对，再由 `alignment_model` 分批核对同编号原文和译文。审校属于建议层：语境不足、服务失败或单条返回无法解析会记录明确警告并保留当前译文，不阻断上传；同一编号连续三次仍被校对模型否决时，该编号输出为单行英文原文，不再翻译，其余字幕照常发布。
 
 翻译和校对响应都必须是索引合法、无重复且无多余字段的 JSON；仅对已实测的无语义包装差异（校对裸数组、空对象、单层 JSON 围栏）和 TranslateGemma 的精确键名笔误 `"text:"` 做安全规范化，数组内项目仍只允许 `index` 与 `text`，其他未知字段和范围外编号一律拒绝。初译的结构或质量错误仍会阻止该视频发布；审校错误只会降级为可观察警告或逐条英文回退。发布前会复核字幕数量、时间轴、非空文本、目标文字比例和序列化结果。输出为 `<视频名>.ai.srt`，同时写入带源文件哈希、提示协议和全部翻译参数的 manifest；批次、上下文、模型或校对配置改变都会使旧缓存失效，只有 `--force` 会显式绕过仍然有效的缓存。
 
@@ -82,7 +113,7 @@ subtrans migrate plan --config subtrans.toml --output migration.plan.json
 subtrans migrate review --config subtrans.toml --plan migration.plan.json
 ```
 
-待确认项必须在 `[migration.overrides."源相对路径"]` 中明确填写电影或剧集属性，然后重新生成计划；禁止手改计划文件。翻译就绪 manifest 默认是迁移前置条件，也只能由逐文件覆盖中的 `allow_untranslated = true` 显式豁免。只有新计划不含待确认项时，才可用计划哈希批准执行：
+待确认项必须在 `[migration.overrides."源相对路径"]` 中明确填写电影或剧集属性，然后重新生成计划；禁止手改计划文件。有效的资料 manifest、NFO 和海报是不可豁免的迁移前置条件；翻译就绪 manifest 默认也是前置条件，只能由逐文件覆盖中的 `allow_untranslated = true` 显式豁免。只有新计划不含待确认项时，才可用计划哈希批准执行：
 
 ```sh
 subtrans migrate apply \

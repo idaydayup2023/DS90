@@ -10,11 +10,12 @@ use crate::artifact::{read_ready_artifact, video_identity};
 use crate::config::{
     Config, MigrationLayout, MigrationOverride, MigrationTitleRoute, OverrideKind, StorageConfig,
 };
+use crate::metadata::read_ready_metadata;
 use crate::storage::{FileEntry, Storage, open_storage, validate_relative_path};
 
 use super::classifier::{Classification, Evidence, MediaKind, RULE_VERSION, classify_path};
 
-const PLAN_SCHEMA_VERSION: u32 = 5;
+const PLAN_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceFingerprint {
@@ -190,6 +191,8 @@ impl PlanDocument {
 }
 
 pub fn build_plan(config: &Config, limit: Option<usize>) -> Result<PlanDocument> {
+    crate::metadata::ensure_before(config, false, limit)
+        .context("metadata prerequisite failed before migration planning")?;
     let storage = open_storage(&config.source).context("failed to open source storage")?;
     let mut entries = storage.list_recursive("")?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
@@ -229,6 +232,7 @@ pub fn build_plan(config: &Config, limit: Option<usize>) -> Result<PlanDocument>
             .unwrap_or_else(|| classify_path(&video.path));
         let destination_resolution = destination_for(config, &video.path, &classification)?;
         let subtitle_ready = read_ready_artifact(storage.as_ref(), video)?;
+        let metadata_ready = read_ready_metadata(storage.as_ref(), video, config)?;
         let allow_untranslated = decision.is_some_and(|decision| decision.allow_untranslated);
         let incomplete_marker = entries.iter().find(|entry| {
             !entry.is_dir
@@ -271,6 +275,12 @@ pub fn build_plan(config: &Config, limit: Option<usize>) -> Result<PlanDocument>
             && !allow_untranslated
         {
             blockers.push("valid translated subtitle artifact is required before migration".into());
+        }
+        if config.metadata.enabled && metadata_ready.is_none() {
+            blockers.push(
+                "valid TMDB metadata manifest, NFO, and poster are required before migration"
+                    .into(),
+            );
         }
         let status = if blockers.is_empty() {
             PlanStatus::Ready
@@ -575,6 +585,8 @@ fn sidecars_for(
             format!("{target_stem}.{extension}")
         } else if let Some(suffix) = stem.strip_prefix(&format!("{video_stem}.")) {
             format!("{target_stem}.{suffix}.{extension}")
+        } else if let Some(suffix) = stem.strip_prefix(&format!("{video_stem}-")) {
+            format!("{target_stem}-{suffix}.{extension}")
         } else if is_same_episode_sidecar(classification, &entry.path) {
             path.file_name()
                 .and_then(|value| value.to_str())
@@ -659,6 +671,7 @@ pub fn relevant_config_hash(config: &Config) -> Result<String> {
         source: StorageBinding,
         destination: StorageBinding,
         migration: &'a crate::config::MigrationConfig,
+        metadata: &'a crate::config::MetadataConfig,
         video_extensions: &'a [String],
         min_video_bytes: u64,
     }
@@ -666,6 +679,7 @@ pub fn relevant_config_hash(config: &Config) -> Result<String> {
         source: storage_binding(&config.source)?,
         destination: storage_binding(&config.destination)?,
         migration: &config.migration,
+        metadata: &config.metadata,
         video_extensions: &config.subtitles.video_extensions,
         min_video_bytes: config.subtitles.min_video_bytes,
     };

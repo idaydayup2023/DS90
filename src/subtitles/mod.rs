@@ -79,6 +79,8 @@ struct TrackDisposition {
 }
 
 pub fn run(cfg: &Config, dry_run: bool, force: bool, limit: Option<usize>) -> Result<()> {
+    crate::metadata::ensure_before(cfg, dry_run, limit)
+        .context("metadata prerequisite failed before subtitle translation")?;
     let storage = open_storage(&cfg.source)?;
     let entries = storage.list_recursive("")?;
     let videos = select_videos(&entries, cfg, limit);

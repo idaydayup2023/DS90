@@ -2,7 +2,7 @@
 
 ## 已选拓扑
 
-`subtrans`、ffmpeg/ffprobe、Ollama 和可选 ASR/OCR worker 统一运行在 Apple Silicon。群晖只提供 FTP 媒体存储；字幕就绪状态、分类、计划和迁移不拆成两个执行端，也不再依赖 NFS/SMB 网络卷。
+`subtrans`、TMDB 资料准备、ffmpeg/ffprobe、Ollama 和可选 ASR/OCR worker 统一运行在 Apple Silicon。群晖只提供 FTP 媒体存储；资料/字幕就绪状态、分类、计划和迁移不拆成两个执行端，也不再依赖 NFS/SMB 网络卷。
 
 本机保存以下内容：
 
@@ -31,12 +31,16 @@
 
 ```sh
 export SUBTRANS_FTP_USERNAME='<FTP账号>'
+read -s "SUBTRANS_TMDB_READ_TOKEN?TMDB read token: "; export SUBTRANS_TMDB_READ_TOKEN
+launchctl setenv SUBTRANS_TMDB_READ_TOKEN "$SUBTRANS_TMDB_READ_TOKEN"; echo
+security add-generic-password -U -a "$USER" -s "subtrans.tmdb.read-token" \
+  -w "$SUBTRANS_TMDB_READ_TOKEN"
 security add-internet-password -U -a '<FTP账号>' -s '<FTP服务器>' -P 10021 -r 'ftp ' -w
 subtrans doctor --config /usr/local/subtrans/etc/subtrans.toml
 subtrans subtitles --config /usr/local/subtrans/etc/subtrans.toml --dry-run
 ```
 
-不要把密码放入 shell 脚本、TOML、Git 或命令行参数。程序要求 `SUBTRANS_FTP_USERNAME` 存在；密码优先读取 `SUBTRANS_FTP_PASSWORD`，macOS 未设置密码变量时，通过 `/usr/bin/security` 读取匹配的钥匙串项目。launchd 模板只保存去敏后的账号占位符，不保存密码。账号缺失或两种密码来源都没有时，程序会在 FTP 登录前安全失败。
+不要把密码或 TMDB Token 放入 shell 脚本、TOML、Git 或命令行参数。TMDB Token 依次读取进程环境、当前用户 launchd 环境和 macOS 钥匙串服务 `subtrans.tmdb.read-token`；FTP 密码优先读取 `SUBTRANS_FTP_PASSWORD`，未设置时通过 `/usr/bin/security` 读取匹配的互联网密码。仓库中的 launchd 模板不保存任何密码或 Token。凭据缺失时，程序会显示获取、临时设置、钥匙串持久保存和验证步骤，并在联网处理前安全失败。
 
 `subtrans doctor` 会检查 FTP 登录和所需目录，并在源根与四个目标根中分别短暂创建、验证、删除一个唯一空文件。探针清理失败会直接报错，不能视为部署成功。
 
@@ -46,7 +50,7 @@ subtrans subtitles --config /usr/local/subtrans/etc/subtrans.toml --dry-run
 2. 用 `shasum -a 256 target/release/subtrans` 记录校验和。
 3. 停止调度，备份本机状态库及其 `-wal`/`-shm` 文件。
 4. 将新文件放到临时名称，核对校验和和 `subtrans --version` 后原子替换旧主程序。
-5. 运行 `subtrans doctor`、字幕 dry-run 和迁移 plan；人工复核后才恢复调度。
+5. 运行 `subtrans doctor`、资料/字幕 dry-run 和迁移 plan；人工复核后才恢复调度。
 
 回退时恢复旧主程序。若新版本已写入状态库，不应直接恢复旧数据库；先保留完整副本，并按版本变更说明判断兼容性。
 
@@ -54,7 +58,7 @@ subtrans subtitles --config /usr/local/subtrans/etc/subtrans.toml --dry-run
 
 ## 调度与人工批准
 
-`deploy/com.subtrans.subtitles.plist.example` 是仅处理字幕的 launchd 模板。它包含 `SUBTRANS_FTP_USERNAME` 的替换占位符，但故意不包含 FTP 密码；本机安装副本必须填写账号且不得提交。目录迁移不放入无条件定时任务，流程始终是：
+`deploy/com.subtrans.subtitles.plist.example` 是字幕任务的 launchd 模板；字幕命令会先执行资料准备。它只包含 FTP 账号占位符，不包含 FTP 密码或 TMDB Token；Token 由运行账号的登录钥匙串提供。目录迁移不放入无条件定时任务，流程始终是：
 
 ```sh
 subtrans migrate plan --config /usr/local/subtrans/etc/subtrans.toml --output migration.plan.json

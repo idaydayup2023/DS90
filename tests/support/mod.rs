@@ -8,8 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sha2::{Digest, Sha256};
 use subtrans::artifact::{ARTIFACT_SCHEMA, SubtitleArtifact, artifact_paths, video_identity};
 use subtrans::config::{
-    AlphabetGroup, Config, ExternalSrtValidationConfig, LlmProvider, MigrationConfig,
-    MigrationLayout, MigrationLayouts, StateConfig, StorageConfig, SubtitleConfig,
+    AlphabetGroup, Config, ExternalSrtValidationConfig, LlmProvider, MetadataConfig,
+    MigrationConfig, MigrationLayout, MigrationLayouts, StateConfig, StorageConfig, SubtitleConfig,
     TranslationConfig,
 };
 use subtrans::storage::{LocalStorage, Storage};
@@ -27,6 +27,7 @@ pub fn config(root: &Path, source: &Path, destination: &Path) -> Config {
         destination: StorageConfig::Local {
             root: destination.to_path_buf(),
         },
+        metadata: MetadataConfig::default(),
         subtitles: SubtitleConfig {
             video_extensions: vec!["mkv".into(), "mp4".into()],
             min_video_bytes: 0,

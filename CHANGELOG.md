@@ -10,6 +10,20 @@
 
 - 后续变更在发布前先写入本节；发布时移动到带日期的版本章节。
 
+## [3.2.0] - 2026-08-13
+
+### Added
+
+- 新增基于 TMDB 的电影/电视剧资料准备阶段，生成 Infuse 可识别的同名海报、背景图、NFO 和可校验清单。
+- 新增 `subtrans metadata` 递归目录命令，支持安全默认模式、保留现有文件的 `--supplement` 补档和显式覆盖的 `--force` 更新。
+- 支持按源相对路径配置精确 TMDB ID，自动匹配不确定时停止并给出覆盖配置提示。
+
+### Changed
+
+- 资料清单现在是字幕翻译和迁移计划的前置门禁；迁移会同时携带海报、背景图、NFO 和资料清单。
+- 配置只保存 TMDB Token 的环境变量名，不保存 Token 明文；资料缓存有效期限制为最多 180 天。
+- TMDB Token 优先读取进程/当前用户 launchd 环境；macOS 环境缺失时从登录钥匙串读取，完全缺失时输出获取、设置、持久保存和验证步骤。
+
 ## [3.1.1] - 2026-08-12
 
 ### Added
@@ -58,6 +72,7 @@
 
 > `3.0.0` 是 V3 开发基线记录，未创建对应的 GitHub Release；正式 V3 Release 从 `3.1.0` 开始。
 
-[Unreleased]: https://github.com/idaydayup2023/DS90/compare/v3.1.1...HEAD
+[Unreleased]: https://github.com/idaydayup2023/DS90/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/idaydayup2023/DS90/compare/v3.1.1...v3.2.0
 [3.1.1]: https://github.com/idaydayup2023/DS90/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/idaydayup2023/DS90/releases/tag/v3.1.0

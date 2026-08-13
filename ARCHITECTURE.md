@@ -2,12 +2,13 @@
 
 ## Scope
 
-V3 从干净模块边界重建，只包含字幕翻译和目录迁移。主程序及核心逻辑均为 Rust，不直接复制 V2 Python 模块。
+V3 从干净模块边界重建，核心结果只包含字幕翻译和目录迁移；资料准备是两者共享的前置能力。主程序及核心逻辑均为 Rust，不直接复制 V2 Python 模块。
 
 ```text
 subtrans CLI
 ├── config       strict TOML + environment/OS-keystore secrets
 ├── storage      local / FTP, normalized relative paths, atomic publication
+├── metadata     TMDB 匹配 → artwork/NFO → 可验证资料清单
 ├── subtitles    acquire → parse → translate → QC → publish
 ├── migration    classify → immutable plan → approve → verify → commit
 ├── artifact     字幕就绪提交标记与完整缓存身份
@@ -18,11 +19,13 @@ subtrans CLI
 
 - 所有存储路径必须是规范化相对路径；拒绝绝对路径、`..`、反斜杠、NUL 和本地符号链接逃逸。
 - 媒体分类只使用可解释规则。完整季集标记可判剧集；年份与正式发行源标签可判电影；证据不足进入 `pending`。
+- TMDB 不能改变媒体类型；低分或相邻候选差距不足的匹配必须使用按完整源路径配置的精确 ID。
 - 画质/编码标签与媒体类型正交，永不合成季集编号。
 - 迁移计划包含规则版本、配置/存储绑定、分类证据、建议目标和伴随文件，并由规范 JSON 的 SHA-256 固定。可执行项必须包含源内容 SHA-256；本来就禁止执行的待确认项只记录大小、修改时间和身份摘要，解决阻断后必须生成新的完整哈希计划，避免无效读取几十 GB 媒体。
 - 执行必须提交精确的计划哈希；源身份变化、计划/配置不匹配、待确认项或目标内容冲突都会停止。
 - 跨后端移动先流式复制并计算 SHA-256，再原子发布并复核目标；FTP 源通过独立下载/上传会话直接流向目标临时文件，不落本机完整副本。复制模式在全部目标验证后才按“伴随文件在前、主视频在后”删除源文件。同一 FTP 账户优先服务器端改名；群晖跨共享目录拒绝改名时安全回退到流式复制，逐文件状态支持中断后前向恢复。
-- 字幕迁移默认要求有效的 `ready` manifest；manifest 绑定视频身份、字幕源哈希、完整翻译参数和最终输出哈希。
+- 字幕翻译和迁移计划默认先要求有效资料 manifest；它绑定视频身份、TMDB ID、配置、NFO/图片哈希和最多 180 天有效期。
+- 字幕迁移默认要求有效的字幕 `ready` manifest；manifest 绑定视频身份、字幕源哈希、完整翻译参数和最终输出哈希。
 - 字幕翻译严格保持 cue 索引和时间轴；模型返回缺项、重复项、额外项、空文本、源文回显、低目标文字比例或非 JSON 均失败，不发布部分结果。
 - 密钥不序列化到配置、计划、manifest 或状态库。
 
@@ -35,6 +38,7 @@ Rust 原生实现目录扫描、本地/FTP I/O、分类、计划/执行、SRT、
 - ASR worker：例如 Apple Silicon 上独立安装的 Whisper 实现；
 - PGS OCR worker：图像字幕识别；
 - Ollama 或 OpenAI-compatible 服务：只翻译字幕，不参与迁移分类。翻译采用带只读邻句的顺序批处理，失败批次按配置递归缩小；完成后做一致性和逐句对应性校对。初译失败不发布 `ready`；审校是不具移动授权的建议层，无法判定时不阻断，单条连续三次被否决则只保留英文并发布其余结果。
+- TMDB API：提供电影/剧集文本、海报和背景图；Token 仅来自环境变量。电影使用 Infuse 支持的同名 JPG、`-fanart.jpg` 和 NFO；电视剧分组仍以规范季集文件名和 Infuse 在线 TMDB 匹配为准。
 
 worker 只能通过显式命令和 `{input}`、`{output}`、`{language}`、`{stream}` 参数模板调用，不经过 shell；启用时必须声明版本。进程有超时和输出大小边界，生成 SRT 仍须通过同一严格校验。V3 不自动安装 Python 包，也不创建隐式虚拟环境。
 

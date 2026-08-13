@@ -8,7 +8,8 @@ use subtrans::config::Config;
 #[command(
     name = "subtrans",
     version,
-    about = "Subtitle translation and safe media migration"
+    about = "TMDB metadata, subtitle translation, and safe media migration",
+    long_about = "TMDB metadata, subtitle translation, and safe media migration.\n\nThis product uses the TMDB API but is not endorsed or certified by TMDB."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -17,6 +18,24 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Fetch TMDB artwork and metadata before translation or migration.
+    Metadata {
+        #[arg(long)]
+        config: PathBuf,
+        /// Process this local directory recursively instead of configured source storage.
+        #[arg(long, value_name = "DIRECTORY")]
+        local_dir: Option<PathBuf>,
+        /// Keep existing local artwork and fill only missing files.
+        #[arg(long, conflicts_with = "force")]
+        supplement: bool,
+        /// Refresh and replace all subtrans-managed or existing metadata files.
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     /// Scan media, acquire source subtitles, translate, validate, and publish.
     Subtitles {
         #[arg(long)]
@@ -73,6 +92,30 @@ enum MigrateCommand {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Metadata {
+            config,
+            local_dir,
+            supplement,
+            force,
+            dry_run,
+            limit,
+        } => {
+            let mut cfg = load_runtime_config(config)?;
+            if let Some(local_dir) = local_dir {
+                cfg.source = subtrans::config::StorageConfig::Local {
+                    root: local_dir.clone(),
+                };
+                println!("metadata local_mode root={}", local_dir.display());
+            }
+            let mode = if force {
+                subtrans::metadata::FetchMode::Force
+            } else if supplement {
+                subtrans::metadata::FetchMode::Supplement
+            } else {
+                subtrans::metadata::FetchMode::Default
+            };
+            subtrans::metadata::run(&cfg, mode, dry_run, limit).map(|_| ())
+        }
         Command::Subtitles {
             config,
             local_dir,
@@ -172,6 +215,7 @@ fn main() -> Result<()> {
                 )?;
             }
             subtrans::subtitles::doctor(&cfg)?;
+            subtrans::metadata::doctor(&cfg)?;
             println!(
                 "subtrans {} configuration and dependencies are ready",
                 subtrans::VERSION

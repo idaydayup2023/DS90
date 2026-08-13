@@ -147,6 +147,45 @@ fn plan_contains_fingerprint_evidence_sidecars_and_stable_hash() {
 }
 
 #[test]
+fn infuse_artwork_sidecars_follow_dot_normalized_video_name() {
+    let fixture = TempDir::new().unwrap();
+    let source = fixture.path().join("source");
+    let destination = fixture.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let stem = "Movie Name 2026 WEB-DL";
+    fs::write(source.join(format!("{stem}.mkv")), b"video").unwrap();
+    fs::write(source.join(format!("{stem}.jpg")), b"poster").unwrap();
+    fs::write(source.join(format!("{stem}-fanart.jpg")), b"fanart").unwrap();
+    fs::write(source.join(format!("{stem}.nfo")), b"nfo").unwrap();
+
+    let mut cfg = config_for(fixture.path(), &source, &destination);
+    cfg.migration.layouts.movie_other.filename_template = "{source_file_dot}".into();
+    cfg.migration.sidecar_extensions.push("jpg".into());
+    let plan = build_plan(&cfg, None).unwrap();
+    let destinations: Vec<_> = plan.items[0]
+        .sidecar_actions
+        .iter()
+        .map(|action| action.destination.as_str())
+        .collect();
+    assert!(
+        destinations
+            .iter()
+            .any(|path| path.ends_with("/Movie.Name.2026.WEB-DL.jpg"))
+    );
+    assert!(
+        destinations
+            .iter()
+            .any(|path| path.ends_with("/Movie.Name.2026.WEB-DL-fanart.jpg"))
+    );
+    assert!(
+        destinations
+            .iter()
+            .any(|path| path.ends_with("/Movie.Name.2026.WEB-DL.nfo"))
+    );
+}
+
+#[test]
 fn pending_plan_has_no_destination_or_sidecar_actions() {
     let fixture = TempDir::new().unwrap();
     let source = fixture.path().join("source");
@@ -337,6 +376,7 @@ fn config_for(
         destination: StorageConfig::Local {
             root: destination.to_path_buf(),
         },
+        metadata: subtrans::config::MetadataConfig::default(),
         subtitles: SubtitleConfig {
             video_extensions: vec!["mkv".to_owned()],
             min_video_bytes: 0,
