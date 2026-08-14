@@ -57,7 +57,7 @@ fn translated_artifact_unlocks_migration_and_is_reused_without_llm() {
 }
 
 #[test]
-fn one_llm_failure_does_not_prevent_later_videos_from_publishing() {
+fn one_llm_failure_keeps_that_cue_in_english_and_later_videos_publish() {
     let root = tempdir().unwrap();
     let source = root.path().join("source");
     let destination = root.path().join("destination");
@@ -83,10 +83,10 @@ fn one_llm_failure_does_not_prevent_later_videos_from_publishing() {
     let mut cfg = support::config(root.path(), &source, &destination);
     cfg.translation.base_url = base_url;
     cfg.translation.max_retries = 0;
-    assert!(subtrans::subtitles::run(&cfg, false, false, None).is_err());
+    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
     server.join().unwrap();
     assert!(
-        !source
+        source
             .join("A.Movie.2026.WEB-DL.ai.srt.subtrans.json")
             .exists()
     );
@@ -95,6 +95,10 @@ fn one_llm_failure_does_not_prevent_later_videos_from_publishing() {
             .join("B.Movie.2026.WEB-DL.ai.srt.subtrans.json")
             .exists()
     );
+    let first = fs::read_to_string(source.join("A.Movie.2026.WEB-DL.ai.srt")).unwrap();
+    let second = fs::read_to_string(source.join("B.Movie.2026.WEB-DL.ai.srt")).unwrap();
+    assert!(first.contains("Hello"));
+    assert!(second.contains("你好"));
 }
 
 #[test]
@@ -332,6 +336,47 @@ fn malformed_model_json_is_split_immediately_instead_of_retried_unchanged() {
     for text in ["一", "二", "三", "四"] {
         assert!(output.contains(text));
     }
+}
+
+#[test]
+fn repeatedly_malformed_single_cue_keeps_only_that_cue_in_english() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let stem = "Malformed.Single.Cue.Movie.2026.WEB-DL";
+    fs::write(source.join(format!("{stem}.mkv")), b"video").unwrap();
+    let srt = "1\n00:00:01,000 --> 00:00:02,000\nKeep me safe\n\n2\n00:00:03,000 --> 00:00:04,000\nTranslate me\n\n";
+    fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
+    fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
+    let (base_url, server) = ollama_server(vec![
+        // The malformed two-cue response is split immediately. Cue 1 then
+        // fails all three strict singleton attempts and falls back to English.
+        Reply::Malformed("not-json"),
+        Reply::Malformed("still-not-json"),
+        Reply::Malformed("truncated"),
+        Reply::Malformed("duplicate-index"),
+        Reply::Translations(vec![(2, "翻译我")]),
+    ]);
+    let mut cfg = support::config(root.path(), &source, &destination);
+    cfg.translation.base_url = base_url;
+    cfg.translation.batch_size = 2;
+    cfg.translation.min_batch_size = 1;
+    cfg.translation.max_retries = 2;
+
+    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
+    server.join().unwrap();
+
+    let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
+    let cues = subtrans::subtitles::parse_srt(&output).unwrap();
+    assert_eq!(cues[0].text, "Keep me safe");
+    assert_eq!(cues[1].text, "翻译我\nTranslate me");
+    assert!(
+        source
+            .join(format!("{stem}.ai.srt.subtrans.json"))
+            .is_file()
+    );
 }
 
 #[test]

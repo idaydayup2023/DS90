@@ -79,6 +79,9 @@ enum MigrateCommand {
         plan: PathBuf,
         #[arg(long)]
         approve: String,
+        /// Apply only ready items and leave audited pending sources untouched.
+        #[arg(long)]
+        allow_pending: bool,
     },
     /// Explain every pending decision and show the exact override key to edit.
     Review {
@@ -156,10 +159,15 @@ fn main() -> Result<()> {
                 config,
                 plan,
                 approve,
+                allow_pending,
             } => {
                 let cfg = load_runtime_config(config)?;
                 let plan = subtrans::migration::PlanDocument::read(&plan)?;
-                subtrans::migration::apply_plan(&cfg, &plan, &approve)
+                if allow_pending {
+                    subtrans::migration::apply_plan_allow_pending(&cfg, &plan, &approve)
+                } else {
+                    subtrans::migration::apply_plan(&cfg, &plan, &approve)
+                }
             }
             MigrateCommand::Review { config, plan } => {
                 let cfg = load_runtime_config(config)?;

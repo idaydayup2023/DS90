@@ -355,7 +355,33 @@ impl Storage for FtpStorage {
     }
 
     fn exists(&self, relative: &str) -> Result<bool> {
-        Ok(self.metadata(relative)?.is_some())
+        let normalized = validate_relative_path(relative)?;
+        if normalized.is_empty() {
+            let mut ftp = self.connect()?;
+            ftp.cwd(&self.root)
+                .with_context(|| format!("FTP root is not accessible: {}", self.root))?;
+            let _ = ftp.quit();
+            return Ok(true);
+        }
+        let remote = self.remote_path(&normalized)?;
+        let mut ftp = self.connect()?;
+        // Synology FTP can reject MLST for otherwise valid names containing
+        // characters such as square brackets. SIZE is exact for files; the
+        // parent-directory listing remains the portable fallback for folders
+        // and servers without SIZE support.
+        let exists = match ftp.size(&remote) {
+            Ok(_) => true,
+            Err(size_error) => match self.metadata_from_listing(&mut ftp, &normalized) {
+                Ok(value) => value.is_some(),
+                // A destination whose parent hierarchy has not been created
+                // yet makes both SIZE and parent LIST return 550. That is an
+                // ordinary non-existent path, not a storage failure.
+                Err(_) if Self::is_not_found(&size_error) => false,
+                Err(list_error) => return Err(list_error),
+            },
+        };
+        let _ = ftp.quit();
+        Ok(exists)
     }
 
     fn metadata(&self, relative: &str) -> Result<Option<FileEntry>> {
@@ -377,17 +403,37 @@ impl Storage for FtpStorage {
                     modified: Some(file.modified()),
                 })
             }
-            Err(error) => match self.metadata_from_listing(&mut ftp, &normalized) {
-                Ok(value) => value,
-                Err(_) if Self::is_not_found(&error) => None,
-                Err(list_error) => {
-                    return Err(error).with_context(|| {
-                        format!(
-                            "failed to inspect FTP path {remote}; directory-list fallback also failed: {list_error:#}"
-                        )
-                    });
+            Err(error) => {
+                // Synology may reject MLST for valid file names containing
+                // square brackets. SIZE still addresses those files exactly;
+                // retain a listing timestamp when available, but do not let a
+                // listing-name quirk turn a proven file into a false negative.
+                if let Ok(size) = ftp.size(&remote) {
+                    let modified = self
+                        .metadata_from_listing(&mut ftp, &normalized)
+                        .ok()
+                        .flatten()
+                        .and_then(|entry| entry.modified);
+                    Some(FileEntry {
+                        path: normalized,
+                        size: size as u64,
+                        is_dir: false,
+                        modified,
+                    })
+                } else {
+                    match self.metadata_from_listing(&mut ftp, &normalized) {
+                        Ok(value) => value,
+                        Err(_) if Self::is_not_found(&error) => None,
+                        Err(list_error) => {
+                            return Err(error).with_context(|| {
+                                format!(
+                                    "failed to inspect FTP path {remote}; directory-list fallback also failed: {list_error:#}"
+                                )
+                            });
+                        }
+                    }
                 }
-            },
+            }
         };
         let _ = ftp.quit();
         Ok(parsed)

@@ -4,7 +4,7 @@ use std::fs;
 
 use rusqlite::Connection;
 use subtrans::config::{MigrationOverride, OverrideKind, StorageConfig};
-use subtrans::migration::{PlanStatus, apply_plan, build_plan};
+use subtrans::migration::{PlanStatus, apply_plan, apply_plan_allow_pending, build_plan};
 use tempfile::tempdir;
 
 #[test]
@@ -147,4 +147,40 @@ fn active_download_markers_block_migration_until_removed() {
     let ready = build_plan(&cfg, None).unwrap();
     assert!(!ready.items[0].is_pending());
     assert!(ready.items[0].source_fingerprint.content_sha256.is_some());
+}
+
+#[test]
+fn explicit_allow_pending_applies_only_ready_items() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let pending_video = "Pending.Movie.2026.2160p.WEB-DL.mkv";
+    let ready_video = "Ready.Movie.2026.2160p.WEB-DL.mkv";
+    fs::write(source.join(pending_video), b"partial").unwrap();
+    fs::write(source.join(format!("{pending_video}.aria2")), b"active").unwrap();
+    fs::write(source.join(ready_video), b"complete").unwrap();
+    let mut cfg = support::config(root.path(), &source, &destination);
+    cfg.migration.require_translated_subtitle = false;
+
+    let plan = build_plan(&cfg, None).unwrap();
+    assert_eq!(plan.pending_count(), 1);
+    assert!(apply_plan(&cfg, &plan, &plan.plan_hash).is_err());
+
+    apply_plan_allow_pending(&cfg, &plan, &plan.plan_hash).unwrap();
+
+    assert!(source.join(pending_video).is_file());
+    assert!(source.join(format!("{pending_video}.aria2")).is_file());
+    assert!(!source.join(ready_video).exists());
+    let ready = plan
+        .items
+        .iter()
+        .find(|item| item.source == ready_video)
+        .unwrap();
+    assert!(
+        destination
+            .join(ready.destination.as_ref().unwrap())
+            .is_file()
+    );
 }

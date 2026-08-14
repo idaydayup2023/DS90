@@ -20,26 +20,63 @@ struct BoundStorage<'a> {
 }
 
 pub fn apply_plan(config: &Config, plan: &PlanDocument, approval: &str) -> Result<()> {
+    apply_plan_inner(config, plan, approval, false)
+}
+
+/// Apply only `Ready` items from a fully audited plan while leaving every
+/// `Pending` source untouched. The caller must opt into this mode explicitly
+/// and still approve the hash of the complete plan, including pending items.
+pub fn apply_plan_allow_pending(
+    config: &Config,
+    plan: &PlanDocument,
+    approval: &str,
+) -> Result<()> {
+    apply_plan_inner(config, plan, approval, true)
+}
+
+fn apply_plan_inner(
+    config: &Config,
+    plan: &PlanDocument,
+    approval: &str,
+    allow_pending: bool,
+) -> Result<()> {
     plan.verify_hash()?;
     plan.verify_config(config)?;
     if approval != plan.plan_hash {
         bail!("approval hash does not match the migration plan");
     }
-    if plan.pending_count() != 0 {
+    if plan.pending_count() != 0 && !allow_pending {
         bail!(
             "migration plan contains {} pending item(s); resolve them in configuration and build a new plan",
             plan.pending_count()
         );
     }
+    let ready_count = plan.items.len().saturating_sub(plan.pending_count());
+    if ready_count == 0 {
+        bail!("migration plan contains no ready items to apply");
+    }
+    println!(
+        "migration apply plan_hash={} ready={} pending_skipped={}",
+        plan.plan_hash,
+        ready_count,
+        if allow_pending {
+            plan.pending_count()
+        } else {
+            0
+        }
+    );
     let source = open_storage(&config.source).context("failed to open source storage")?;
     let destination =
         open_storage(&config.destination).context("failed to open destination storage")?;
-    preflight_plan(source.as_ref(), destination.as_ref(), plan)?;
+    preflight_plan(source.as_ref(), destination.as_ref(), plan, allow_pending)?;
 
     let mut state = StateStore::open(&config.state.database)?;
     let owner = process_owner();
     let destination_namespace = serde_json::to_string(&plan.destination_binding)?;
     for item in &plan.items {
+        if item.is_pending() {
+            continue;
+        }
         if let Err(error) = apply_item(
             &mut state,
             BoundStorage {
@@ -74,9 +111,13 @@ fn preflight_plan(
     source: &dyn Storage,
     destination: &dyn Storage,
     plan: &PlanDocument,
+    allow_pending: bool,
 ) -> Result<()> {
     for item in &plan.items {
         if !matches!(item.status, PlanStatus::Ready) {
+            if allow_pending {
+                continue;
+            }
             bail!("refusing to preflight pending item {}", item.source);
         }
         for action in item.actions() {
@@ -156,10 +197,28 @@ fn apply_item(
             .context("registered migration action disappeared")?;
         if action_state == "SOURCE_REMOVED" || action_state == "PROMOTED" {
             verify_destination(destination.storage, action)?;
+            println!(
+                "migration already_promoted source={} destination={} size={} sha256={}",
+                action.source,
+                action.destination,
+                action.source_fingerprint.size_bytes,
+                expected_content_hash(&action.source_fingerprint)?
+            );
             continue;
         }
+        println!(
+            "migration promoting source={} destination={} size={} sha256={}",
+            action.source,
+            action.destination,
+            action.source_fingerprint.size_bytes,
+            expected_content_hash(&action.source_fingerprint)?
+        );
         promote_action(source, destination, action)?;
         state.set_action_state(&job_id, index, "PLANNED", "PROMOTED")?;
+        println!(
+            "migration promoted source={} destination={} verified=true",
+            action.source, action.destination
+        );
     }
 
     verify_all_destinations(destination.storage, &actions)?;
@@ -193,6 +252,10 @@ fn apply_item(
                 .remove(&action.source)
                 .with_context(|| format!("failed to remove verified source {}", action.source))?;
         }
+        println!(
+            "migration source_removed source={} destination={} destination_verified=true",
+            action.source, action.destination
+        );
         if action_state == "PROMOTED" {
             state.set_action_state(&job_id, index, "PROMOTED", "SOURCE_REMOVED")?;
         } else if action_state != "SOURCE_REMOVED" {
@@ -212,6 +275,12 @@ fn apply_item(
         "COMMITTED",
         &json!({"source": item.source, "files": actions.len()}),
     )?;
+    println!(
+        "migration committed source={} files={} plan_hash={}",
+        item.source,
+        actions.len(),
+        plan_hash
+    );
     Ok(())
 }
 
@@ -322,11 +391,29 @@ fn copy_and_verify(
 }
 
 fn verify_source(storage: &dyn Storage, path: &str, expected: &SourceFingerprint) -> Result<()> {
-    let metadata = storage
-        .metadata(path)?
-        .with_context(|| format!("planned source disappeared: {path}"))?;
-    if metadata.is_dir || metadata.size != expected.size_bytes {
-        bail!("planned source size or type changed: {path}");
+    let metadata = storage.metadata(path)?;
+    let metadata_matches = metadata
+        .as_ref()
+        .is_some_and(|value| !value.is_dir && value.size == expected.size_bytes);
+    if !metadata_matches {
+        if !storage.exists(path)? {
+            bail!("planned source disappeared: {path}");
+        }
+        eprintln!(
+            "migration metadata_unreliable path={} expected_size={} reported_size={} reported_is_dir={} verification=sha256",
+            path,
+            expected.size_bytes,
+            metadata
+                .as_ref()
+                .map(|value| value.size.to_string())
+                .as_deref()
+                .unwrap_or("unavailable"),
+            metadata
+                .as_ref()
+                .map(|value| value.is_dir.to_string())
+                .as_deref()
+                .unwrap_or("unavailable")
+        );
     }
     let hash = storage.sha256(path)?;
     if hash != expected_content_hash(expected)? {
@@ -336,11 +423,29 @@ fn verify_source(storage: &dyn Storage, path: &str, expected: &SourceFingerprint
 }
 
 fn verify_destination(storage: &dyn Storage, action: &FileAction) -> Result<()> {
-    let metadata = storage
-        .metadata(&action.destination)?
-        .with_context(|| format!("verified destination disappeared: {}", action.destination))?;
-    if metadata.is_dir || metadata.size != action.source_fingerprint.size_bytes {
-        bail!("destination size or type differs: {}", action.destination);
+    let metadata = storage.metadata(&action.destination)?;
+    let metadata_matches = metadata
+        .as_ref()
+        .is_some_and(|value| !value.is_dir && value.size == action.source_fingerprint.size_bytes);
+    if !metadata_matches {
+        if !storage.exists(&action.destination)? {
+            bail!("verified destination disappeared: {}", action.destination);
+        }
+        eprintln!(
+            "migration metadata_unreliable path={} expected_size={} reported_size={} reported_is_dir={} verification=sha256",
+            action.destination,
+            action.source_fingerprint.size_bytes,
+            metadata
+                .as_ref()
+                .map(|value| value.size.to_string())
+                .as_deref()
+                .unwrap_or("unavailable"),
+            metadata
+                .as_ref()
+                .map(|value| value.is_dir.to_string())
+                .as_deref()
+                .unwrap_or("unavailable")
+        );
     }
     if storage.sha256(&action.destination)? != expected_content_hash(&action.source_fingerprint)? {
         bail!("destination content differs: {}", action.destination);

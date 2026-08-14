@@ -131,10 +131,12 @@ pub fn ensure_before(cfg: &Config, dry_run: bool, limit: Option<usize>) -> Resul
         return Ok(());
     }
     let summary = run(cfg, FetchMode::Default, dry_run, limit)?;
-    if !dry_run && (summary.pending > 0 || summary.failed > 0) {
+    // Incomplete downloads are pending by design and each downstream stage
+    // independently skips the exact marked video. They must not block metadata-
+    // ready sibling videos in the same FTP source tree.
+    if !dry_run && summary.failed > 0 {
         bail!(
-            "metadata prerequisite is not ready: pending={} failed={}; resolve the reported title or configure [metadata.overrides] before continuing",
-            summary.pending,
+            "metadata prerequisite is not ready: failed={}; resolve the reported title or configure [metadata.overrides] before continuing",
             summary.failed
         );
     }

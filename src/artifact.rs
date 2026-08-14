@@ -87,7 +87,20 @@ pub fn read_ready_artifact(
     video: &FileEntry,
 ) -> Result<Option<SubtitleArtifact>> {
     let paths = artifact_paths(&video.path)?;
-    if !storage.exists(&paths.output)? || !storage.exists(&paths.manifest)? {
+    let output_exists = storage.exists(&paths.output)?;
+    let manifest_exists = storage.exists(&paths.manifest)?;
+    if !output_exists || !manifest_exists {
+        eprintln!(
+            "subtitle artifact not_ready video={} reason={} output_exists={} manifest_exists={}",
+            video.path,
+            if output_exists || manifest_exists {
+                "partial_publish"
+            } else {
+                "missing"
+            },
+            output_exists,
+            manifest_exists
+        );
         return Ok(None);
     }
     let raw = storage
@@ -95,22 +108,67 @@ pub fn read_ready_artifact(
         .with_context(|| format!("failed to read subtitle manifest {}", paths.manifest))?;
     let manifest: SubtitleArtifact = match serde_json::from_slice(&raw) {
         Ok(value) => value,
-        Err(_) => return Ok(None),
+        Err(error) => {
+            eprintln!(
+                "subtitle artifact not_ready video={} reason=invalid_manifest_json error={error}",
+                video.path
+            );
+            return Ok(None);
+        }
     };
-    if manifest.schema != ARTIFACT_SCHEMA
-        || manifest.status != "ready"
-        || manifest.video_path != video.path
-        || manifest.video_identity_sha256 != video_identity(video)
-    {
+    if manifest.schema != ARTIFACT_SCHEMA {
+        eprintln!(
+            "subtitle artifact not_ready video={} reason=schema expected={} actual={}",
+            video.path, ARTIFACT_SCHEMA, manifest.schema
+        );
         return Ok(None);
     }
-    if storage.sha256(&paths.output)? != manifest.output_sha256 {
+    if manifest.status != "ready" {
+        eprintln!(
+            "subtitle artifact not_ready video={} reason=status actual={}",
+            video.path, manifest.status
+        );
         return Ok(None);
     }
-    if let Some(source_path) = manifest.source_path.as_deref()
-        && (!storage.exists(source_path)? || storage.sha256(source_path)? != manifest.source_sha256)
-    {
+    if manifest.video_path != video.path {
+        eprintln!(
+            "subtitle artifact not_ready video={} reason=video_path manifest_video={}",
+            video.path, manifest.video_path
+        );
         return Ok(None);
+    }
+    let expected_video_identity = video_identity(video);
+    if manifest.video_identity_sha256 != expected_video_identity {
+        eprintln!(
+            "subtitle artifact not_ready video={} reason=video_identity expected={} actual={}",
+            video.path, expected_video_identity, manifest.video_identity_sha256
+        );
+        return Ok(None);
+    }
+    let output_sha256 = storage.sha256(&paths.output)?;
+    if output_sha256 != manifest.output_sha256 {
+        eprintln!(
+            "subtitle artifact not_ready video={} reason=output_sha256 expected={} actual={}",
+            video.path, manifest.output_sha256, output_sha256
+        );
+        return Ok(None);
+    }
+    if let Some(source_path) = manifest.source_path.as_deref() {
+        if !storage.exists(source_path)? {
+            eprintln!(
+                "subtitle artifact not_ready video={} reason=source_missing source={source_path}",
+                video.path
+            );
+            return Ok(None);
+        }
+        let source_sha256 = storage.sha256(source_path)?;
+        if source_sha256 != manifest.source_sha256 {
+            eprintln!(
+                "subtitle artifact not_ready video={} reason=source_sha256 source={} expected={} actual={}",
+                video.path, source_path, manifest.source_sha256, source_sha256
+            );
+            return Ok(None);
+        }
     }
     Ok(Some(manifest))
 }

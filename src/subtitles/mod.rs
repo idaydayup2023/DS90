@@ -169,16 +169,21 @@ fn process_video(
     force: bool,
 ) -> Result<VideoOutcome> {
     let acquisition_key = acquisition_key(video, cfg)?;
-    if !force
-        && let Some(manifest) = read_ready_artifact(storage, video)?
-        && manifest.acquisition_key == acquisition_key
-        && manifest.cache_key == cache_key(&manifest.source_sha256, &cfg.translation)?
-    {
-        println!(
-            "subtitles cached video={} source={}",
-            video.path, manifest.source_kind
+    if !force && let Some(manifest) = read_ready_artifact(storage, video)? {
+        let expected_cache_key = cache_key(&manifest.source_sha256, &cfg.translation)?;
+        let acquisition_matches = manifest.acquisition_key == acquisition_key;
+        let cache_matches = manifest.cache_key == expected_cache_key;
+        if acquisition_matches && cache_matches {
+            println!(
+                "subtitles cached video={} source={}",
+                video.path, manifest.source_kind
+            );
+            return Ok(VideoOutcome::Cached);
+        }
+        eprintln!(
+            "subtitle artifact cache_miss video={} acquisition_match={} cache_match={}",
+            video.path, acquisition_matches, cache_matches
         );
-        return Ok(VideoOutcome::Cached);
     }
     let existing_source =
         resolve_existing_source(storage, video, by_directory, cfg, &acquisition_key)?;
@@ -295,8 +300,26 @@ fn process_video(
             &paths.manifest,
             &mut Cursor::new(serde_json::to_vec_pretty(&manifest)?),
         )?;
-        read_ready_artifact(storage, video)?
-            .context("published subtitle artifact failed its final readiness check")?;
+        // A few FTP servers briefly expose a renamed manifest or subtitle
+        // inconsistently across fresh MLST/listing connections. Retry only the
+        // read-after-publish check; every attempt still validates the complete
+        // manifest plus source and output hashes.
+        const READINESS_ATTEMPTS: usize = 6;
+        let mut published_ready = None;
+        for attempt in 0..READINESS_ATTEMPTS {
+            if let Some(artifact) = read_ready_artifact(storage, video)? {
+                published_ready = Some(artifact);
+                break;
+            }
+            if attempt + 1 < READINESS_ATTEMPTS {
+                std::thread::sleep(Duration::from_millis(250_u64 << attempt));
+            }
+        }
+        published_ready.with_context(|| {
+            format!(
+                "published subtitle artifact failed its final readiness check after {READINESS_ATTEMPTS} attempts"
+            )
+        })?;
         state.transition(
             &job_id,
             "subtitle",

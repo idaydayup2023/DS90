@@ -79,6 +79,7 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<Vec<Cue>> {
         .build()?;
     let api_key = cfg.api_key()?;
     let mut translated = BTreeMap::new();
+    let mut english_fallback = BTreeSet::new();
 
     for range in batch_ranges(cues, cfg.batch_size, cfg.max_batch_chars) {
         translate_range_adaptive(
@@ -88,6 +89,7 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<Vec<Cue>> {
             range,
             cfg,
             &mut translated,
+            &mut english_fallback,
         )?;
         println!(
             "translation progress translated={}/{}",
@@ -104,7 +106,6 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<Vec<Cue>> {
             ),
         }
     }
-    let mut english_fallback = BTreeSet::new();
     if cfg.alignment_check {
         println!("translation alignment_check cues={}", cues.len());
         let outcome = audit_alignment(&client, api_key.as_deref(), cues, &mut translated, cfg)?;
@@ -114,7 +115,7 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<Vec<Cue>> {
             outcome.english_fallback.len(),
             outcome.unresolved
         );
-        english_fallback = outcome.english_fallback;
+        english_fallback.extend(outcome.english_fallback);
     }
     let output = render_with_fallback(cues, &translated, cfg.bilingual, &english_fallback)?;
     validate_translation_quality(
@@ -156,6 +157,7 @@ fn translate_range_adaptive(
     initial: Range<usize>,
     cfg: &TranslationConfig,
     translated: &mut BTreeMap<u32, String>,
+    english_fallback: &mut BTreeSet<u32>,
 ) -> Result<()> {
     let mut pending = VecDeque::from([initial]);
     while let Some(range) = pending.pop_front() {
@@ -167,9 +169,7 @@ fn translate_range_adaptive(
             .filter(|cue| !expected.iter().any(|item| item.index == cue.index))
             .map(|cue| cue.index)
             .collect();
-        // Retry transport/service failures, but split deterministic malformed
-        // model output immediately instead of asking for the same bad JSON.
-        let result = retry(cfg.max_retries, || {
+        let request_and_validate = || {
             request(
                 client,
                 cfg,
@@ -178,14 +178,38 @@ fn translate_range_adaptive(
                 &prompt,
                 cfg.max_output_tokens,
             )
-        })
-        .and_then(|response| parse_valid_indices(&response, expected, &ignored_context_indices))
-        .and_then(|values| {
-            if values.is_empty() {
-                bail!("translation response contains no requested cue indices");
-            }
-            Ok(values)
-        });
+            .and_then(|response| parse_valid_indices(&response, expected, &ignored_context_indices))
+            .and_then(|values| {
+                if values.is_empty() {
+                    bail!("translation response contains no requested cue indices");
+                }
+                Ok(values)
+            })
+        };
+        // Malformed multi-cue responses are split immediately. A single cue
+        // retries the complete request and strict parse before it is preserved
+        // in English, so one bad model response cannot discard an entire film.
+        let result = if range.len() == 1 {
+            retry(cfg.max_retries, request_and_validate)
+        } else {
+            retry(cfg.max_retries, || {
+                request(
+                    client,
+                    cfg,
+                    api_key,
+                    &cfg.model,
+                    &prompt,
+                    cfg.max_output_tokens,
+                )
+            })
+            .and_then(|response| parse_valid_indices(&response, expected, &ignored_context_indices))
+            .and_then(|values| {
+                if values.is_empty() {
+                    bail!("translation response contains no requested cue indices");
+                }
+                Ok(values)
+            })
+        };
         match result {
             Ok(values) => {
                 let missing: Vec<Range<usize>> = range
@@ -205,18 +229,20 @@ fn translate_range_adaptive(
                     pending.push_front(missing_range);
                 }
             }
-            Err(_) if range.len() >= cfg.min_batch_size.saturating_mul(2) => {
+            Err(_) if range.len() > 1 => {
                 let midpoint = range.start + range.len() / 2;
                 pending.push_front(midpoint..range.end);
                 pending.push_front(range.start..midpoint);
             }
             Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "translation batch {}..{} failed strict checks and cannot be split without going below the configured minimum",
-                        range.start, range.end
-                    )
-                });
+                let cue = &cues[range.start];
+                translated.insert(cue.index, single_line(&cue.text));
+                english_fallback.insert(cue.index);
+                println!(
+                    "translation initial_fallback index={} attempts={} action=keep_english error={error:#}",
+                    cue.index,
+                    cfg.max_retries.saturating_add(1)
+                );
             }
         }
     }
