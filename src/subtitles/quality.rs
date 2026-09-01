@@ -69,44 +69,25 @@ pub fn validate_translation_quality(
     target_language: &str,
     min_target_script_ratio: f32,
 ) -> Result<()> {
-    let targets: Vec<(String, bool)> = source
+    let targets: Vec<String> = output
         .iter()
-        .zip(output)
-        .map(|(source, output)| {
-            let target = output.text.lines().next().unwrap_or("").trim().to_owned();
-            let line_count = output
-                .text
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .count();
-            let english_fallback = line_count == 1
-                && single_line(&source.text).eq_ignore_ascii_case(&single_line(&target));
-            (target, english_fallback)
-        })
+        .map(|output| output.text.lines().next().unwrap_or("").trim().to_owned())
         .collect();
     let same = source
         .iter()
         .zip(&targets)
-        .filter(|(source, (target, english_fallback))| {
-            !english_fallback
-                && single_line(&source.text).eq_ignore_ascii_case(&single_line(target))
+        .filter(|(source, target)| {
+            single_line(&source.text).eq_ignore_ascii_case(&single_line(target))
         })
         .count();
     if source.len() >= 5 && same * 2 >= source.len() {
         bail!("too many translations repeat the source text unchanged");
     }
     let mut counts = HashMap::new();
-    for (target, english_fallback) in &targets {
-        if *english_fallback {
-            continue;
-        }
+    for target in &targets {
         *counts.entry(target.to_ascii_lowercase()).or_insert(0usize) += 1;
     }
-    let translated_count = targets
-        .iter()
-        .filter(|(_, english_fallback)| !english_fallback)
-        .count();
+    let translated_count = targets.len();
     if translated_count >= 10
         && counts.values().copied().max().unwrap_or(0) * 10 >= translated_count * 7
     {
@@ -115,8 +96,7 @@ pub fn validate_translation_quality(
     if target_language.to_ascii_lowercase().contains("chinese") {
         let joined = targets
             .iter()
-            .filter(|(_, english_fallback)| !english_fallback)
-            .map(|(target, _)| target.as_str())
+            .map(String::as_str)
             .collect::<Vec<_>>()
             .join("");
         if joined.is_empty() {
@@ -141,4 +121,86 @@ pub fn validate_translation_quality(
         }
     }
     Ok(())
+}
+
+pub(crate) fn translation_concerns(
+    source: &str,
+    target: &str,
+    target_language: &str,
+    min_target_script_ratio: f32,
+) -> Vec<String> {
+    let source = single_line(source);
+    let target = single_line(target);
+    let mut reasons = Vec::new();
+    if target.is_empty() {
+        reasons.push("empty_translation".to_owned());
+        return reasons;
+    }
+
+    let substantive_source = is_substantive_translatable_english(&source);
+    if substantive_source && source.eq_ignore_ascii_case(&target) {
+        reasons.push("source_text_repeated_unchanged".to_owned());
+    }
+    if target_language.to_ascii_lowercase().contains("chinese") && substantive_source {
+        let visible = target
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .count()
+            .max(1);
+        let cjk = target
+            .chars()
+            .filter(|ch| matches!(*ch as u32, 0x3400..=0x4DBF | 0x4E00..=0x9FFF))
+            .count();
+        let ratio = cjk as f32 / visible as f32;
+        if ratio < min_target_script_ratio {
+            reasons.push(format!(
+                "target_chinese_script_ratio_{ratio:.3}_below_{min_target_script_ratio:.3}"
+            ));
+        }
+    }
+    reasons
+}
+
+fn is_substantive_translatable_english(text: &str) -> bool {
+    if text.contains("://") || text.contains('@') || text.to_ascii_lowercase().contains("www.") {
+        return false;
+    }
+    let letters: String = text.chars().filter(char::is_ascii_alphabetic).collect();
+    if letters.is_empty() {
+        return false;
+    }
+    let identifier_characters = text
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/'));
+    let internal_uppercase = letters.chars().skip(1).any(|ch| ch.is_ascii_uppercase())
+        && letters.chars().any(|ch| ch.is_ascii_lowercase());
+    let compact_identifier = !text.chars().any(char::is_whitespace)
+        && identifier_characters
+        && ((letters.len() <= 10 && letters.chars().all(|ch| ch.is_ascii_uppercase()))
+            || internal_uppercase
+            || text.chars().any(|ch| ch.is_ascii_digit()));
+    !compact_identifier
+}
+
+#[cfg(test)]
+mod tests {
+    use super::translation_concerns;
+
+    #[test]
+    fn concerns_detect_untranslated_english_but_allow_short_identifiers() {
+        assert!(
+            translation_concerns(
+                "This is still English.",
+                "This is still English.",
+                "Chinese",
+                0.15
+            )
+            .len()
+                >= 2
+        );
+        assert!(translation_concerns("Hello", "你好", "Chinese", 0.15).is_empty());
+        assert!(translation_concerns("FDE", "FDE", "Chinese", 0.15).is_empty());
+        assert!(translation_concerns("OpenAI", "OpenAI", "Chinese", 0.15).is_empty());
+        assert!(!translation_concerns("DUCK!", "DUCK!", "Chinese", 0.15).is_empty());
+    }
 }

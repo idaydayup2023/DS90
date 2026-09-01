@@ -23,6 +23,20 @@ pub struct SubtitleSourceEvidence {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TranslationQualityRecord {
+    pub cue_index: u32,
+    pub source: String,
+    pub candidate_before_review: String,
+    pub reviewed_translation: String,
+    pub reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_error: Option<String>,
+    pub translation_model: String,
+    pub review_model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SubtitleArtifact {
     pub schema: u32,
     pub status: String,
@@ -36,6 +50,8 @@ pub struct SubtitleArtifact {
     pub source_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_evidence: Option<SubtitleSourceEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub translation_quality_log: Vec<TranslationQualityRecord>,
     pub created_unix_seconds: u64,
 }
 

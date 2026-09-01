@@ -57,7 +57,7 @@ fn translated_artifact_unlocks_migration_and_is_reused_without_llm() {
 }
 
 #[test]
-fn one_llm_failure_keeps_that_cue_in_english_and_later_videos_publish() {
+fn one_translation_failure_is_repaired_by_review_and_later_videos_publish() {
     let root = tempdir().unwrap();
     let source = root.path().join("source");
     let destination = root.path().join("destination");
@@ -78,6 +78,7 @@ fn one_llm_failure_keeps_that_cue_in_english_and_later_videos_publish() {
     }
     let (base_url, server) = ollama_server(vec![
         Reply::Error(500),
+        Reply::Corrections(vec![(1, "你好")]),
         Reply::Translations(vec![(1, "你好")]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
@@ -97,8 +98,56 @@ fn one_llm_failure_keeps_that_cue_in_english_and_later_videos_publish() {
     );
     let first = fs::read_to_string(source.join("A.Movie.2026.WEB-DL.ai.srt")).unwrap();
     let second = fs::read_to_string(source.join("B.Movie.2026.WEB-DL.ai.srt")).unwrap();
-    assert!(first.contains("Hello"));
-    assert!(second.contains("你好"));
+    assert!(first.contains("你好\nHello"));
+    assert!(second.contains("你好\nHello"));
+    let first_manifest = fs::read(source.join("A.Movie.2026.WEB-DL.ai.srt.subtrans.json")).unwrap();
+    let first_manifest: subtrans::artifact::SubtitleArtifact =
+        serde_json::from_slice(&first_manifest).unwrap();
+    assert_eq!(first_manifest.translation_quality_log.len(), 1);
+    assert!(
+        first_manifest.translation_quality_log[0]
+            .reasons
+            .iter()
+            .any(|reason| reason == "primary_translation_failed")
+    );
+}
+
+#[test]
+fn untranslated_english_candidate_is_replaced_by_review_and_logged() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let stem = "English.Echo.Movie.2026.WEB-DL";
+    fs::write(source.join(format!("{stem}.mkv")), b"video").unwrap();
+    let srt = "1\n00:00:01,000 --> 00:00:02,000\nThis stayed English.\n\n";
+    fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
+    fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
+    let (base_url, server) = ollama_server(vec![
+        Reply::Translations(vec![(1, "This stayed English.")]),
+        Reply::Corrections(vec![(1, "这仍然是英文。")]),
+    ]);
+    let mut cfg = support::config(root.path(), &source, &destination);
+    cfg.translation.base_url = base_url;
+
+    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
+    server.join().unwrap();
+
+    let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
+    assert!(output.contains("这仍然是英文。\nThis stayed English."));
+    assert!(!output.contains("[?]"));
+    let manifest = fs::read(source.join(format!("{stem}.ai.srt.subtrans.json"))).unwrap();
+    let manifest: subtrans::artifact::SubtitleArtifact = serde_json::from_slice(&manifest).unwrap();
+    let record = &manifest.translation_quality_log[0];
+    assert_eq!(record.candidate_before_review, "This stayed English.");
+    assert_eq!(record.reviewed_translation, "这仍然是英文。");
+    assert!(
+        record
+            .reasons
+            .iter()
+            .any(|reason| reason == "source_text_repeated_unchanged")
+    );
 }
 
 #[test]
@@ -339,7 +388,7 @@ fn malformed_model_json_is_split_immediately_instead_of_retried_unchanged() {
 }
 
 #[test]
-fn repeatedly_malformed_single_cue_keeps_only_that_cue_in_english() {
+fn repeatedly_malformed_single_cue_is_repaired_once_by_review_model() {
     let root = tempdir().unwrap();
     let source = root.path().join("source");
     let destination = root.path().join("destination");
@@ -352,12 +401,13 @@ fn repeatedly_malformed_single_cue_keeps_only_that_cue_in_english() {
     fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
     let (base_url, server) = ollama_server(vec![
         // The malformed two-cue response is split immediately. Cue 1 then
-        // fails all three strict singleton attempts and falls back to English.
+        // fails all three strict singleton attempts and enters final review.
         Reply::Malformed("not-json"),
         Reply::Malformed("still-not-json"),
         Reply::Malformed("truncated"),
         Reply::Malformed("duplicate-index"),
         Reply::Translations(vec![(2, "翻译我")]),
+        Reply::Corrections(vec![(1, "请小心")]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
     cfg.translation.base_url = base_url;
@@ -370,13 +420,17 @@ fn repeatedly_malformed_single_cue_keeps_only_that_cue_in_english() {
 
     let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
     let cues = subtrans::subtitles::parse_srt(&output).unwrap();
-    assert_eq!(cues[0].text, "Keep me safe");
+    assert_eq!(cues[0].text, "请小心\nKeep me safe");
     assert_eq!(cues[1].text, "翻译我\nTranslate me");
     assert!(
         source
             .join(format!("{stem}.ai.srt.subtrans.json"))
             .is_file()
     );
+    let manifest = fs::read(source.join(format!("{stem}.ai.srt.subtrans.json"))).unwrap();
+    let manifest: subtrans::artifact::SubtitleArtifact = serde_json::from_slice(&manifest).unwrap();
+    assert_eq!(manifest.translation_quality_log.len(), 1);
+    assert_eq!(manifest.translation_quality_log[0].cue_index, 1);
 }
 
 #[test]
@@ -460,9 +514,6 @@ fn cue_alignment_review_repairs_neighbor_shift_without_changing_source_timing() 
     let (base_url, server) = ollama_server(vec![
         Reply::Translations(vec![(1, "现在离开。"), (2, "回答我。"), (3, "把它砸碎。")]),
         Reply::Corrections(vec![(1, "把它砸碎。"), (2, "现在离开。"), (3, "回答我。")]),
-        Reply::Corrections(vec![]),
-        Reply::Corrections(vec![]),
-        Reply::Corrections(vec![]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
     cfg.translation.base_url = base_url;
@@ -506,10 +557,6 @@ fn malformed_alignment_batch_is_split_until_exact_indices_are_auditable() {
         Reply::Malformed("still-not-json"),
         Reply::Corrections(vec![(1, "第一。"), (2, "第二。")]),
         Reply::Corrections(vec![(3, "第三。"), (4, "第四。")]),
-        Reply::Corrections(vec![]),
-        Reply::Corrections(vec![]),
-        Reply::Corrections(vec![]),
-        Reply::Corrections(vec![]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
     cfg.translation.base_url = base_url;
@@ -529,7 +576,7 @@ fn malformed_alignment_batch_is_split_until_exact_indices_are_auditable() {
 }
 
 #[test]
-fn repeated_alignment_rejection_keeps_only_that_cue_in_english_and_publishes() {
+fn review_model_correction_is_final_without_iteration_and_is_logged() {
     let root = tempdir().unwrap();
     let source = root.path().join("source");
     let destination = root.path().join("destination");
@@ -544,8 +591,6 @@ fn repeated_alignment_rejection_keeps_only_that_cue_in_english_and_publishes() {
     let (base_url, server) = ollama_server(vec![
         Reply::Translations(vec![(1, "鸭子！"), (2, "快跑。")]),
         Reply::Corrections(vec![(1, "低头！")]),
-        Reply::Corrections(vec![(1, "闪开！")]),
-        Reply::Corrections(vec![(1, "趴下！")]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
     cfg.translation.base_url = base_url;
@@ -553,19 +598,26 @@ fn repeated_alignment_rejection_keeps_only_that_cue_in_english_and_publishes() {
     cfg.translation.alignment_batch_size = 2;
     cfg.translation.alignment_context_cues = 1;
     cfg.translation.alignment_max_corrections = 2;
-    cfg.translation.alignment_max_attempts = 3;
 
     subtrans::subtitles::run(&cfg, false, false, None).unwrap();
     server.join().unwrap();
 
     let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
     let cues = subtrans::subtitles::parse_srt(&output).unwrap();
-    assert_eq!(cues[0].text, "Duck!");
+    assert_eq!(cues[0].text, "低头！\nDuck!");
     assert_eq!(cues[1].text, "快跑。\nRun now.");
+    assert!(!output.contains("[?]"));
     assert!(
         source
             .join(format!("{stem}.ai.srt.subtrans.json"))
             .is_file()
+    );
+    let manifest = fs::read(source.join(format!("{stem}.ai.srt.subtrans.json"))).unwrap();
+    let manifest: subtrans::artifact::SubtitleArtifact = serde_json::from_slice(&manifest).unwrap();
+    assert_eq!(manifest.translation_quality_log.len(), 1);
+    assert_eq!(
+        manifest.translation_quality_log[0].reasons,
+        vec!["review_model_quality_correction"]
     );
 }
 

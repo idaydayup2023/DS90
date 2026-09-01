@@ -87,10 +87,8 @@ external_quality_margin = 5.0
 [translation]
 provider = "ollama"
 base_url = "http://127.0.0.1:11434"
-model = "translategemma:12b"
-# TranslateGemma 负责翻译；通用模型负责整片编辑审校。
-consistency_model = "gemma4:12b-mlx"
-# 实片对照表明 TranslateGemma 不适合自审：会漏掉大量串句，因此保留独立通用模型。
+model = "translategemma:4b"
+# 4B TranslateGemma 负责常规批量翻译；独立通用模型负责一次性最终审校。
 alignment_model = "gemma4:12b-mlx"
 source_language = "English"
 source_language_code = "en"
@@ -109,21 +107,16 @@ max_response_bytes = 4194304
 # 限制单次生成，避免模型输出跑偏后占满整个请求超时窗口。
 max_output_tokens = 4096
 min_target_script_ratio = 0.15
-# 初译完成后用完整字幕统一人名、术语和语气。审校是建议层：服务不可用、
-# 语境不确定或返回结构无效时会记录警告，但不会阻断已经通过硬质量门的字幕。
-consistency_check = true
-consistency_max_chars = 120000
-# 校对只允许有限数量的跨行一致性修正，禁止把它变成全文重译。
-consistency_max_corrections = 64
-consistency_max_output_tokens = 4096
-# 术语校对完成后每次最多审 8 条；上下文只用于理解，不允许把相邻字幕内容
-# 移入当前句。结构或编号失败会继续拆小；单条仍无法判定时保留当前译文并发布。
+# 关闭独立的整片一致性往返，只保留下一段的一次性最终审校。
+consistency_check = false
+# 翻译完成后每次最多审 8 条；审校模型直接给出最终修正版，不回送翻译模型、
+# 不对修正版再次审校。结构或编号失败时只做拆批恢复。
 alignment_check = true
 alignment_batch_size = 8
 alignment_context_cues = 6
 alignment_max_corrections = 8
-# 同一编号连续 3 次仍被校对模型否决时，保留该条英文原文并继续发布。
-alignment_max_attempts = 3
+# 审校模型直接给出最终中文；正式字幕不加问题标签，所有失败或存疑信息
+# 只在字幕 manifest 中保留质量现场记录。
 alignment_max_output_tokens = 4096
 
 # OpenAI-compatible 示例：

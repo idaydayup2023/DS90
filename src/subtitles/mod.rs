@@ -249,8 +249,8 @@ fn process_video(
             std::str::from_utf8(&source.bytes).context("source subtitle is not valid UTF-8")?;
         let source_cues = srt::parse(source_text)?;
         quality::validate_source(&source_cues)?;
-        let output_cues = translation::translate(&source_cues, &cfg.translation)?;
-        let output = srt::format(&output_cues)?;
+        let translation = translation::translate(&source_cues, &cfg.translation)?;
+        let output = srt::format(&translation.cues)?;
         let reparsed = srt::parse(&output)?;
         translation::validate_output(&source_cues, &reparsed, cfg.translation.bilingual)?;
         quality::validate_translation_quality(
@@ -259,6 +259,7 @@ fn process_video(
             &cfg.translation.target_language,
             cfg.translation.min_target_script_ratio,
         )?;
+        let reviewed_cues = translation.quality_log.len();
         state.renew(&job_id, owner, cfg.state.lease_seconds)?;
         state.transition(
             &job_id,
@@ -266,7 +267,7 @@ fn process_video(
             owner,
             "TRANSLATING",
             "VERIFIED",
-            &serde_json::json!({"cues": reparsed.len()}),
+            &serde_json::json!({"cues": reparsed.len(), "reviewed_cues": reviewed_cues}),
         )?;
 
         let paths = artifact_paths(&video.path)?;
@@ -285,6 +286,7 @@ fn process_video(
             source_kind: source.kind,
             source_path: source.path,
             source_evidence: source.evidence,
+            translation_quality_log: translation.quality_log,
             created_unix_seconds: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -329,7 +331,7 @@ fn process_video(
             &serde_json::json!({"output": paths.output, "output_sha256": output_sha256}),
         )?;
         println!(
-            "subtitles translated video={} output={}",
+            "subtitles translated video={} output={} reviewed_cues={reviewed_cues}",
             video.path, paths.output
         );
         Ok(VideoOutcome::Translated)

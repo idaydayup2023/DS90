@@ -152,6 +152,7 @@ pub fn write_ready_artifact(source_root: &Path, video_path: &str) {
         source_kind: "external_english".into(),
         source_path: Some(source_path),
         source_evidence: None,
+        translation_quality_log: Vec::new(),
         created_unix_seconds: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()

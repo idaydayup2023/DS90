@@ -225,6 +225,9 @@ pub struct TranslationConfig {
     pub alignment_context_cues: usize,
     #[serde(default = "default_alignment_max_corrections")]
     pub alignment_max_corrections: usize,
+    /// Retained only so existing version-3 configuration files still load.
+    /// Review corrections are final and this value no longer controls iteration.
+    #[doc(hidden)]
     #[serde(default = "default_alignment_max_attempts")]
     pub alignment_max_attempts: u32,
     #[serde(default = "default_alignment_max_output_tokens")]
@@ -370,7 +373,6 @@ impl Config {
                 || self.translation.alignment_max_corrections == 0
                 || self.translation.alignment_max_corrections
                     > self.translation.alignment_batch_size
-                || self.translation.alignment_max_attempts == 0
                 || self.translation.alignment_max_output_tokens == 0)
         {
             bail!(

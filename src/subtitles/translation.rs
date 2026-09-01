@@ -9,12 +9,13 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::artifact::TranslationQualityRecord;
 use crate::config::{LlmProvider, TranslationConfig};
 
-use super::quality::validate_translation_quality;
+use super::quality::{translation_concerns, validate_translation_quality};
 use super::srt::{Cue, single_line};
 
-const PROMPT_VERSION: &str = "subtrans-translation-cue-binding-json-v5";
+const PROMPT_VERSION: &str = "subtrans-translation-two-stage-review-json-v6";
 
 #[derive(Debug, Serialize)]
 struct PromptLine<'a> {
@@ -24,18 +25,13 @@ struct PromptLine<'a> {
 }
 
 #[derive(Debug, Serialize)]
-struct AuditLine<'a> {
-    index: u32,
-    source: &'a str,
-    translation: &'a str,
-}
-
-#[derive(Debug, Serialize)]
 struct AlignmentLine<'a> {
     index: u32,
     source: &'a str,
     translation: &'a str,
     review: bool,
+    must_correct: bool,
+    concerns: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,17 +56,30 @@ struct TranslatedLine {
 #[derive(Debug)]
 struct AlignmentTask {
     positions: Vec<usize>,
-    attempts: u32,
 }
 
 #[derive(Debug, Default)]
 struct AlignmentOutcome {
     corrected: usize,
-    english_fallback: BTreeSet<u32>,
+    flagged: usize,
     unresolved: usize,
+    quality_log: Vec<TranslationQualityRecord>,
 }
 
-pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<Vec<Cue>> {
+#[derive(Debug)]
+pub struct TranslationOutcome {
+    pub cues: Vec<Cue>,
+    pub quality_log: Vec<TranslationQualityRecord>,
+}
+
+#[derive(Debug, Default)]
+struct PendingReview {
+    candidate: String,
+    reasons: BTreeSet<String>,
+    primary_error: Option<String>,
+}
+
+pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<TranslationOutcome> {
     if cues.is_empty() || cfg.batch_size == 0 || cfg.max_batch_chars == 0 {
         bail!("source cues and translation batch limits must be non-empty");
     }
@@ -79,7 +88,7 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<Vec<Cue>> {
         .build()?;
     let api_key = cfg.api_key()?;
     let mut translated = BTreeMap::new();
-    let mut english_fallback = BTreeSet::new();
+    let mut pending_review = BTreeMap::new();
 
     for range in batch_ranges(cues, cfg.batch_size, cfg.max_batch_chars) {
         translate_range_adaptive(
@@ -89,7 +98,7 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<Vec<Cue>> {
             range,
             cfg,
             &mut translated,
-            &mut english_fallback,
+            &mut pending_review,
         )?;
         println!(
             "translation progress translated={}/{}",
@@ -97,34 +106,41 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<Vec<Cue>> {
             cues.len()
         );
     }
-    if cfg.consistency_check && cues.len() > 1 {
-        println!("translation consistency_check cues={}", cues.len());
-        match audit_consistency(&client, api_key.as_deref(), cues, &mut translated, cfg) {
-            Ok(corrected) => println!("translation consistency_check corrected={corrected}"),
-            Err(error) => eprintln!(
-                "translation consistency_check unresolved=true action=continue_without_consistency_corrections error={error:#}"
-            ),
-        }
-    }
-    if cfg.alignment_check {
-        println!("translation alignment_check cues={}", cues.len());
-        let outcome = audit_alignment(&client, api_key.as_deref(), cues, &mut translated, cfg)?;
+    queue_quality_concerns(cues, &translated, cfg, &mut pending_review);
+    let mut quality_log = Vec::new();
+    if cfg.alignment_check || cfg.consistency_check || !pending_review.is_empty() {
+        println!("translation review_check cues={}", cues.len());
+        let outcome = audit_alignment(
+            &client,
+            api_key.as_deref(),
+            cues,
+            &mut translated,
+            cfg,
+            &mut pending_review,
+        )?;
         println!(
-            "translation alignment_check corrected={} english_fallback={} unresolved={}",
-            outcome.corrected,
-            outcome.english_fallback.len(),
-            outcome.unresolved
+            "translation review_check corrected={} flagged={} unresolved={}",
+            outcome.corrected, outcome.flagged, outcome.unresolved
         );
-        english_fallback.extend(outcome.english_fallback);
+        quality_log = outcome.quality_log;
     }
-    let output = render_with_fallback(cues, &translated, cfg.bilingual, &english_fallback)?;
+    if !pending_review.is_empty() {
+        bail!(
+            "review model did not resolve required cue indices {:?}; refusing to publish untranslated or questionable text",
+            pending_review.keys().collect::<Vec<_>>()
+        );
+    }
+    let output = render(cues, &translated, cfg.bilingual)?;
     validate_translation_quality(
         cues,
         &output,
         &cfg.target_language,
         cfg.min_target_script_ratio,
     )?;
-    Ok(output)
+    Ok(TranslationOutcome {
+        cues: output,
+        quality_log,
+    })
 }
 
 fn batch_ranges(cues: &[Cue], max_count: usize, max_chars: usize) -> Vec<Range<usize>> {
@@ -157,7 +173,7 @@ fn translate_range_adaptive(
     initial: Range<usize>,
     cfg: &TranslationConfig,
     translated: &mut BTreeMap<u32, String>,
-    english_fallback: &mut BTreeSet<u32>,
+    pending_review: &mut BTreeMap<u32, PendingReview>,
 ) -> Result<()> {
     let mut pending = VecDeque::from([initial]);
     while let Some(range) = pending.pop_front() {
@@ -170,21 +186,22 @@ fn translate_range_adaptive(
             .map(|cue| cue.index)
             .collect();
         let request_and_validate = || {
-            request(
+            let response = request(
                 client,
                 cfg,
                 api_key,
                 &cfg.model,
                 &prompt,
                 cfg.max_output_tokens,
-            )
-            .and_then(|response| parse_valid_indices(&response, expected, &ignored_context_indices))
-            .and_then(|values| {
-                if values.is_empty() {
-                    bail!("translation response contains no requested cue indices");
-                }
-                Ok(values)
-            })
+            )?;
+            parse_valid_indices(&response, expected, &ignored_context_indices)
+                .with_context(|| format!("raw_model_response={}", log_preview(&response)))
+                .and_then(|values| {
+                    if values.is_empty() {
+                        bail!("translation response contains no requested cue indices");
+                    }
+                    Ok(values)
+                })
         };
         // Malformed multi-cue responses are split immediately. A single cue
         // retries the complete request and strict parse before it is preserved
@@ -237,9 +254,14 @@ fn translate_range_adaptive(
             Err(error) => {
                 let cue = &cues[range.start];
                 translated.insert(cue.index, single_line(&cue.text));
-                english_fallback.insert(cue.index);
-                println!(
-                    "translation initial_fallback index={} attempts={} action=keep_english error={error:#}",
+                queue_mandatory_review(
+                    pending_review,
+                    cue,
+                    "primary_translation_failed",
+                    Some(format!("{error:#}")),
+                );
+                eprintln!(
+                    "translation review_required index={} attempts={} reason=primary_translation_failed error={error:#}",
                     cue.index,
                     cfg.max_retries.saturating_add(1)
                 );
@@ -265,6 +287,63 @@ fn retry<T>(max_retries: u32, mut operation: impl FnMut() -> Result<T>) -> Resul
         }
     }
     Err(last_error.expect("retry loop executes at least once"))
+}
+
+fn queue_quality_concerns(
+    cues: &[Cue],
+    translations: &BTreeMap<u32, String>,
+    cfg: &TranslationConfig,
+    pending: &mut BTreeMap<u32, PendingReview>,
+) {
+    for cue in cues {
+        let Some(candidate) = translations.get(&cue.index) else {
+            continue;
+        };
+        for reason in translation_concerns(
+            &cue.text,
+            candidate,
+            &cfg.target_language,
+            cfg.min_target_script_ratio,
+        ) {
+            queue_review_candidate(pending, cue, candidate, &reason, None);
+        }
+    }
+}
+
+fn queue_mandatory_review(
+    pending: &mut BTreeMap<u32, PendingReview>,
+    cue: &Cue,
+    reason: &str,
+    primary_error: Option<String>,
+) {
+    queue_review_candidate(pending, cue, &single_line(&cue.text), reason, primary_error);
+}
+
+fn queue_review_candidate(
+    pending: &mut BTreeMap<u32, PendingReview>,
+    cue: &Cue,
+    candidate: &str,
+    reason: &str,
+    primary_error: Option<String>,
+) {
+    let entry = pending.entry(cue.index).or_insert_with(|| PendingReview {
+        candidate: single_line(candidate),
+        reasons: BTreeSet::new(),
+        primary_error: None,
+    });
+    entry.reasons.insert(reason.to_owned());
+    if let Some(error) = primary_error {
+        entry.primary_error = Some(log_preview(&error));
+    }
+}
+
+fn log_preview(value: &str) -> String {
+    const MAX_CHARS: usize = 2_000;
+    let mut preview: String = value.chars().take(MAX_CHARS).collect();
+    if value.chars().count() > MAX_CHARS {
+        preview.push_str("...[truncated]");
+    }
+    preview.replace(['\r', '\n'], "\\n")
 }
 
 pub fn parse_aligned(response: &str, expected: &[Cue]) -> Result<BTreeMap<u32, String>> {
@@ -315,15 +394,6 @@ pub fn render(
     translations: &BTreeMap<u32, String>,
     bilingual: bool,
 ) -> Result<Vec<Cue>> {
-    render_with_fallback(source, translations, bilingual, &BTreeSet::new())
-}
-
-fn render_with_fallback(
-    source: &[Cue],
-    translations: &BTreeMap<u32, String>,
-    bilingual: bool,
-    english_fallback: &BTreeSet<u32>,
-) -> Result<Vec<Cue>> {
     let mut output = Vec::with_capacity(source.len());
     for cue in source {
         let target = single_line(
@@ -339,9 +409,7 @@ fn render_with_fallback(
             index: cue.index,
             start_ms: cue.start_ms,
             end_ms: cue.end_ms,
-            text: if english_fallback.contains(&cue.index) {
-                original
-            } else if bilingual {
+            text: if bilingual {
                 format!("{target}\n{original}")
             } else {
                 target
@@ -372,10 +440,7 @@ pub fn validate_output(source: &[Cue], output: &[Cue], bilingual: bool) -> Resul
             .map(str::trim)
             .filter(|line| !line.is_empty())
             .count();
-        let deliberate_english_fallback = bilingual
-            && line_count == 1
-            && single_line(&output_cue.text).eq_ignore_ascii_case(&single_line(&source_cue.text));
-        if !deliberate_english_fallback && line_count != if bilingual { 2 } else { 1 } {
+        if line_count != if bilingual { 2 } else { 1 } {
             bail!(
                 "translated cue {} has an invalid line structure",
                 source_cue.index
@@ -434,81 +499,13 @@ fn prompt_context_range(core: Range<usize>, context_cues: usize) -> Range<usize>
     core.start.saturating_sub(context_cues)..core.end
 }
 
-fn audit_consistency(
-    client: &Client,
-    api_key: Option<&str>,
-    cues: &[Cue],
-    translations: &mut BTreeMap<u32, String>,
-    cfg: &TranslationConfig,
-) -> Result<usize> {
-    let characters = cues.iter().try_fold(0usize, |total, cue| {
-        let translation = translations
-            .get(&cue.index)
-            .with_context(|| format!("missing translation for consistency cue {}", cue.index))?;
-        Ok::<usize, anyhow::Error>(
-            total
-                .saturating_add(cue.text.chars().count())
-                .saturating_add(translation.chars().count()),
-        )
-    })?;
-    if characters > cfg.consistency_max_chars {
-        bail!(
-            "translation consistency input has {characters} characters, exceeding configured limit {}",
-            cfg.consistency_max_chars
-        );
-    }
-    let lines: Vec<AuditLine<'_>> = cues
-        .iter()
-        .map(|cue| {
-            Ok(AuditLine {
-                index: cue.index,
-                source: &cue.text,
-                translation: translations
-                    .get(&cue.index)
-                    .context("translation disappeared before consistency audit")?,
-            })
-        })
-        .collect::<Result<_>>()?;
-    let prompt = format!(
-        "Protocol: {PROMPT_VERSION}-consistency. You are a professional subtitle translation editor for {} ({}) to {} ({}). \
-         This is a consistency-only audit, not retranslation or proofreading. Correct only a cross-line conflict where the same named entity, title, \
-         place, relationship, or recurring term has incompatible target renderings. Never change a line only for fluency, wording, punctuation, or style. \
-         Do not rewrite lines that are already correct. Return at most {} corrections in exactly one JSON object \
-         {{\"corrections\":[{{\"index\":{},\"text\":\"corrected translation\"}}]}}. \
-         Use an empty corrections array when no change is needed. Each text must contain only the corrected target-language subtitle, never the source. \
-         Include only existing indices, with no markdown, reasons, or extra keys.\n\n{}",
-        cfg.source_language,
-        cfg.source_language_code,
-        cfg.target_language,
-        cfg.target_language_code,
-        cfg.consistency_max_corrections,
-        cues[0].index,
-        serde_json::to_string(&lines)?
-    );
-    let expected: BTreeSet<u32> = cues.iter().map(|cue| cue.index).collect();
-    let model = cfg.consistency_model.as_deref().unwrap_or(&cfg.model);
-    let corrections = request_audit_corrections(
-        client,
-        cfg,
-        api_key,
-        model,
-        &prompt,
-        cfg.consistency_max_output_tokens,
-        &expected,
-        cfg.consistency_max_corrections,
-        "consistency",
-    )?;
-    let corrected = corrections.len();
-    translations.extend(corrections);
-    Ok(corrected)
-}
-
 fn audit_alignment(
     client: &Client,
     api_key: Option<&str>,
     cues: &[Cue],
     translations: &mut BTreeMap<u32, String>,
     cfg: &TranslationConfig,
+    pending_review: &mut BTreeMap<u32, PendingReview>,
 ) -> Result<AlignmentOutcome> {
     let model = cfg
         .alignment_model
@@ -521,7 +518,6 @@ fn audit_alignment(
             .into_iter()
             .map(|range| AlignmentTask {
                 positions: range.collect(),
-                attempts: 0,
             })
             .collect();
     while let Some(task) = pending.pop_front() {
@@ -540,25 +536,34 @@ fn audit_alignment(
             .enumerate()
             .map(|(offset, cue)| {
                 let position = context.start + offset;
+                let reviewed = review_positions.contains(&position);
                 Ok(AlignmentLine {
                     index: cue.index,
                     source: &cue.text,
                     translation: translations.get(&cue.index).with_context(|| {
                         format!("missing translation for alignment cue {}", cue.index)
                     })?,
-                    review: review_positions.contains(&position),
+                    review: reviewed,
+                    must_correct: reviewed && pending_review.contains_key(&cue.index),
+                    concerns: reviewed
+                        .then(|| pending_review.get(&cue.index))
+                        .flatten()
+                        .map(|trigger| trigger.reasons.iter().cloned().collect())
+                        .unwrap_or_default(),
                 })
             })
             .collect::<Result<_>>()?;
         let prompt = format!(
-            "Protocol: {PROMPT_VERSION}-alignment. You are a strict subtitle source-to-target alignment auditor for {} ({}) to {} ({}). \
-             For every item with review=true, decide whether translation faithfully translates only the source at the SAME index. \
+            "Protocol: {PROMPT_VERSION}-final-review. You are the one-pass final subtitle reviewer for {} ({}) to {} ({}). \
+             For every item with review=true, decide whether the translation is accurate, complete, natural, consistent, and bound only to the source at the SAME index. \
              Items with review=false are read-only context. Context may clarify names, pronouns, tone, and an incomplete sentence, but its words must never be \
              added to, moved into, or substituted for a reviewed index. Correct a reviewed item when its translation belongs wholly or partly to a neighboring \
-             cue, omits or invents a speaker or clause, changes the meaning, or completes a fragment with content absent from that source. If context is \
-             insufficient or the intended meaning is genuinely ambiguous, do not guess and do not return a correction for that item. Preserve fragments \
+             cue, repeats untranslated source prose, has inadequate target-language content, uses inconsistent terminology, omits or invents a speaker or clause, \
+             changes the meaning, or completes a fragment with content absent from that source. Every item with must_correct=true has already failed a hard check: \
+             you MUST return a complete final target-language correction for that index. Preserve fragments \
              as fragments and preserve every speaker and clause that actually occurs at the reviewed index. Account for every content-bearing action, object, \
-             negation, title, and domain term; reject a generic paraphrase that drops or replaces one of them. Do not change a faithful line merely for style. \
+             negation, title, and domain term; reject a generic paraphrase that drops or replaces one of them. This is the only review pass: return the final result \
+             directly and do not ask the translation model to revise it. \
              Return at most {} corrections in exactly one JSON object \
              {{\"corrections\":[{{\"index\":{},\"text\":\"replacement translation\"}}]}}. Each replacement must be a complete translation of only the \
              source at the same index. Return an empty corrections array when every reviewed item is aligned. Include only review=true indices, with no \
@@ -589,47 +594,107 @@ fn audit_alignment(
         );
         match result {
             Ok(corrections) => {
+                let required: BTreeSet<u32> = expected
+                    .iter()
+                    .filter(|index| pending_review.contains_key(index))
+                    .copied()
+                    .collect();
+                let missing_required: Vec<u32> = required
+                    .iter()
+                    .filter(|index| !corrections.contains_key(index))
+                    .copied()
+                    .collect();
+                if !missing_required.is_empty() && task.positions.len() > 1 {
+                    let midpoint = task.positions.len() / 2;
+                    eprintln!(
+                        "translation review_check split_indices={:?} reason=missing_required_corrections indices={missing_required:?}",
+                        task.positions
+                    );
+                    pending.push_front(AlignmentTask {
+                        positions: task.positions[midpoint..].to_vec(),
+                    });
+                    pending.push_front(AlignmentTask {
+                        positions: task.positions[..midpoint].to_vec(),
+                    });
+                    continue;
+                }
+                if !missing_required.is_empty() {
+                    bail!(
+                        "review model omitted mandatory correction for cue indices {missing_required:?}"
+                    );
+                }
                 for (index, correction) in corrections {
                     let position = cues
                         .iter()
                         .position(|cue| cue.index == index)
                         .with_context(|| format!("alignment returned unknown cue {index}"))?;
-                    let next_attempt = task.attempts.saturating_add(1);
-                    if next_attempt >= cfg.alignment_max_attempts {
-                        translations.insert(index, single_line(&cues[position].text));
-                        outcome.english_fallback.insert(index);
-                        eprintln!(
-                            "translation alignment_fallback index={index} attempts={next_attempt} action=keep_english"
+                    let previous = translations
+                        .get(&index)
+                        .cloned()
+                        .unwrap_or_else(|| single_line(&cues[position].text));
+                    let concerns = translation_concerns(
+                        &cues[position].text,
+                        &correction,
+                        &cfg.target_language,
+                        cfg.min_target_script_ratio,
+                    );
+                    if !concerns.is_empty() {
+                        bail!(
+                            "review model returned a questionable final correction for cue {index}: {}",
+                            concerns.join(",")
                         );
-                    } else {
-                        translations.insert(index, correction);
-                        outcome.corrected = outcome.corrected.saturating_add(1);
-                        pending.push_back(AlignmentTask {
-                            positions: vec![position],
-                            attempts: next_attempt,
-                        });
                     }
+                    let trigger = pending_review.remove(&index);
+                    let reasons = trigger
+                        .as_ref()
+                        .map(|value| value.reasons.iter().cloned().collect())
+                        .unwrap_or_else(|| vec!["review_model_quality_correction".to_owned()]);
+                    let primary_error = trigger
+                        .as_ref()
+                        .and_then(|value| value.primary_error.clone());
+                    let candidate_before_review =
+                        trigger.map(|value| value.candidate).unwrap_or(previous);
+                    let reviewed_translation = correction;
+                    translations.insert(index, reviewed_translation.clone());
+                    outcome.corrected = outcome.corrected.saturating_add(1);
+                    outcome.flagged = outcome.flagged.saturating_add(1);
+                    outcome.quality_log.push(TranslationQualityRecord {
+                        cue_index: index,
+                        source: single_line(&cues[position].text),
+                        candidate_before_review,
+                        reviewed_translation,
+                        reasons,
+                        primary_error,
+                        translation_model: cfg.model.clone(),
+                        review_model: model.to_owned(),
+                    });
                 }
             }
             Err(_) if task.positions.len() > 1 => {
                 let midpoint = task.positions.len() / 2;
                 println!(
-                    "translation alignment_check split_indices={:?} at={midpoint}",
+                    "translation review_check split_indices={:?} at={midpoint}",
                     task.positions
                 );
                 pending.push_front(AlignmentTask {
                     positions: task.positions[midpoint..].to_vec(),
-                    attempts: task.attempts,
                 });
                 pending.push_front(AlignmentTask {
                     positions: task.positions[..midpoint].to_vec(),
-                    attempts: task.attempts,
                 });
             }
             Err(error) => {
                 outcome.unresolved = outcome.unresolved.saturating_add(1);
+                if pending_review.contains_key(&cues[first].index) {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "review failed for mandatory cue {}; refusing to publish questionable text",
+                            cues[first].index
+                        )
+                    });
+                }
                 eprintln!(
-                    "translation alignment_check unresolved_index={} action=keep_current_translation error={error:#}",
+                    "translation review_check unresolved_index={} action=keep_current_translation error={error:#}",
                     cues[first].index
                 );
             }
@@ -883,7 +948,7 @@ mod tests {
             r#"
 provider = "ollama"
 base_url = "http://127.0.0.1:11434"
-model = "translategemma:12b"
+model = "translategemma:4b"
 source_language = "English"
 source_language_code = "en"
 target_language = "Simplified Chinese"
