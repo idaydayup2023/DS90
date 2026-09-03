@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Value, json};
 
 use crate::artifact::TranslationQualityRecord;
@@ -15,7 +15,7 @@ use crate::config::{LlmProvider, TranslationConfig};
 use super::quality::{translation_concerns, validate_translation_quality};
 use super::srt::{Cue, single_line};
 
-const PROMPT_VERSION: &str = "subtrans-translation-two-stage-review-json-v6";
+const PROMPT_VERSION: &str = "subtrans-translation-two-stage-review-json-v7";
 
 #[derive(Debug, Serialize)]
 struct PromptLine<'a> {
@@ -35,22 +35,42 @@ struct AlignmentLine<'a> {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct TranslationEnvelope {
+    #[serde(alias = "items", alias = "results")]
     translations: Vec<TranslatedLine>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ConsistencyEnvelope {
+    #[serde(alias = "translations", alias = "items", alias = "results")]
     corrections: Vec<TranslatedLine>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct TranslatedLine {
+    #[serde(deserialize_with = "deserialize_model_index")]
     index: u32,
+    #[serde(alias = "translation", alias = "translated_text", alias = "target")]
     text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ModelIndex {
+    Number(u32),
+    String(String),
+}
+
+fn deserialize_model_index<'de, D>(deserializer: D) -> std::result::Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match ModelIndex::deserialize(deserializer)? {
+        ModelIndex::Number(index) => Ok(index),
+        ModelIndex::String(index) => index
+            .parse::<u32>()
+            .map_err(|_| de::Error::custom("model index string is not an unsigned integer")),
+    }
 }
 
 #[derive(Debug)]
@@ -363,9 +383,7 @@ fn parse_valid_indices(
     expected: &[Cue],
     ignored_context_indices: &BTreeSet<u32>,
 ) -> Result<BTreeMap<u32, String>> {
-    let normalized = normalize_known_json_keys(response);
-    let envelope: TranslationEnvelope = serde_json::from_str(normalized.trim())
-        .context("translation response is not the required JSON object")?;
+    let envelope = parse_translation_envelope(response)?;
     let expected_indices: BTreeSet<u32> = expected.iter().map(|cue| cue.index).collect();
     let mut output = BTreeMap::new();
     for item in envelope.translations {
@@ -387,6 +405,28 @@ fn parse_valid_indices(
         }
     }
     Ok(output)
+}
+
+fn parse_translation_envelope(response: &str) -> Result<TranslationEnvelope> {
+    let normalized = normalize_known_json_keys(response);
+    let trimmed = strip_single_json_fence(normalized.trim());
+    let value: Value = serde_json::from_str(trimmed)
+        .context("translation response is not valid JSON after safe wrapper normalization")?;
+    match value {
+        Value::Array(items) => Ok(TranslationEnvelope {
+            translations: serde_json::from_value(Value::Array(items))
+                .context("translation array contains an invalid item")?,
+        }),
+        Value::Object(items) if items.contains_key("index") => Ok(TranslationEnvelope {
+            translations: vec![
+                serde_json::from_value(Value::Object(items))
+                    .context("translation object contains an invalid item")?,
+            ],
+        }),
+        value => serde_json::from_value(value).context(
+            "translation response is not the required translations object, item, or array",
+        ),
+    }
 }
 
 pub fn render(
@@ -729,6 +769,12 @@ fn parse_consistency_envelope(response: &str) -> Result<ConsistencyEnvelope> {
         Value::Object(items) if items.is_empty() => Ok(ConsistencyEnvelope {
             corrections: Vec::new(),
         }),
+        Value::Object(items) if items.contains_key("index") => Ok(ConsistencyEnvelope {
+            corrections: vec![
+                serde_json::from_value(Value::Object(items))
+                    .context("audit correction object contains an invalid item")?,
+            ],
+        }),
         value => serde_json::from_value(value)
             .context("audit response is not the required corrections object or array"),
     }
@@ -981,6 +1027,54 @@ target_language_code = "zh-CN"
     }
 
     #[test]
+    fn translation_response_accepts_safe_model_format_variants() {
+        let expected = cues(2);
+        let actual_translategemma = r#"{"translations":[{"index":1,"text":"第一行","translate":true,"confidence":0.98},{"index":2,"text":"第二行","translate":true}]}"#;
+        let parsed = parse_aligned(actual_translategemma, &expected).unwrap();
+        assert_eq!(parsed.get(&1).map(String::as_str), Some("第一行"));
+        assert_eq!(parsed.get(&2).map(String::as_str), Some("第二行"));
+
+        let fenced_bare_array = "```json\n[{\"index\":\"1\",\"translation\":\"甲\"},{\"index\":2,\"translated_text\":\"乙\"}]\n```";
+        let parsed = parse_aligned(fenced_bare_array, &expected).unwrap();
+        assert_eq!(parsed.get(&1).map(String::as_str), Some("甲"));
+        assert_eq!(parsed.get(&2).map(String::as_str), Some("乙"));
+
+        let single = parse_aligned(
+            r#"{"index":"1","target":"单条","explanation":"ignored transport metadata"}"#,
+            &expected[..1],
+        )
+        .unwrap();
+        assert_eq!(single.get(&1).map(String::as_str), Some("单条"));
+    }
+
+    #[test]
+    fn flexible_translation_format_keeps_strict_semantic_checks() {
+        let expected = cues(2);
+        assert!(
+            parse_aligned(
+                r#"[{"index":1,"text":"甲"},{"index":1,"text":"乙"}]"#,
+                &expected,
+            )
+            .is_err()
+        );
+        assert!(
+            parse_aligned(
+                r#"[{"index":1,"text":"甲"},{"index":3,"text":"越界"}]"#,
+                &expected,
+            )
+            .is_err()
+        );
+        assert!(parse_aligned(r#"[{"index":1,"text":"甲"}]"#, &expected).is_err());
+        assert!(
+            parse_aligned(
+                r#"[{"index":1,"text":"甲"},{"index":2,"text":"   "}]"#,
+                &expected,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn consistency_response_only_accepts_known_unique_indices() {
         let expected = BTreeSet::from([1, 2]);
         let corrections = parse_consistency(
@@ -1028,7 +1122,15 @@ target_language_code = "zh-CN"
         );
         assert!(
             parse_consistency(
-                r#"{"corrections":[{"index":2,"translation":"未知字段"}]}"#,
+                r#"{"results":[{"index":"2","translated_text":"兼容译文","confidence":0.9}]}"#,
+                &expected,
+                2
+            )
+            .is_ok()
+        );
+        assert!(
+            parse_consistency(
+                r#"{"corrections":[{"index":2,"unexpected_text":"未知字段"}]}"#,
                 &expected,
                 2
             )

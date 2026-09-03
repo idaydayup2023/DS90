@@ -368,7 +368,7 @@ fn malformed_model_json_is_split_immediately_instead_of_retried_unchanged() {
     fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
     fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
     let (base_url, server) = ollama_server(vec![
-        Reply::Malformed(r#"{"translations":[{"index":1,"translation":"坏结构"}]}"#),
+        Reply::Malformed(r#"{"translations":[{"index":1,"unexpected_text":"坏结构"}]}"#),
         Reply::Translations(vec![(1, "一"), (2, "二")]),
         Reply::Translations(vec![(3, "三"), (4, "四")]),
     ]);
@@ -470,7 +470,7 @@ fn omitted_repeated_cue_is_repaired_without_retranslating_valid_items() {
 }
 
 #[test]
-fn complete_subtitle_consistency_review_applies_only_returned_corrections() {
+fn complete_subtitle_consistency_review_accepts_auxiliary_fields() {
     let root = tempdir().unwrap();
     let source = root.path().join("source");
     let destination = root.path().join("destination");
@@ -483,8 +483,7 @@ fn complete_subtitle_consistency_review_applies_only_returned_corrections() {
     fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
     let (base_url, server) = ollama_server(vec![
         Reply::Translations(vec![(1, "你好，约翰"), (2, "再见，强")]),
-        Reply::Malformed(r#"{"corrections":[{"index":2,"text":"再见，约翰"," ":"invalid"}]}"#),
-        Reply::Corrections(vec![(2, "再见，约翰")]),
+        Reply::Malformed(r#"{"corrections":[{"index":2,"text":"再见，约翰","confidence":0.9}]}"#),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
     cfg.translation.base_url = base_url;

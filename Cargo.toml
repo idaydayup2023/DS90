@@ -1,6 +1,6 @@
 [package]
 name = "subtrans"
-version = "3.3.0"
+version = "3.3.1"
 edition = "2024"
 rust-version = "1.89"
 description = "Infuse-ready TMDB metadata, subtitle translation, and auditable media migration"
