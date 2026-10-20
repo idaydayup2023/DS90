@@ -17,6 +17,7 @@ use subtrans::storage::{LocalStorage, Storage};
 pub fn config(root: &Path, source: &Path, destination: &Path) -> Config {
     Config {
         version: 3,
+        scan: Default::default(),
         state: StateConfig {
             database: root.join("state/subtrans.sqlite3"),
             lease_seconds: 120,

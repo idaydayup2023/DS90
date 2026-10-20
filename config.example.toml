@@ -1,5 +1,13 @@
 version = 3
 
+# 扫描级排除：命中的源相对路径在资料、字幕、迁移三处扫描中完全跳过，
+# 不计入视频数、失败数或待处理数，文件保持在磁盘上原样不动。
+# exclude_paths 支持精确文件路径或目录前缀（目录下的内容全部排除）。
+# exclude_globs 为分节 glob：`*`/`?` 只在单个路径节内匹配，`**` 可跨节。
+[scan]
+exclude_paths = []
+exclude_globs = []
+
 [state]
 database = "./state/subtrans.sqlite3"
 lease_seconds = 7200
