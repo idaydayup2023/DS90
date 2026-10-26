@@ -211,18 +211,59 @@ impl FtpStorage {
     }
 
     fn parse_listing(&self, ftp: &mut FtpStream, remote: &str) -> Result<Vec<RemoteFile>> {
-        match ftp.mlsd(Some(remote)) {
+        // Some NAS FTP servers answer `MLSD <absolute path>` with an empty
+        // listing when the path contains square brackets, even though the
+        // directory exists. Listing the directory from the inside (CWD plus
+        // MLSD without a path argument) works, so use that for bracketed
+        // names, and as a fallback whenever MLSD reports nothing at all.
+        if needs_directory_listing(remote) {
+            return self.parse_listing_from_directory(ftp, remote);
+        }
+        let listing = match ftp.mlsd(Some(remote)) {
             Ok(lines) => lines
                 .into_iter()
                 .map(|line| RemoteFile::try_from(line).map_err(anyhow::Error::from))
-                .collect(),
+                .collect::<Result<Vec<RemoteFile>>>()?,
             Err(_) => ftp
                 .list(Some(remote))
                 .with_context(|| format!("failed to list FTP directory {remote}"))?
                 .into_iter()
                 .map(|line| RemoteFile::try_from(line).map_err(anyhow::Error::from))
-                .collect(),
+                .collect::<Result<Vec<RemoteFile>>>()?,
+        };
+        if listing.is_empty() {
+            return self.parse_listing_from_directory(ftp, remote);
         }
+        Ok(listing)
+    }
+
+    /// List a directory by entering it first and running MLSD without a path.
+    ///
+    /// A bracketed absolute path makes some NAS servers return an empty
+    /// listing, and the same happens for a missing directory, so this path
+    /// fails loudly (CWD error) instead of silently reporting "empty".
+    fn parse_listing_from_directory(
+        &self,
+        ftp: &mut FtpStream,
+        remote: &str,
+    ) -> Result<Vec<RemoteFile>> {
+        let previous = ftp.pwd().unwrap_or_else(|_| "/".to_string());
+        let listing = (|| -> Result<Vec<RemoteFile>> {
+            ftp.cwd(remote)
+                .with_context(|| format!("failed to enter FTP directory {remote}"))?;
+            let lines = match ftp.mlsd(None) {
+                Ok(lines) => lines,
+                Err(_) => ftp
+                    .list(None)
+                    .with_context(|| format!("failed to list FTP directory {remote}"))?,
+            };
+            lines
+                .into_iter()
+                .map(|line| RemoteFile::try_from(line).map_err(anyhow::Error::from))
+                .collect()
+        })();
+        let _ = ftp.cwd(previous);
+        listing
     }
 
     fn list_directory(
@@ -341,6 +382,17 @@ impl FtpStorage {
     fn is_not_found(error: &FtpError) -> bool {
         matches!(error, FtpError::UnexpectedResponse(response) if response.status.code() == 550)
     }
+}
+
+/// Whether a remote path must be listed by entering it (CWD + `MLSD` without
+/// a path argument) instead of passing it as an `MLSD` argument.
+///
+/// Observed on the NAS FTP server: `MLSD <path>` returns an empty listing
+/// for existing directories whose absolute path contains square brackets
+/// (media libraries name show folders with `[...]`), which callers would
+/// mistake for a missing directory.
+fn needs_directory_listing(remote: &str) -> bool {
+    remote.contains('[') || remote.contains(']')
 }
 
 impl Storage for FtpStorage {
@@ -607,5 +659,24 @@ impl Storage for FtpStorage {
 
     fn local_path_for_write(&self, _relative: &str) -> Result<Option<std::path::PathBuf>> {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::needs_directory_listing;
+
+    #[test]
+    fn bracketed_paths_are_listed_from_inside_the_directory() {
+        assert!(needs_directory_listing("/volume1/媒体/[TV] Show/Season 01"));
+        assert!(needs_directory_listing("/media/Show [2024]/S01E01"));
+        assert!(needs_directory_listing("/media/partial]name"));
+    }
+
+    #[test]
+    fn plain_paths_keep_the_mlsd_argument_path() {
+        assert!(!needs_directory_listing("/"));
+        assert!(!needs_directory_listing("/volume1/媒体/Show/Season 01"));
+        assert!(!needs_directory_listing("/media/Movie (2024)"));
     }
 }
