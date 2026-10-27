@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub version: u32,
+    #[serde(default)]
+    pub scan: ScanConfig,
     pub state: StateConfig,
     pub source: StorageConfig,
     pub destination: StorageConfig,
@@ -17,6 +19,101 @@ pub struct Config {
     pub subtitles: SubtitleConfig,
     pub translation: TranslationConfig,
     pub migration: MigrationConfig,
+}
+
+/// Scan-level exclusions: matching source-relative paths are skipped by the
+/// metadata, subtitles, and migration scans entirely (not counted as videos,
+/// failures, or pending items). Files stay untouched on disk.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScanConfig {
+    /// Exact source-relative file paths or directory prefixes. A directory
+    /// entry excludes everything below it.
+    #[serde(default)]
+    pub exclude_paths: Vec<String>,
+    /// Glob patterns matched against source-relative paths. `*` and `?` match
+    /// within a single path segment; `**` spans any number of segments.
+    #[serde(default)]
+    pub exclude_globs: Vec<String>,
+}
+
+impl Config {
+    pub fn is_excluded(&self, path: &str) -> bool {
+        let path = normalize_exclude_path(path);
+        for entry in &self.scan.exclude_paths {
+            let entry = normalize_exclude_path(entry);
+            if entry.is_empty() {
+                continue;
+            }
+            if path == entry || path.starts_with(&format!("{entry}/")) {
+                return true;
+            }
+        }
+        self.scan
+            .exclude_globs
+            .iter()
+            .map(|pattern| normalize_exclude_path(pattern))
+            .filter(|pattern| !pattern.is_empty())
+            .any(|pattern| glob_path_matches(&pattern, &path))
+    }
+}
+
+fn normalize_exclude_path(value: &str) -> String {
+    let value = value.trim().replace('\\', "/");
+    let value = value.trim_matches('/');
+    let value = value.strip_prefix("./").unwrap_or(value);
+    value.to_owned()
+}
+
+/// Segment-aware glob matcher: splits on '/', `**` spans zero or more
+/// segments, while `*`/`?` match inside one segment only.
+fn glob_path_matches(pattern: &str, path: &str) -> bool {
+    fn match_segment(pattern: &str, segment: &str) -> bool {
+        let pattern: Vec<char> = pattern.chars().collect();
+        let segment: Vec<char> = segment.chars().collect();
+        let mut dp = vec![vec![false; segment.len() + 1]; pattern.len() + 1];
+        dp[0][0] = true;
+        for (row, star) in pattern.iter().enumerate() {
+            if *star == '*' {
+                dp[row + 1][0] = dp[row][0];
+                for col in 1..=segment.len() {
+                    dp[row + 1][col] = dp[row][col] || dp[row + 1][col - 1];
+                }
+            } else if *star == '?' {
+                for col in 1..=segment.len() {
+                    dp[row + 1][col] = dp[row][col];
+                }
+            } else {
+                for col in 1..=segment.len() {
+                    dp[row + 1][col] = dp[row][col - 1] && segment[col - 1] == *star;
+                }
+            }
+        }
+        dp[pattern.len()][segment.len()]
+    }
+
+    fn match_segments(pattern: &[&str], segments: &[&str]) -> bool {
+        match (pattern.first(), segments.first()) {
+            (None, None) => true,
+            (None, Some(_)) => false,
+            (Some(_), None) => pattern.iter().all(|part| **part == *"**"),
+            (Some(&"**"), _) => {
+                for skipped in 0..=segments.len() {
+                    if match_segments(&pattern[1..], &segments[skipped..]) {
+                        return true;
+                    }
+                }
+                false
+            }
+            (Some(head), Some(segment)) => {
+                match_segment(head, segment) && match_segments(&pattern[1..], &segments[1..])
+            }
+        }
+    }
+
+    let pattern: Vec<&str> = pattern.split('/').filter(|part| !part.is_empty()).collect();
+    let segments: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    match_segments(&pattern, &segments)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -332,6 +429,18 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         if self.version != 3 {
             bail!("unsupported config version {}; expected 3", self.version);
+        }
+        for entry in &self.scan.exclude_paths {
+            if entry.trim().is_empty() {
+                bail!("scan.exclude_paths entries must not be empty");
+            }
+            crate::storage::validate_relative_path(entry.trim().trim_matches('/'))
+                .with_context(|| format!("unsafe scan.exclude_paths entry {entry:?}"))?;
+        }
+        for pattern in &self.scan.exclude_globs {
+            if pattern.trim().is_empty() {
+                bail!("scan.exclude_globs entries must not be empty");
+            }
         }
         if self.translation.batch_size == 0
             || self.translation.min_batch_size == 0
@@ -1189,5 +1298,87 @@ filename_template = "{source_file}"
         if cfg!(target_os = "macos") {
             assert!(guidance.contains("subtrans.tmdb.read-token"));
         }
+    }
+
+    const MINIMAL_TEST_CONFIG: &str = r#"
+version = 3
+[state]
+database = "state.sqlite3"
+[source]
+kind = "local"
+root = "/src"
+[destination]
+kind = "local"
+root = "/dst"
+[metadata]
+enabled = false
+[subtitles]
+[translation]
+provider = "ollama"
+base_url = "http://127.0.0.1:11434"
+model = "m"
+[migration]
+[migration.layouts.movie_4k]
+root = "Movies4K"
+directory_template = "{year}/{release_dir}"
+filename_template = "{source_file}"
+[migration.layouts.movie_other]
+root = "Movies"
+directory_template = "{year_bucket}/{release_dir}"
+filename_template = "{source_file}"
+[migration.layouts.tv_4k]
+root = "TV4K"
+directory_template = "{title_dot}/S{season_padded}"
+filename_template = "{source_file}"
+[migration.layouts.tv_other]
+root = "TV"
+directory_template = "{title_dot}/S{season_padded}"
+filename_template = "{source_file}"
+"#;
+
+    fn config_with_scan(exclude_paths: &[&str], exclude_globs: &[&str]) -> Config {
+        let mut config =
+            toml::from_str::<Config>(MINIMAL_TEST_CONFIG).expect("minimal config parses");
+        config.scan.exclude_paths = exclude_paths
+            .iter()
+            .map(|value| value.to_string())
+            .collect();
+        config.scan.exclude_globs = exclude_globs
+            .iter()
+            .map(|value| value.to_string())
+            .collect();
+        config
+    }
+
+    #[test]
+    fn exclude_paths_match_files_and_directory_prefixes() {
+        let config = config_with_scan(
+            &["Silent.Friend.2026/Extras", "The Odyssey (2026) TS  P.TS"],
+            &[],
+        );
+        assert!(config.is_excluded("Silent.Friend.2026/Extras/Ildiko Enyedi.mkv"));
+        assert!(config.is_excluded("Silent.Friend.2026/Extras/Luna Wedler.mkv"));
+        assert!(config.is_excluded("The Odyssey (2026) TS  P.TS/The Odyssey (2026) TS  P.avi"));
+        assert!(!config.is_excluded("Silent.Friend.2026/Silent.Friend.2026.mkv"));
+        assert!(!config.is_excluded("Silent.Friend.2026/Extras.mkv"));
+    }
+
+    #[test]
+    fn exclude_globs_match_segments_and_double_star() {
+        let config = config_with_scan(&[], &["**/Extras/*.mkv", "The Odyssey*", "**/The Odyssey*"]);
+        assert!(config.is_excluded("Silent.Friend.2026/Extras/Ildiko Enyedi.mkv"));
+        assert!(config.is_excluded("The Odyssey (2026) TS  P.avi"));
+        assert!(config.is_excluded("The Odyssey (2026) TS  P.TS/The Odyssey (2026) TS  P.avi"));
+        assert!(!config.is_excluded("Silent.Friend.2026/Silent.Friend.2026.mkv"));
+        assert!(!config.is_excluded("The Odyssey (2026) TS  P.TS/notes.txt"));
+    }
+
+    #[test]
+    fn scan_section_is_optional_in_toml() {
+        let config =
+            toml::from_str::<Config>(MINIMAL_TEST_CONFIG).expect("config without [scan] parses");
+        assert!(config.scan.exclude_paths.is_empty());
+        assert!(config.scan.exclude_globs.is_empty());
+        assert!(!config.is_excluded("anything.mkv"));
     }
 }

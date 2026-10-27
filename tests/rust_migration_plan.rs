@@ -366,6 +366,8 @@ fn config_for(
 ) -> Config {
     Config {
         version: 3,
+
+        scan: Default::default(),
         state: StateConfig {
             database: root.join("state.sqlite3"),
             lease_seconds: 120,

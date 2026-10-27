@@ -1235,6 +1235,14 @@ fn select_videos(entries: &[FileEntry], cfg: &Config, limit: Option<usize>) -> V
         .cloned()
         .collect();
     videos.sort_by(|left, right| left.path.cmp(&right.path));
+    let excluded = videos
+        .iter()
+        .filter(|video| cfg.is_excluded(&video.path))
+        .count();
+    videos.retain(|video| !cfg.is_excluded(&video.path));
+    if excluded > 0 {
+        println!("subtitles excluded videos={excluded} reason=scan_exclude_config");
+    }
     videos.truncate(limit.unwrap_or(usize::MAX));
     videos
 }

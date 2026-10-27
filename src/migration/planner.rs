@@ -221,6 +221,7 @@ pub fn build_plan(config: &Config, limit: Option<usize>) -> Result<PlanDocument>
                 && entry.size >= config.subtitles.min_video_bytes
                 && extension(&entry.path).is_some_and(|value| video_extensions.contains(&value))
         })
+        .filter(|entry| !config.is_excluded(&entry.path))
         .take(limit.unwrap_or(usize::MAX))
         .collect();
 
