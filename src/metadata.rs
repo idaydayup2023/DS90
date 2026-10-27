@@ -151,6 +151,7 @@ fn run_on_storage(
     limit: Option<usize>,
 ) -> Result<MetadataSummary> {
     let entries = storage.list_recursive("")?;
+    crate::storage::report_empty_dirs(&entries);
     let extensions: HashSet<_> = cfg
         .subtitles
         .video_extensions

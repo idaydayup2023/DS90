@@ -329,3 +329,100 @@ pub(crate) fn hash_reader(reader: &mut dyn Read) -> Result<String> {
     }
     Ok(hex::encode(hasher.finalize()))
 }
+
+/// Report directories that exist but contain no entries at all.
+///
+/// A directory entry in `entries` counts as empty when no other entry lives
+/// underneath it. Distinguishing three states matters operationally:
+///
+/// - **empty_dir**: the directory exists but holds nothing (a leftover
+///   shell). It must not be read as "the download never finished" — during
+///   the 2026-10-27 华语十佳 reconciliation an empty shell nearly caused a
+///   duplicate 8.2 GB re-download.
+/// - **missing**: the directory does not exist at all; listing it fails
+///   loudly (the FTP backend errors on `CWD`), never silently returns
+///   nothing.
+/// - **partial**: the directory has entries but is missing expected files
+///   (for example a release folder without the main video); that judgement
+///   belongs to the scan that knows what to expect.
+///
+/// The whole-tree case (no entries at all) is reported as `(root)`.
+///
+/// Returns the number of empty directories found; each is printed once as
+/// `scan empty_dir path=...` so scans leave an auditable trail instead of
+/// silently ignoring empty shells.
+pub fn report_empty_dirs(entries: &[FileEntry]) -> usize {
+    if entries.is_empty() {
+        println!("scan empty_dir path=(root)");
+        return 1;
+    }
+    let mut empty: Vec<&str> = Vec::new();
+    for dir in entries.iter().filter(|entry| entry.is_dir) {
+        let prefix = format!("{}/", dir.path);
+        let has_children = entries.iter().any(|entry| entry.path.starts_with(&prefix));
+        if !has_children {
+            empty.push(dir.path.as_str());
+        }
+    }
+    for path in &empty {
+        println!("scan empty_dir path={path}");
+    }
+    empty.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FileEntry, report_empty_dirs};
+
+    fn dir(path: &str) -> FileEntry {
+        FileEntry {
+            path: path.to_string(),
+            size: 4096,
+            is_dir: true,
+            modified: None,
+        }
+    }
+
+    fn file(path: &str, size: u64) -> FileEntry {
+        FileEntry {
+            path: path.to_string(),
+            size,
+            is_dir: false,
+            modified: None,
+        }
+    }
+
+    #[test]
+    fn empty_shells_are_reported_once_each() {
+        let entries = vec![
+            dir("钢的琴 2011"),
+            dir("钢的琴 2011/Gang De Qin (2010) [1080p]"),
+            file("钢的琴 2011/Gang De Qin (2010) [1080p]/movie.mp4", 10),
+            dir("PTU 2003"),
+        ];
+        assert_eq!(report_empty_dirs(&entries), 1);
+    }
+
+    #[test]
+    fn directories_holding_an_empty_directory_are_not_empty() {
+        let entries = vec![dir("show"), dir("show/inner")];
+        assert_eq!(report_empty_dirs(&entries), 1);
+    }
+
+    #[test]
+    fn a_completely_empty_listing_is_reported_as_root() {
+        let entries: Vec<FileEntry> = Vec::new();
+        assert_eq!(report_empty_dirs(&entries), 1);
+    }
+
+    #[test]
+    fn a_fully_populated_tree_reports_nothing() {
+        let entries = vec![
+            dir("show"),
+            dir("show/S01"),
+            file("show/S01/e01.mkv", 10),
+            file("top.mkv", 10),
+        ];
+        assert_eq!(report_empty_dirs(&entries), 0);
+    }
+}
