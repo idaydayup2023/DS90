@@ -387,10 +387,30 @@ impl FtpStorage {
 /// Whether a remote path must be listed by entering it (CWD + `MLSD` without
 /// a path argument) instead of passing it as an `MLSD` argument.
 ///
-/// Observed on the NAS FTP server: `MLSD <path>` returns an empty listing
-/// for existing directories whose absolute path contains square brackets
-/// (media libraries name show folders with `[...]`), which callers would
-/// mistake for a missing directory.
+/// Rule: **any path containing `[` or `]` is always listed from inside the
+/// directory**, never by passing the path as an `MLSD`/`LIST` argument.
+///
+/// Why (measured on the production NAS, 2026-10-27): the server answers
+/// `MLSD <bracketed path>` with a *successful but empty* listing for
+/// directories that exist and hold content, so callers cannot tell that
+/// apart from a genuinely missing or empty directory. Sampled evidence:
+///
+/// | path                 | `MLSD <path>` | `CWD` + `MLSD` |
+/// |----------------------|---------------|----------------|
+/// | `/TV/[ChineseTVs]`   | 0 entries     | 21 entries     |
+/// | `/TV/[A.B.C]`        | 0 entries     | 80 entries     |
+/// | `/TV/[G.H.I.J.K]`    | 0 entries     | 52 entries     |
+///
+/// The same probe showed this is specific to brackets and **not** to
+/// non-ASCII names or spaces: `/Downloads/华语十佳` and its Chinese
+/// sub-directories list correctly either way, plain directories such as
+/// `/TV` (25 entries) and `/MOVIE` (21 entries) agree across all four
+/// listing methods, and the server rejects wildcards (`MLSD 'PTU*'` -> 550),
+/// so this is not glob expansion either.
+///
+/// Regression coverage: `tests/ftp_bracket_realrun.rs` pins the three
+/// sampled paths against the real NAS (ignored by default), and the unit
+/// tests below pin the routing rule itself.
 fn needs_directory_listing(remote: &str) -> bool {
     remote.contains('[') || remote.contains(']')
 }
