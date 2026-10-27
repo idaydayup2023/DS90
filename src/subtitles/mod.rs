@@ -83,6 +83,7 @@ pub fn run(cfg: &Config, dry_run: bool, force: bool, limit: Option<usize>) -> Re
         .context("metadata prerequisite failed before subtitle translation")?;
     let storage = open_storage(&cfg.source)?;
     let entries = storage.list_recursive("")?;
+    crate::storage::report_empty_dirs(&entries);
     let videos = select_videos(&entries, cfg, limit);
     let by_directory = index_files(&entries);
     let mut state = StateStore::open(&cfg.state.database)?;

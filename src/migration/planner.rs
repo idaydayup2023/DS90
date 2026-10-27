@@ -195,6 +195,7 @@ pub fn build_plan(config: &Config, limit: Option<usize>) -> Result<PlanDocument>
         .context("metadata prerequisite failed before migration planning")?;
     let storage = open_storage(&config.source).context("failed to open source storage")?;
     let mut entries = storage.list_recursive("")?;
+    crate::storage::report_empty_dirs(&entries);
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     let video_extensions: HashSet<String> = config
         .subtitles

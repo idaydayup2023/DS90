@@ -129,3 +129,20 @@ fn hashes_files_as_a_stream() {
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     );
 }
+
+#[test]
+fn empty_directories_are_reported_by_the_scan_marker() {
+    let root = tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("钢的琴 2011/Gang De Qin")).unwrap();
+    std::fs::create_dir_all(root.path().join("PTU 2003")).unwrap();
+    std::fs::write(root.path().join("钢的琴 2011/Gang De Qin/movie.mp4"), b"x").unwrap();
+    let storage = LocalStorage::new(root.path()).unwrap();
+    let entries = storage.list_recursive("").unwrap();
+    // PTU 2003 is a leftover shell: it exists but holds nothing, so the scan
+    // marker must flag exactly it (not its populated sibling tree).
+    assert_eq!(
+        subtrans::storage::report_empty_dirs(&entries),
+        1,
+        "expected exactly PTU 2003 to be flagged"
+    );
+}
