@@ -397,12 +397,23 @@ fn parse_valid_indices(
             );
         }
         let text = single_line(&item.text);
-        if text.is_empty() || output.insert(item.index, text).is_some() {
-            bail!(
-                "translation response has an empty or duplicate index {}",
-                item.index
-            );
+        if text.is_empty() {
+            bail!("translation response has an empty index {}", item.index);
         }
+        // TranslateGemma sometimes splits one multi-line source cue into
+        // several items that share a single index. Merging them keeps the
+        // full translation instead of discarding the whole batch.
+        if let Some(existing) = output.get(&item.index) {
+            let merged = format!("{} {}", existing, text);
+            eprintln!(
+                "translation merged duplicate index {} chars={}",
+                item.index,
+                merged.chars().count()
+            );
+            output.insert(item.index, merged);
+            continue;
+        }
+        output.insert(item.index, text);
     }
     Ok(output)
 }
@@ -841,14 +852,17 @@ fn request_audit_corrections(
         Ok(envelope) => envelope,
         Err(first_error) => {
             println!("translation {audit_name} response_reformat=true");
-            let repair_prompt = format!(
-                "Protocol: {PROMPT_VERSION}-audit-json-reformat. Your previous {audit_name} response was not valid under the required strict JSON schema. \
-                 Reformat the SAME intended corrections without adding, removing, renumbering, translating, or otherwise changing any index or text value. \
-                 Return exactly one JSON object {{\"corrections\":[{{\"index\":{},\"text\":\"corrected target text\"}}]}} with at most \
-                 {max_corrections} items and no markdown, reasons, or extra keys. Previous response as a JSON string:\n{}",
+            let repair_prompt = build_reformat_prompt(
+                audit_name,
                 expected.iter().next().copied().unwrap_or_default(),
-                serde_json::to_string(&response)?
-            );
+                max_corrections,
+                &response,
+            )
+            .with_context(|| {
+                format!(
+                    "translation {audit_name} reformat prompt could not embed the previous response"
+                )
+            })?;
             let repaired = retry(cfg.max_retries, || {
                 request(
                     client,
@@ -873,6 +887,31 @@ fn request_audit_corrections(
     };
     validate_corrections(envelope, expected, max_corrections)
         .with_context(|| format!("translation {audit_name} failed strict correction checks"))
+}
+
+/// Build the repair prompt that asks the model to reformat its previous
+/// audit response into the strict corrections envelope.
+///
+/// The schema outline deliberately carries no example text body: small
+/// models (translategemma:4b) were observed copying an English example
+/// literal verbatim into every `text` value, which then failed the target
+/// script ratio gate and aborted the whole batch. Describing the shape in
+/// words, and forbidding invented values, keeps the original text intact.
+fn build_reformat_prompt(
+    audit_name: &str,
+    first_index: u32,
+    max_corrections: usize,
+    previous_response: &str,
+) -> Result<String> {
+    let quoted = serde_json::to_string(previous_response)?;
+    Ok(format!(
+        "Protocol: {PROMPT_VERSION}-audit-json-reformat. Your previous {audit_name} response was not valid under the required strict JSON schema. \
+         Reformat the SAME intended corrections without adding, removing, renumbering, translating, or otherwise changing any index or text value. \
+         Return exactly one JSON object {{\"corrections\":[...]}} with at most {max_corrections} items and no markdown, reasons, or extra keys. \
+         Each item has exactly two keys: \"index\", the unchanged number (the first item keeps index {first_index}), and \"text\", the unchanged string. \
+         Copy every \"text\" value character-for-character from your previous response; never substitute an example, a placeholder, a translation, or any new wording for a text value. \
+         Previous response as a JSON string:\n{quoted}"
+    ))
 }
 
 fn normalize_known_json_keys(response: &str) -> Cow<'_, str> {
@@ -1136,5 +1175,49 @@ target_language_code = "zh-CN"
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn duplicate_index_items_are_merged_into_one_line() {
+        let expected = cues(2);
+        let parsed = parse_aligned(
+            r#"[{"index":1,"text":"第一行"},{"index":2,"text":"第二行上"},{"index":2,"text":"第二行下"}]"#,
+            &expected,
+        )
+        .unwrap();
+        assert_eq!(parsed.get(&1).map(String::as_str), Some("第一行"));
+        assert_eq!(
+            parsed.get(&2).map(String::as_str),
+            Some("第二行上 第二行下")
+        );
+    }
+
+    #[test]
+    fn duplicate_index_merge_still_rejects_empty_text() {
+        let expected = cues(1);
+        assert!(
+            parse_aligned(
+                r#"[{"index":1,"text":"甲"},{"index":1,"text":"   "}]"#,
+                &expected,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn reformat_prompt_carries_no_copyable_text_example() {
+        let prompt = build_reformat_prompt("reviewer", 3, 5, "PREVIOUS-RESPONSE-MARKER").unwrap();
+        assert!(prompt.contains("audit-json-reformat"));
+        assert!(prompt.contains("PREVIOUS-RESPONSE-MARKER"));
+        assert!(prompt.contains("character-for-character"));
+        assert!(prompt.contains("keeps index 3"));
+        assert!(prompt.contains("at most 5 items"));
+        // Regression: an English example body literal was copied verbatim by
+        // translategemma:4b into every text value, tripping the target script
+        // ratio gate. The prompt must never pair a "text" key with a string
+        // example value, and must keep only the bare structural outline.
+        assert!(!prompt.contains("corrected target text"));
+        assert!(!prompt.contains(r#""text":""#));
+        assert!(prompt.contains(r#"{"corrections":[...]}"#));
     }
 }
