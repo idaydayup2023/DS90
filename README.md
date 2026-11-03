@@ -1,10 +1,34 @@
-# subtrans V3
+# subtrans
 
-版本变更记录见 [`CHANGELOG.md`](CHANGELOG.md)。每次正式 Release 都必须先把
-`[Unreleased]` 内容整理到与 Cargo 版本和 Git 标签一致的带日期章节；发布流程会
-校验该章节，并直接使用它生成 GitHub Release 说明。
+这条仓库是已经推到 origin 的 `version4` 分支。Cargo 版本仍是 `3.3.1`。GitHub 默认分支和生产线仍是 `version3`：生产 launchd 与 `v3.*` 发布走那条分支。`docs/v3-equivalence.md` 记录了等价检查，iDay 尚未签收，所以 `version4` 还不是生产发布线，也不启用 `v4.*` 标签。
 
-`subtrans` 是面向 Apple Silicon 一体化运行、兼容无容器 NAS 存储的单一 Rust 命令行程序。核心结果仍只有字幕翻译和目录迁移，另以影片资料准备作为两条流程共用的强制前置阶段：
+版本变更见 [`CHANGELOG.md`](CHANGELOG.md)。尚未收进带日期章节的说明在 [`changes/`](changes/)。正式 Release 仍须先把未发布内容整理成与 Cargo 版本和 Git 标签一致的章节；发布流程校验该章节，并用它生成 GitHub Release 说明。已发布章节不改。
+
+编码 agent 从 [`AGENTS.md`](AGENTS.md) 进入，再读 `docs/map.md`、`docs/invariants.md` 和当前任务卡。代码验证命令是：
+
+```sh
+scripts/agent-check.sh
+scripts/agent-check.sh --workspace
+```
+
+`deploy/` 里的 launchd 任务只调度生产字幕命令，不是验证命令。不要用 `subtrans doctor` 代替这次检查；doctor 会在存储根上创建并删除探针。
+
+## 代码布局
+
+交付物仍是一个 `subtrans` 二进制。仓库是 workspace，成员只有下面四个：
+
+| crate | 路径 | 职责 |
+| --- | --- | --- |
+| `subtrans` | 根目录，`src/main.rs` | 命令行，以及资料、字幕、迁移流程 |
+| `subtrans-core` | `crates/subtrans-core` | 路径、分类、SRT、质量门、协议解析、计划数据结构。不发起网络，不访问 SQLite |
+| `subtrans-io` | `crates/subtrans-io` | 本地与 FTP 存储、SQLite 状态、外部进程、密钥读取 |
+| `subtrans-remote` | `crates/subtrans-remote` | TMDB 和翻译模型的 HTTP 客户端 |
+
+`tasks/` 放任务卡。`evals/` 是从现有测试抄出的断言，没有单独的评测运行器；`scripts/agent-check.sh` 不读取它，对应行为由 `cargo test` 执行。`changes/` 一条变更一个片段。`extra/` 只暂存从 `tools/` 移来的 DownloadStation、SSH 和外网站点脚本，不是产品代码，也不是默认可写面。验证不调用那里的实弹入口。以后是否再迁出本仓库仍未决定。
+
+全局 `--json` 把诊断打成 stdout 上每行一个 JSON 事件。不加这个开关时，输出仍是原来的人读句子。计划文件和 `plan_hash` 批准方式不变。事件字段见 `AGENTS.md`。
+
+`subtrans` 面向 Apple Silicon 一体化运行，并兼容无容器 NAS 存储。核心结果仍只有字幕翻译和目录迁移，另以影片资料准备作为两条流程共用的强制前置阶段：
 
 1. 从 TMDB 拉取 Infuse 可识别的海报与影片资料；
 2. 获取、翻译并校验字幕；

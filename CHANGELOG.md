@@ -6,7 +6,30 @@
 
 ## [Unreleased]
 
-未发布的变更写在 `changes/`，一条一个片段。发布任务把这些片段收进新的版本节，并核对 `Cargo.toml` 的版本。已发布章节不在这里改。
+`version4` 已在 origin 上，Cargo 版本仍是 `3.3.1`。GitHub 默认分支和生产线仍是 `version3`。`docs/v3-equivalence.md` 尚未签收，所以本节不是 `v4.*` 发布。已发布章节不改。
+
+下面的 Added 与 Fixed 和 `changes/0001` 至 `changes/0008` 是同一批说明。发布时把它们收进新的版本节即可，不要再从片段抄第二遍。Changed 是这条分支的仓库结构，不在那八个片段里。
+
+### Added
+
+- 新增可选 `[scan]` 配置节（`exclude_paths`、`exclude_globs`）：命中的源相对路径在资料、字幕与迁移扫描中一律跳过、保持原样，不再计入视频数、失败数或待处理项。
+- 命令增加全局 `--json`。默认仍打印原来的人读句子。加上 `--json` 后，诊断改为 stdout 上每行一个 JSON 事件。计划文件和 `plan_hash` 批准方式不变。
+- 增加编码入口 `AGENTS.md`、任务卡目录 `tasks/`、从现有测试抄出的 `evals/`，以及 `scripts/agent-check.sh`。`evals/` 没有单独运行器。验证命令是这个脚本，不是 launchd 任务。
+
+### Changed
+
+- 仓库改为 workspace。根 crate `subtrans` 仍提供同一个命令行二进制。`subtrans-core` 放路径、分类、SRT、质量门、协议解析和计划数据。`subtrans-io` 放存储、SQLite、外部进程和密钥读取。`subtrans-remote` 放 TMDB 与翻译模型 HTTP。子命令仍是 `metadata`、`subtitles`、`migrate`、`doctor`。
+- 未发布说明改放到 `changes/`，一条变更一个片段。
+- DownloadStation、SSH 和外网站点脚本从 `tools/` 移到 `extra/` 暂存。`extra/` 不是产品代码。验证不调用其实弹入口。以后是否迁出仓库仍未决定。
+
+### Fixed
+
+- 修复 `cargo audit` 报告的依赖安全问题：升级 `quinn-proto`、`rustls`、`rustls-webpki`、`webpki-root-certs`、`tokio` 至各自兼容的已修复版本（含 tokio `AsyncFd` I/O 安全公告 RUSTSEC-2026-0386，程序未直接使用该 API，仍一并升级消除）。
+- TranslateGemma 将一条字幕拆回多条同索引条目时，合并保留全部译文，不再整批判失败。
+- 审校 JSON 重排请求不再携带示例正文字面量，避免小模型把示例原样抄入 `text` 导致中文比例闸门误伤整单。
+- FTP 目录绝对路径含方括号（如影视库 `[TV] …` 目录）时改为进入目录后再列目录，修复 NAS 服务器将已存在目录误报为空的问题；空列表一律从目录内部复核，不再静默当作缺失。
+- 为方括号目录问题补真实 NAS 回归用例与规则注释：固定 `MLSD <带方括号路径>` 返回空列表、`CWD` + `MLSD` 返回真实条目的行为，防止后续改动把该规避改回去（用例默认跳过，需真实 NAS 时手动运行）。
+- 资料、字幕与迁移扫描现在显式报告「目录存在但 0 件」的空壳（`scan empty_dir path=…`，整树为空时报 `(root)`），与「目录不存在」（列取报错）、「有件但缺件」（按扫描各自判定）区分开，避免把空壳误读成“片没下完”而重复建下载任务。
 
 ## [3.3.1] - 2026-09-03
 
@@ -112,7 +135,9 @@
 
 > `3.0.0` 是 V3 开发基线记录，未创建对应的 GitHub Release；正式 V3 Release 从 `3.1.0` 开始。
 
-[Unreleased]: https://github.com/idaydayup2023/DS90/compare/v3.2.1...HEAD
+[Unreleased]: https://github.com/idaydayup2023/DS90/compare/v3.3.1...HEAD
+[3.3.1]: https://github.com/idaydayup2023/DS90/compare/v3.3.0...v3.3.1
+[3.3.0]: https://github.com/idaydayup2023/DS90/compare/v3.2.1...v3.3.0
 [3.2.1]: https://github.com/idaydayup2023/DS90/compare/v3.2.0...v3.2.1
 [3.2.0]: https://github.com/idaydayup2023/DS90/compare/v3.1.1...v3.2.0
 [3.1.1]: https://github.com/idaydayup2023/DS90/compare/v3.1.0...v3.1.1
