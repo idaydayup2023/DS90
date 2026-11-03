@@ -1,9 +1,12 @@
 name: rust-ci
 
+# version4 step A. T1 is scripts/agent-check.sh --workspace (fmt, clippy, locked tests).
+# Ignored live tests stay out of this workflow. v3.* tag releases stay on release.yml.
 on:
   push:
-    branches: [version3]
+    branches: [version4]
   pull_request:
+    branches: [version4]
 
 permissions:
   contents: read
@@ -19,9 +22,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@1d1eb14921d9c2d8ea575663e5fe3a0b57868a05 # 1.89.0
         with:
           components: rustfmt, clippy
-      - run: cargo fmt --all --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo test --locked --all-targets
+      - name: T1 agent check
+        run: scripts/agent-check.sh --workspace
       - run: cargo build --locked --release
 
   audit:

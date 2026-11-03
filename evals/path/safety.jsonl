@@ -1,0 +1,13 @@
+{"id":"path.reject-absolute","source":"tests/rust_storage.rs::rejects_unsafe_posix_paths","input":{"path":"/absolute"},"expect":{"accept":false}}
+{"id":"path.reject-parent","source":"tests/rust_storage.rs::rejects_unsafe_posix_paths","input":{"path":"../escape"},"expect":{"accept":false}}
+{"id":"path.reject-nested-parent","source":"tests/rust_storage.rs::rejects_unsafe_posix_paths","input":{"path":"a/../escape"},"expect":{"accept":false}}
+{"id":"path.reject-empty-segment","source":"tests/rust_storage.rs::rejects_unsafe_posix_paths","input":{"path":"a//b"},"expect":{"accept":false}}
+{"id":"path.reject-dot-segment","source":"tests/rust_storage.rs::rejects_unsafe_posix_paths","input":{"path":"a/./b"},"expect":{"accept":false}}
+{"id":"path.reject-backslash","source":"tests/rust_storage.rs::rejects_unsafe_posix_paths","input":{"path":"a\\b"},"expect":{"accept":false}}
+{"id":"path.empty-is-root-relative","source":"tests/rust_storage.rs::rejects_unsafe_posix_paths","input":{"path":""},"expect":{"accept":true,"normalized":""}}
+{"id":"path.dot-is-root-relative","source":"tests/rust_storage.rs::rejects_unsafe_posix_paths","input":{"path":"."},"expect":{"accept":true,"normalized":""}}
+{"id":"path.normal-file","source":"tests/rust_storage.rs::rejects_unsafe_posix_paths","input":{"path":"folder/file.srt"},"expect":{"accept":true,"normalized":"folder/file.srt"}}
+{"id":"path.symlink-escape","source":"tests/rust_storage.rs::rejects_symbolic_link_escape","input":{"operations":["read link/secret","list_recursive","create_dir_all link/new"]},"expect":{"accept":false}}
+{"id":"path.sha256-abc","source":"tests/rust_storage.rs::hashes_files_as_a_stream","input":{"bytes":"abc"},"expect":{"sha256":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}}
+{"id":"path.atomic-upload-replaces","source":"tests/rust_storage.rs::atomic_upload_replaces_file_without_leaving_part_file","input":{"path":"subs/movie.srt","old":"old","new":"new subtitle"},"expect":{"bytes":"new subtitle","directory_entries":1}}
+{"id":"path.failed-upload-keeps-old","source":"tests/rust_storage.rs::failed_atomic_upload_preserves_old_file","input":{"path":"movie.srt","old":"old subtitle"},"expect":{"bytes":"old subtitle","directory_entries":1}}

@@ -1,0 +1,6 @@
+{"id":"path.bracket-listed-inside","source":"src/storage/ftp.rs::bracketed_paths_are_listed_from_inside_the_directory","input":{"path":"/volume1/媒体/[TV] Show/Season 01"},"expect":{"needs_directory_listing":true}}
+{"id":"path.bracket-in-show-year","source":"src/storage/ftp.rs::bracketed_paths_are_listed_from_inside_the_directory","input":{"path":"/media/Show [2024]/S01E01"},"expect":{"needs_directory_listing":true}}
+{"id":"path.partial-bracket","source":"src/storage/ftp.rs::bracketed_paths_are_listed_from_inside_the_directory","input":{"path":"/media/partial]name"},"expect":{"needs_directory_listing":true}}
+{"id":"path.root-keeps-mlsd-argument","source":"src/storage/ftp.rs::plain_paths_keep_the_mlsd_argument_path","input":{"path":"/"},"expect":{"needs_directory_listing":false}}
+{"id":"path.plain-unicode-keeps-mlsd-argument","source":"src/storage/ftp.rs::plain_paths_keep_the_mlsd_argument_path","input":{"path":"/volume1/媒体/Show/Season 01"},"expect":{"needs_directory_listing":false}}
+{"id":"path.parentheses-keep-mlsd-argument","source":"src/storage/ftp.rs::plain_paths_keep_the_mlsd_argument_path","input":{"path":"/media/Movie (2024)"},"expect":{"needs_directory_listing":false}}
