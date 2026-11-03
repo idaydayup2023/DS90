@@ -1,6 +1,6 @@
 # 不变量
 
-本文件把 `ARCHITECTURE.md` 和现有测试已经钉住的安全行为列成检查清单。步骤 A–E 不放宽这些行为。步骤 C 把存储、状态、进程和 HTTP 客户端拆到 io 与 remote。步骤 D 只增加 `--json` 通道，默认人读句子不变。步骤 E 只把 DownloadStation、SSH 和外网站点脚本从 `tools/` 改放到 `extra/` 暂存。放宽任何一条，任务卡必须由 iDay 写成 `risk: invariant`。agent 不能自己改这个风险，也不能删掉对应断言。
+本文件把 `ARCHITECTURE.md` 和现有测试已经钉住的安全行为列成检查清单。步骤 A–F 不放宽这些行为。步骤 C 把存储、状态、进程和 HTTP 客户端拆到 io 与 remote。步骤 D 只增加 `--json` 通道，默认人读句子不变。步骤 E 只把 DownloadStation、SSH 和外网站点脚本从 `tools/` 改放到 `extra/` 暂存。步骤 F 把对照 `version3` 的检查记在 `docs/v3-equivalence.md`，iDay 尚未签收，生产基线不变。放宽任何一条，任务卡必须由 iDay 写成 `risk: invariant`。agent 不能自己改这个风险，也不能删掉对应断言。
 
 来源：`ARCHITECTURE.md`、`docs/V2_SCOPE_DECISIONS.md`、`src/` 里的 schema 常量，以及 `evals/` 所引用的测试。
 

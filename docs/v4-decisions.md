@@ -1,13 +1,13 @@
 # v4 已批准的决定
 
-iDay 于 2026-11-03 批准 `docs/v4-architecture.md` 第 11 节的全部十项决定。本文件是分支上的记录。步骤 A 落实合同层。步骤 B 抽出 `subtrans-core`。步骤 C 抽出 `subtrans-io` 与 `subtrans-remote`。步骤 D 增加 `--json`、`Reporter`、`changes/` 和任务卡 `result`。步骤 E 按下面第 4 条的改口安置脚本。下面其余标成“以后”的事项这次没有做。
+iDay 于 2026-11-03 批准 `docs/v4-architecture.md` 第 11 节的全部十项决定。本文件是分支上的记录。步骤 A 落实合同层。步骤 B 抽出 `subtrans-core`。步骤 C 抽出 `subtrans-io` 与 `subtrans-remote`。步骤 D 增加 `--json`、`Reporter`、`changes/` 和任务卡 `result`。步骤 E 按下面第 4 条的改口安置脚本。步骤 F 写下 `docs/v3-equivalence.md` 并记录检查结果。iDay 尚未签收该文件。步骤 G 这次没有做。
 
 1. **agent 的定义。** 已批准。v4 的 agent 只改仓库、跑 T0/T1、写任务卡。产品运行时继续由确定性规则做分类和迁移。v2 的 MCP、剧情生成和 LLM 规划器不回来。
-2. **生产线。** 已批准。在步骤 F 签收之前，`version3` 仍是唯一生产分支。launchd 与 `v3.*` 发布保持不变。开发分支名是 `version4`。本次不合并进 `version3`，也不改 `deploy/` 与 `.github/workflows/release.yml`。
+2. **生产线。** 已批准。在 iDay 签收 `docs/v3-equivalence.md` 之前，`version3` 仍是唯一生产分支。清单已经写好，但还没有签收，所以 launchd 与 `v3.*` 发布保持不变。开发分支名是 `version4`。本次不合并进 `version3`，也不改 `deploy/` 与 `.github/workflows/release.yml`。
 3. **配置兼容。** 已批准。v4 继续加载 `version = 3` 的 `subtrans.toml`，字段含义不变。步骤 A 不改配置解析。
 4. **运维脚本的归属。** iDay 在步骤 E 改了这一条，暂不另建仓库。DownloadStation、SSH 和外网站点脚本从 `tools/` 移到本仓库的 `extra/`，作为临时存放，不放进 `ops/`。`extra/` 是暂存区，不是 agent 的默认可写面，也不是产品代码。T0、T1、T2 不调用它们的实弹入口。以后是否再迁出本仓库仍未决定。
 5. **不变量的批准方式。** 已批准。放宽不变量或修改 `docs/invariants.md` 必须有 iDay 在任务卡上写明的 `risk: invariant`。agent 不能自行升级风险等级。
-6. **第一段自迭代授权。** 已批准。步骤 F 签收之后，agent 才可以自行领取 `risk: normal` 且 `behavior` 为 `move-only` 或 `tighter` 的 backlog 卡。在此之前，agent 只执行 iDay 点名的任务。步骤 A–E 是点名任务；F–G 还没有点名。
+6. **第一段自迭代授权。** 已批准。iDay 签收 `docs/v3-equivalence.md` 之后，agent 才可以自行领取 `risk: normal` 且 `behavior` 为 `move-only` 或 `tighter` 的 backlog 卡。清单已有结果，但尚未签收，所以步骤 G 没有开放。在此之前，agent 只执行 iDay 点名的任务。
 7. **`--json`。** 已批准，步骤 D 已做。默认仍是原来的人读句子。`--json` 把诊断打成事件。计划文件和 `plan_hash` 批准方式不变。
 8. **文档语言。** 已批准。`AGENTS.md`、任务卡、`docs/invariants.md` 用中文。代码标识符、命令和 JSON 字段用英文。
 9. **crate 划分。** 已批准六个 crate 的目标（`subtrans-core`、`subtrans-io`、`subtrans-remote`、`subtrans-app`、`subtrans-cli`、`subtrans-evals`）。步骤 C 之后，workspace 成员是根 crate `subtrans`、`subtrans-core`、`subtrans-io`、`subtrans-remote`。依赖向下：io 和 remote 只依赖 core。其余两个 crate 还没有建。

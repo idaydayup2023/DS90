@@ -17,7 +17,7 @@ record:
 
 # 短标题
 
-这是模板，不是开放任务。复制到 `tasks/T-NNNN-短名.md` 后再填。`crates` 可以写 `subtrans`、`subtrans-core`、`subtrans-io` 或 `subtrans-remote`。不要在一张卡里开始步骤 F–G。
+这是模板，不是开放任务。复制到 `tasks/T-NNNN-短名.md` 后再填。`crates` 可以写 `subtrans`、`subtrans-core`、`subtrans-io` 或 `subtrans-remote`。不要在一张卡里开始步骤 G。`docs/v3-equivalence.md` 未签收之前，不要把 `version4` 当成生产发布线。
 
 ## 做什么
 
@@ -25,7 +25,7 @@ record:
 
 ## 不做什么
 
-步骤 F–G 的事项不要写进一张 normal 卡。不要执行 `extra/` 的实弹入口，不要改 `deploy/`，不要改 `v3.*` 发布工作流。不要改 `CHANGELOG.md` 的已发布章节；新的发布说明写到 `changes/`。
+步骤 G 的事项不要写进一张 normal 卡。不要执行 `extra/` 的实弹入口，不要改 `deploy/`，不要改 `v3.*` 发布工作流，不要启用 `v4.*` 标签。不要改 `CHANGELOG.md` 的已发布章节；新的发布说明写到 `changes/`。
 
 ## result
 

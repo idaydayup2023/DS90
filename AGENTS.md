@@ -6,14 +6,14 @@
 
 ## 当前阶段
 
-步骤 A–E 已落地。步骤 B 抽出 `subtrans-core`。步骤 C 抽出 `subtrans-io` 和 `subtrans-remote`。步骤 D 增加 `--json`。步骤 E 把 DownloadStation、SSH 和外网站点脚本从 `tools/` 移到 `extra/` 暂存。产品行为与 `origin/version3` @ `1f19015` 相同。步骤 F–G 没有开始。
+步骤 A–F 的清单已落地。步骤 F 把等价检查写进 `docs/v3-equivalence.md` 并记录了本次结果。iDay 还没有签收该文件。未签收之前，`version3` 仍是生产分支，不启用 `v4.*` 标签。步骤 G 没有开始。
 
-在 iDay 点名下一步之前：
+在 iDay 签收之前：
 
 - 不再拆 crate。不建 `subtrans-app`、`subtrans-cli`、`subtrans-evals`。`subtrans-core` 不加 reqwest、suppaftp、rusqlite，也不调用 `std::process`。
 - `extra/` 是暂存区，不是默认可写面。不要执行其中的实弹入口。以后迁出本仓库仍是开放项。不建 `ops/`，也不另建仓库。
 - 不改 `deploy/`，不改 `.github/workflows/release.yml`。`v3.*` 发布和生产 launchd 仍走 `version3`。
-- 不把本分支合并进 `version3`。不开始步骤 F、G。
+- 不把本分支合并进 `version3`。不开始步骤 G。不把未签收的检查记录当成生产切换许可。
 
 ## 发现工作
 

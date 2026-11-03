@@ -2,7 +2,7 @@
 
 workspace 成员是根 crate `subtrans`（`Cargo.toml`，库 `src/lib.rs`，二进制 `src/main.rs`）、`subtrans-core`、`subtrans-io`、`subtrans-remote`。步骤 C 让工作流走 trait。步骤 D 把诊断收进 `Reporter`。`subtrans-app`、`subtrans-cli`、`subtrans-evals` 还没有建。
 
-验证命令：`scripts/agent-check.sh`。CI 使用 `scripts/agent-check.sh --workspace`。`evals/` 还没有运行器；下表的 JSONL 是从测试抄出的断言，执行它们的是对应的 `cargo test`。
+验证命令：`scripts/agent-check.sh`。CI 使用 `scripts/agent-check.sh --workspace`。`evals/` 还没有运行器；下表的 JSONL 是从测试抄出的断言，执行它们的是对应的 `cargo test`。等价检查记录在 `docs/v3-equivalence.md`，iDay 尚未签收。
 
 | 模块 | 路径 | 职责 | 断言抄本 | 现有测试 |
 | --- | --- | --- | --- | --- |
