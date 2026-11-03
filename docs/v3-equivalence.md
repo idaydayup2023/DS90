@@ -46,8 +46,12 @@
 | 扫描排除命中的路径保持原样；空壳目录与列目录失败分开 | 通过 | `exclude_paths_match_files_and_directory_prefixes` 与空壳计数测试 |
 | 计划、manifest、日志夹具不出现密钥的值 | 通过 | `distributed_example_contains_no_deployment_identifiers_or_inline_password` 与 `missing_tmdb_token_guidance_is_actionable_and_secret_free` |
 
+## 发布
+
+2026-11-03，iDay 接受把 `version4` 发布到 origin。当时已在 origin 上的提交是 `18744497e5246884e2eed518ffc9e34123c71abe`。同一天读到的 GitHub 默认分支是 `version3`。在以后另有明确切换之前，`version3` 继续作为默认分支。这次没有改默认分支，没有合并进 `version3`，没有启用 `v4.*` 标签，也没有开始步骤 G。
+
 ## 签收
 
-iDay 签收：未签收。
+iDay 签收：未签收。接受发布 `version4` 不是把默认分支或生产发布线从 `version3` 换走。
 
 签收之前，不要把 `version4` 当成生产发布线，不要启用 `v4.*` 标签，不要开始步骤 G。
