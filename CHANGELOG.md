@@ -8,19 +8,22 @@
 
 `version4` 已在 origin 上，Cargo 版本仍是 `3.3.1`。GitHub 默认分支和生产线仍是 `version3`。`docs/v3-equivalence.md` 尚未签收，所以本节不是 `v4.*` 发布。已发布章节不改。
 
-下面的 Added 与 Fixed 和 `changes/0001` 至 `changes/0008` 是同一批说明。发布时把它们收进新的版本节即可，不要再从片段抄第二遍。Changed 是这条分支的仓库结构，不在那八个片段里。
+下面的 Added、Changed 与 Fixed 和 `changes/0001` 至 `changes/0009` 是同一批说明。发布时把它们收进新的版本节即可，不要再从片段抄第二遍。`0009` 之前的 Changed 里，仓库拆分和 `extra/` 不在那八个片段中。
 
 ### Added
 
 - 新增可选 `[scan]` 配置节（`exclude_paths`、`exclude_globs`）：命中的源相对路径在资料、字幕与迁移扫描中一律跳过、保持原样，不再计入视频数、失败数或待处理项。
 - 命令增加全局 `--json`。默认仍打印原来的人读句子。加上 `--json` 后，诊断改为 stdout 上每行一个 JSON 事件。计划文件和 `plan_hash` 批准方式不变。
 - 增加编码入口 `AGENTS.md`、任务卡目录 `tasks/`、从现有测试抄出的 `evals/`，以及 `scripts/agent-check.sh`。`evals/` 没有单独运行器。验证命令是这个脚本，不是 launchd 任务。
+- `subtrans subtitles` 增加 `--stage translate|review|both`。默认 `both` 仍是翻译后审校并发布。`translate` 只把进度写入检查点，不调用审校模型，也不发布。`review` 只根据检查点审校并发布；没有匹配的翻译检查点时失败，不会改去翻译。
+- 翻译和审校在每个完成的批次后把检查点写入状态库表 `subtitle_checkpoints`。中断后续跑跳过已完成的 cue。检查点不进媒体目录，也不保存 API 密钥。`--force` 丢弃检查点。
 
 ### Changed
 
 - 仓库改为 workspace。根 crate `subtrans` 仍提供同一个命令行二进制。`subtrans-core` 放路径、分类、SRT、质量门、协议解析和计划数据。`subtrans-io` 放存储、SQLite、外部进程和密钥读取。`subtrans-remote` 放 TMDB 与翻译模型 HTTP。子命令仍是 `metadata`、`subtitles`、`migrate`、`doctor`。
 - 未发布说明改放到 `changes/`，一条变更一个片段。
 - DownloadStation、SSH 和外网站点脚本从 `tools/` 移到 `extra/` 暂存。`extra/` 不是产品代码。验证不调用其实弹入口。以后是否迁出仓库仍未决定。
+- 状态库 schema 升到 1。打开旧库时保留原有 job，并补上 `subtitle_checkpoints`。
 
 ### Fixed
 

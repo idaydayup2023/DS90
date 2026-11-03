@@ -117,7 +117,13 @@ subtrans subtitles --config subtrans.toml
 subtrans subtitles --config subtrans.toml --force
 # 临时翻译本机目录；不读取 FTP 源，也不会生成或执行迁移计划
 subtrans subtitles --config subtrans.toml --local-dir "/本机/待翻译目录"
+# 只翻译，写检查点，不调用审校模型，也不发布 ready 字幕
+subtrans subtitles --config subtrans.toml --stage translate
+# 只审校并发布。没有匹配的翻译检查点时失败，不会改去翻译
+subtrans subtitles --config subtrans.toml --stage review
 ```
+
+默认不写 `--stage` 时仍是 `both`：先翻译，再审校，然后发布。翻译和审校每完成一个批次，就把检查点写入状态库表 `subtitle_checkpoints`，也就是配置里 `state.database` 指向的 SQLite 文件。进程中断后续跑会跳过已经完成的 cue，不从头请求模型。检查点不放在媒体目录里，也不保存 API 密钥。`--force` 丢弃检查点。发布成功后删除该视频的检查点。代码验证用 `scripts/agent-check.sh`，不用 launchd 任务。
 
 资料准备完成后，程序先收集同目录英文 SRT 和内置字幕：两者都有时交叉验证，仅有合格外置 SRT 时直接采用；都没有时调用 ASR。默认使用 `translategemma:4b` 顺序翻译：每批最多 32 条、8000 字符，并只携带前 6 条只读上下文。每个字幕编号都是不可拆分的英文—中文绑定；上下文只能帮助理解，不能把相邻句内容移入当前编号。网络或服务错误按配置重试；确定性的 JSON 结构错误会立即拆小异常批次，极端情况下逐条恢复。全部初译完成后，`alignment_model` 只做一次最终审校：发现错误时由审校模型直接给出最终中文，不再回送翻译模型，也不再次审校修正版。首轮失败、英文原文回显、中文字符比例异常及审校模型主动改写的行，会在字幕 manifest 中记录编号、原候选、触发原因、错误和最终审校译文；正式字幕不添加问题标签，便于正常播放，同时保留人工检索及后续自动化逐条返修所需的证据。必须修正的条目若审校模型仍给不出合格中文，则停止发布该片字幕。
 

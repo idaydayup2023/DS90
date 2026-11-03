@@ -14,5 +14,6 @@
 | `path/safety.jsonl` | `tests/rust_storage.rs` |
 | `path/listing.jsonl` | `src/storage/ftp.rs` 的无网络单元测试 |
 | `scan/exclude-and-empty.jsonl` | `src/config.rs`、`src/storage/mod.rs` |
+| `srt-protocol/stages.jsonl` | `tests/rust_subtitle_stages.rs`。这是 version4 的阶段断言，不是从 v3 抄来的 |
 
 `tests/ftp_bracket_realrun.rs` 的生产路径没有抄进来。

@@ -1,4 +1,7 @@
+mod checkpoint;
 mod translation;
+
+pub use checkpoint::{CHECKPOINT_SCHEMA, SubtitleCheckpoint, SubtitleStage};
 
 pub use subtrans_core::quality;
 pub use subtrans_core::srt;
@@ -93,6 +96,26 @@ pub fn run_with(
     llm: Option<&dyn LlmClient>,
     metadata: Option<&dyn MetadataSource>,
 ) -> Result<()> {
+    run_with_stage(
+        cfg,
+        dry_run,
+        force,
+        limit,
+        SubtitleStage::Both,
+        llm,
+        metadata,
+    )
+}
+
+pub fn run_with_stage(
+    cfg: &Config,
+    dry_run: bool,
+    force: bool,
+    limit: Option<usize>,
+    stage: SubtitleStage,
+    llm: Option<&dyn LlmClient>,
+    metadata: Option<&dyn MetadataSource>,
+) -> Result<()> {
     crate::metadata::ensure_before_with(cfg, dry_run, limit, metadata)
         .context("metadata prerequisite failed before subtitle translation")?;
     let owned_llm = match llm {
@@ -138,10 +161,12 @@ pub fn run_with(
             &owner,
             dry_run,
             force,
+            stage,
             llm,
         ) {
             Ok(VideoOutcome::Translated) => translated += 1,
             Ok(VideoOutcome::Cached) => cached += 1,
+            Ok(VideoOutcome::Checkpointed) => {}
             Ok(VideoOutcome::Pending(reason)) => {
                 pending += 1;
                 subtrans_core::report_line!(
@@ -191,7 +216,22 @@ pub fn run_with(
 enum VideoOutcome {
     Translated,
     Cached,
+    Checkpointed,
     Pending(String),
+}
+
+struct ReleaseLeaseOnDrop {
+    database: PathBuf,
+    job_id: String,
+    owner: String,
+}
+
+impl Drop for ReleaseLeaseOnDrop {
+    fn drop(&mut self) {
+        if let Ok(mut state) = StateStore::open(&self.database) {
+            let _ = state.release_lease(&self.job_id, &self.owner);
+        }
+    }
 }
 
 enum ExistingSourceResolution {
@@ -216,6 +256,7 @@ fn process_video(
     owner: &str,
     dry_run: bool,
     force: bool,
+    stage: SubtitleStage,
     llm: &dyn LlmClient,
 ) -> Result<VideoOutcome> {
     let acquisition_key = acquisition_key(video, cfg)?;
@@ -293,6 +334,11 @@ fn process_video(
         ClaimResult::Acquired => {}
         ClaimResult::AlreadyComplete => unreachable!(),
     }
+    let _release_on_interrupt = ReleaseLeaseOnDrop {
+        database: cfg.state.database.clone(),
+        job_id: job_id.clone(),
+        owner: owner.to_owned(),
+    };
     let result = (|| -> Result<VideoOutcome> {
         state.transition(
             &job_id,
@@ -321,7 +367,57 @@ fn process_video(
             std::str::from_utf8(&source.bytes).context("source subtitle is not valid UTF-8")?;
         let source_cues = srt::parse(source_text)?;
         quality::validate_source(&source_cues)?;
-        let translation = translation::translate(&source_cues, &cfg.translation, llm, &video.path)?;
+        let source_sha256 = sha256_bytes(&source.bytes);
+        let cue_cache_key = cache_key(&source_sha256, &cfg.translation)?;
+        if force {
+            state.delete_subtitle_checkpoint(&job_id)?;
+        }
+        let mut checkpoint = load_checkpoint(
+            state,
+            &job_id,
+            &video.path,
+            &source_sha256,
+            &cue_cache_key,
+            stage,
+        )?;
+        if stage == SubtitleStage::Review {
+            state.transition(
+                &job_id,
+                "subtitle",
+                owner,
+                "TRANSLATING",
+                "REVIEWING",
+                &serde_json::json!({"video": video.path}),
+            )?;
+        }
+        let translation = translation::translate(
+            &source_cues,
+            &cfg.translation,
+            llm,
+            &video.path,
+            stage,
+            &mut checkpoint,
+            &mut |document| {
+                state.save_subtitle_checkpoint(&job_id, &serde_json::to_string(document)?)?;
+                Ok(())
+            },
+        )?;
+        if stage == SubtitleStage::Translate {
+            let settled = checkpoint.settled_indices.len();
+            subtrans_core::report_line!(
+                out,
+                "subtitle.checkpoint",
+                serde_json::json!({
+                    "video": video.path,
+                    "stage": "translate",
+                    "settled": settled,
+                    "store": "state.subtitle_checkpoints"
+                }),
+                "subtitles checkpoint video={} stage=translate settled={settled} store=state.subtitle_checkpoints",
+                video.path
+            );
+            return Ok(VideoOutcome::Checkpointed);
+        }
         let output = srt::format(&translation.cues)?;
         let reparsed = srt::parse(&output)?;
         translation::validate_output(&source_cues, &reparsed, cfg.translation.bilingual)?;
@@ -337,7 +433,11 @@ fn process_video(
             &job_id,
             "subtitle",
             owner,
-            "TRANSLATING",
+            if stage == SubtitleStage::Review {
+                "REVIEWING"
+            } else {
+                "TRANSLATING"
+            },
             "VERIFIED",
             &serde_json::json!({"cues": reparsed.len(), "reviewed_cues": reviewed_cues}),
         )?;
@@ -345,7 +445,6 @@ fn process_video(
         let paths = artifact_paths(&video.path)?;
         let output_bytes = output.into_bytes();
         let output_sha256 = sha256_bytes(&output_bytes);
-        let source_sha256 = sha256_bytes(&source.bytes);
         let manifest = SubtitleArtifact {
             schema: ARTIFACT_SCHEMA,
             status: "ready".into(),
@@ -394,6 +493,7 @@ fn process_video(
                 "published subtitle artifact failed its final readiness check after {READINESS_ATTEMPTS} attempts"
             )
         })?;
+        state.delete_subtitle_checkpoint(&job_id)?;
         state.transition(
             &job_id,
             "subtitle",
@@ -1348,6 +1448,46 @@ fn source_rank(path: &str, video_stem: &str) -> Option<(u32, &'static str)> {
         return Some((250, "external_variant"));
     }
     None
+}
+
+fn load_checkpoint(
+    state: &mut StateStore,
+    job_id: &str,
+    video: &str,
+    source_sha256: &str,
+    cache_key: &str,
+    stage: SubtitleStage,
+) -> Result<SubtitleCheckpoint> {
+    match state.subtitle_checkpoint(job_id)? {
+        Some(payload) => {
+            let document: SubtitleCheckpoint =
+                serde_json::from_str(&payload).context("subtitle checkpoint is unreadable")?;
+            if document.matches(video, source_sha256, cache_key) {
+                Ok(document)
+            } else if stage == SubtitleStage::Review {
+                bail!(
+                    "translation checkpoint does not match this video, source, or translation settings"
+                )
+            } else {
+                state.delete_subtitle_checkpoint(job_id)?;
+                Ok(SubtitleCheckpoint::new(
+                    video,
+                    source_sha256.to_owned(),
+                    cache_key.to_owned(),
+                ))
+            }
+        }
+        None if stage == SubtitleStage::Review => {
+            bail!(
+                "translation checkpoint is missing; run `subtitles --stage translate` before review"
+            )
+        }
+        None => Ok(SubtitleCheckpoint::new(
+            video,
+            source_sha256.to_owned(),
+            cache_key.to_owned(),
+        )),
+    }
 }
 
 fn subtitle_job_id(video: &FileEntry, acquisition_key: &str) -> String {

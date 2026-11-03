@@ -76,6 +76,11 @@ impl StateStore {
                 PRIMARY KEY(job_id, action_index)
             );
             CREATE INDEX IF NOT EXISTS idx_events_job_id ON events(job_id, event_id);
+            CREATE TABLE IF NOT EXISTS subtitle_checkpoints (
+                job_id TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             "#,
         )?;
         ensure_column(&conn, "jobs", "owner", "TEXT")?;
@@ -91,7 +96,14 @@ impl StateStore {
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_job_actions_destination ON job_actions(destination_key COLLATE NOCASE)",
             [],
         )?;
+        migrate_schema(&conn)?;
         Ok(Self { conn })
+    }
+
+    pub fn schema_version(&self) -> Result<i32> {
+        Ok(self
+            .conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))?)
     }
 
     pub fn current_state(&self, job_id: &str) -> Result<Option<String>> {
@@ -351,6 +363,58 @@ impl StateStore {
         Ok(())
     }
 
+    pub fn release_lease(&mut self, job_id: &str, owner: &str) -> Result<()> {
+        let now = now_epoch_seconds()?;
+        self.conn.execute(
+            "UPDATE jobs SET owner=NULL, lease_until=NULL, updated_at=?1 WHERE job_id=?2 AND owner=?3",
+            params![now, job_id, owner],
+        )?;
+        Ok(())
+    }
+
+    pub fn subtitle_checkpoint(&self, job_id: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT payload_json FROM subtitle_checkpoints WHERE job_id=?1",
+                [job_id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn subtitle_checkpoints(&self) -> Result<Vec<(String, String)>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT job_id, payload_json FROM subtitle_checkpoints ORDER BY job_id")?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn save_subtitle_checkpoint(&mut self, job_id: &str, payload_json: &str) -> Result<()> {
+        if job_id.trim().is_empty() {
+            bail!("checkpoint job_id must not be empty");
+        }
+        let now = now_epoch_seconds()?;
+        self.conn.execute(
+            r#"
+            INSERT INTO subtitle_checkpoints(job_id, payload_json, updated_at)
+            VALUES(?1, ?2, ?3)
+            ON CONFLICT(job_id) DO UPDATE SET
+                payload_json=excluded.payload_json,
+                updated_at=excluded.updated_at
+            "#,
+            params![job_id, payload_json, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_subtitle_checkpoint(&mut self, job_id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM subtitle_checkpoints WHERE job_id=?1", [job_id])?;
+        Ok(())
+    }
+
     pub fn event_count(&self, job_id: &str) -> Result<u64> {
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM events WHERE job_id = ?1",
@@ -377,6 +441,21 @@ fn append_event(tx: &rusqlite::Transaction<'_>, event: &EventRecord<'_>) -> Resu
     Ok(())
 }
 
+const STATE_SCHEMA_VERSION: i32 = 1;
+
+fn migrate_schema(conn: &Connection) -> Result<()> {
+    let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version > STATE_SCHEMA_VERSION {
+        bail!(
+            "state database schema {version} is newer than this program ({STATE_SCHEMA_VERSION})"
+        );
+    }
+    if version < STATE_SCHEMA_VERSION {
+        conn.pragma_update(None, "user_version", STATE_SCHEMA_VERSION)?;
+    }
+    Ok(())
+}
+
 fn valid_transition(kind: &str, from: &str, to: &str) -> bool {
     if to == "FAILED" && !matches!(from, "COMMITTED" | "READY") {
         return true;
@@ -393,7 +472,9 @@ fn valid_transition(kind: &str, from: &str, to: &str) -> bool {
             (from, to),
             ("CLAIMED", "ACQUIRING")
                 | ("ACQUIRING", "TRANSLATING")
+                | ("TRANSLATING", "REVIEWING")
                 | ("TRANSLATING", "VERIFIED")
+                | ("REVIEWING", "VERIFIED")
                 | ("VERIFIED", "READY")
         ),
         _ => false,
@@ -585,5 +666,78 @@ mod tests {
                 "other-hash",
             )
             .unwrap();
+    }
+
+    #[test]
+    fn old_database_keeps_jobs_and_gains_checkpoint_schema() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("state.sqlite3");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE jobs (
+                job_id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                state TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                owner TEXT,
+                lease_until INTEGER,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                from_state TEXT,
+                to_state TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                owner TEXT,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE job_actions (
+                job_id TEXT NOT NULL,
+                action_index INTEGER NOT NULL,
+                source_path TEXT NOT NULL,
+                destination_path TEXT NOT NULL,
+                destination_key TEXT NOT NULL,
+                expected_sha256 TEXT NOT NULL,
+                state TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY(job_id, action_index)
+            );
+            INSERT INTO jobs(job_id, kind, state, payload_json, revision, updated_at)
+            VALUES('legacy-job', 'subtitle', 'READY', '{}', 4, 1);
+            "#,
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut store = StateStore::open(&path).unwrap();
+        assert_eq!(
+            Some("READY".to_owned()),
+            store.current_state("legacy-job").unwrap()
+        );
+        assert_eq!(1, store.schema_version().unwrap());
+        store
+            .save_subtitle_checkpoint("legacy-job", r#"{"schema":1,"video":"legacy"}"#)
+            .unwrap();
+        assert_eq!(
+            Some(r#"{"schema":1,"video":"legacy"}"#.to_owned()),
+            store.subtitle_checkpoint("legacy-job").unwrap()
+        );
+
+        let reopened = StateStore::open(&path).unwrap();
+        assert_eq!(
+            Some("READY".to_owned()),
+            reopened.current_state("legacy-job").unwrap()
+        );
+        assert_eq!(
+            vec![(
+                "legacy-job".to_owned(),
+                r#"{"schema":1,"video":"legacy"}"#.to_owned()
+            )],
+            reopened.subtitle_checkpoints().unwrap()
+        );
     }
 }

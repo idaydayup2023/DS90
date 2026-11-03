@@ -8,6 +8,8 @@ use subtrans_core::remote::{LlmApi, LlmClient, LlmCompletion};
 
 use crate::artifact::TranslationQualityRecord;
 use crate::config::{LlmProvider, TranslationConfig};
+
+use super::checkpoint::{PendingCue, SubtitleCheckpoint, SubtitleStage};
 pub use subtrans_core::protocol::validate_output;
 use subtrans_core::protocol::{
     parse_consistency_envelope, parse_valid_indices, render, validate_corrections,
@@ -60,41 +62,175 @@ struct PendingReview {
     primary_error: Option<String>,
 }
 
+fn pending_from(records: &BTreeMap<u32, PendingCue>) -> BTreeMap<u32, PendingReview> {
+    records
+        .iter()
+        .map(|(index, record)| {
+            (
+                *index,
+                PendingReview {
+                    candidate: record.candidate.clone(),
+                    reasons: record.reasons.clone(),
+                    primary_error: record.primary_error.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
+fn pending_to(pending: &BTreeMap<u32, PendingReview>) -> BTreeMap<u32, PendingCue> {
+    pending
+        .iter()
+        .map(|(index, review)| {
+            (
+                *index,
+                PendingCue {
+                    candidate: review.candidate.clone(),
+                    reasons: review.reasons.clone(),
+                    primary_error: review.primary_error.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
+fn unsettled_ranges(
+    cues: &[Cue],
+    range: Range<usize>,
+    checkpoint: &SubtitleCheckpoint,
+) -> Vec<Range<usize>> {
+    let end = range.end;
+    let mut output = Vec::new();
+    let mut open = None;
+    for position in range {
+        if checkpoint.settled(cues[position].index) {
+            if let Some(start) = open.take() {
+                output.push(start..position);
+            }
+        } else if open.is_none() {
+            open = Some(position);
+        }
+    }
+    if let Some(start) = open {
+        output.push(start..end);
+    }
+    output
+}
+
+fn snapshot(
+    checkpoint: &mut SubtitleCheckpoint,
+    translated: &BTreeMap<u32, String>,
+    pending_review: &BTreeMap<u32, PendingReview>,
+) {
+    checkpoint.translations.clone_from(translated);
+    checkpoint.pending_review = pending_to(pending_review);
+}
+
+fn note_reviewed(
+    done: &BTreeSet<u32>,
+    translations: &BTreeMap<u32, String>,
+    pending: &BTreeMap<u32, PendingReview>,
+    new_log: &[TranslationQualityRecord],
+    checkpoint: &mut SubtitleCheckpoint,
+    persist: &mut dyn FnMut(&SubtitleCheckpoint) -> Result<()>,
+) -> Result<()> {
+    snapshot(checkpoint, translations, pending);
+    checkpoint.reviewed_indices.extend(done.iter().copied());
+    checkpoint.quality_log.extend(new_log.iter().cloned());
+    persist(checkpoint)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn translate(
     cues: &[Cue],
     cfg: &TranslationConfig,
     client: &dyn LlmClient,
     video: &str,
+    stage: SubtitleStage,
+    checkpoint: &mut SubtitleCheckpoint,
+    persist: &mut dyn FnMut(&SubtitleCheckpoint) -> Result<()>,
 ) -> Result<TranslationOutcome> {
     if cues.is_empty() || cfg.batch_size == 0 || cfg.max_batch_chars == 0 {
         bail!("source cues and translation batch limits must be non-empty");
     }
     let api_key = cfg.api_key()?;
-    let mut translated = BTreeMap::new();
-    let mut pending_review = BTreeMap::new();
-
-    for range in batch_ranges(cues, cfg.batch_size, cfg.max_batch_chars) {
-        translate_range_adaptive(
-            client,
-            api_key.as_deref(),
-            cues,
-            range,
-            cfg,
-            &mut translated,
-            &mut pending_review,
-        )?;
+    let mut translated = checkpoint.translations.clone();
+    let mut pending_review = pending_from(&checkpoint.pending_review);
+    if stage == SubtitleStage::Review {
+        let missing: Vec<u32> = cues
+            .iter()
+            .filter(|cue| !translated.contains_key(&cue.index))
+            .map(|cue| cue.index)
+            .collect();
+        if !missing.is_empty() {
+            bail!(
+                "translation checkpoint is missing cues {missing:?}; run translate before review"
+            );
+        }
+    } else if !checkpoint.settled_indices.is_empty() {
         subtrans_core::report_line!(
             out,
-            "translation.progress",
-            serde_json::json!({"translated": translated.len(), "cues": cues.len()}),
-            "translation progress translated={}/{}",
-            translated.len(),
+            "translation.resume",
+            serde_json::json!({
+                "stage": "translate",
+                "settled": checkpoint.settled_indices.len(),
+                "cues": cues.len()
+            }),
+            "translation resume stage=translate settled={}/{}",
+            checkpoint.settled_indices.len(),
             cues.len()
         );
     }
-    queue_quality_concerns(cues, &translated, cfg, &mut pending_review);
+
+    if stage != SubtitleStage::Review {
+        for range in batch_ranges(cues, cfg.batch_size, cfg.max_batch_chars) {
+            for subrange in unsettled_ranges(cues, range, checkpoint) {
+                translate_range_adaptive(
+                    client,
+                    api_key.as_deref(),
+                    cues,
+                    subrange.clone(),
+                    cfg,
+                    &mut translated,
+                    &mut pending_review,
+                )?;
+                for position in subrange {
+                    checkpoint.settled_indices.insert(cues[position].index);
+                }
+                snapshot(checkpoint, &translated, &pending_review);
+                persist(checkpoint)?;
+                subtrans_core::report_line!(
+                    out,
+                    "translation.progress",
+                    serde_json::json!({"translated": translated.len(), "cues": cues.len()}),
+                    "translation progress translated={}/{}",
+                    translated.len(),
+                    cues.len()
+                );
+            }
+        }
+        queue_quality_concerns(cues, &translated, cfg, &mut pending_review);
+        snapshot(checkpoint, &translated, &pending_review);
+        persist(checkpoint)?;
+    }
     let mut quality_log = Vec::new();
-    if cfg.alignment_check || cfg.consistency_check || !pending_review.is_empty() {
+    if stage != SubtitleStage::Translate
+        && (cfg.alignment_check || cfg.consistency_check || !pending_review.is_empty())
+    {
+        if !checkpoint.reviewed_indices.is_empty() {
+            subtrans_core::report_line!(
+                out,
+                "translation.resume",
+                serde_json::json!({
+                    "stage": "review",
+                    "reviewed": checkpoint.reviewed_indices.len(),
+                    "cues": cues.len()
+                }),
+                "translation resume stage=review reviewed={}/{}",
+                checkpoint.reviewed_indices.len(),
+                cues.len()
+            );
+        }
         subtrans_core::report_line!(
             out,
             "translation.review_check",
@@ -110,6 +246,8 @@ pub fn translate(
             cfg,
             &mut pending_review,
             video,
+            checkpoint,
+            persist,
         )?;
         subtrans_core::report_line!(
             out,
@@ -126,7 +264,7 @@ pub fn translate(
         );
         quality_log = outcome.quality_log;
     }
-    if !pending_review.is_empty() {
+    if stage != SubtitleStage::Translate && !pending_review.is_empty() {
         for (index, review) in &pending_review {
             report_blocked(video, *index, &blocked_reason(Some(review)));
         }
@@ -136,12 +274,14 @@ pub fn translate(
         );
     }
     let output = render(cues, &translated, cfg.bilingual)?;
-    validate_translation_quality(
-        cues,
-        &output,
-        &cfg.target_language,
-        cfg.min_target_script_ratio,
-    )?;
+    if stage != SubtitleStage::Translate {
+        validate_translation_quality(
+            cues,
+            &output,
+            &cfg.target_language,
+            cfg.min_target_script_ratio,
+        )?;
+    }
     Ok(TranslationOutcome {
         cues: output,
         quality_log,
@@ -426,6 +566,7 @@ fn blocked_reason(review: Option<&PendingReview>) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn audit_alignment(
     client: &dyn LlmClient,
     api_key: Option<&str>,
@@ -434,6 +575,8 @@ fn audit_alignment(
     cfg: &TranslationConfig,
     pending_review: &mut BTreeMap<u32, PendingReview>,
     video: &str,
+    checkpoint: &mut SubtitleCheckpoint,
+    persist: &mut dyn FnMut(&SubtitleCheckpoint) -> Result<()>,
 ) -> Result<AlignmentOutcome> {
     let model = cfg
         .alignment_model
@@ -448,7 +591,12 @@ fn audit_alignment(
                 positions: range.collect(),
             })
             .collect();
-    while let Some(task) = pending.pop_front() {
+    while let Some(mut task) = pending.pop_front() {
+        task.positions
+            .retain(|position| !checkpoint.reviewed_indices.contains(&cues[*position].index));
+        if task.positions.is_empty() {
+            continue;
+        }
         let first = *task
             .positions
             .first()
@@ -561,6 +709,7 @@ fn audit_alignment(
                         "review model omitted mandatory correction for cue indices {missing_required:?}"
                     );
                 }
+                let mut task_log = Vec::new();
                 for (index, correction) in corrections {
                     let position = cues
                         .iter()
@@ -597,7 +746,7 @@ fn audit_alignment(
                     translations.insert(index, reviewed_translation.clone());
                     outcome.corrected = outcome.corrected.saturating_add(1);
                     outcome.flagged = outcome.flagged.saturating_add(1);
-                    outcome.quality_log.push(TranslationQualityRecord {
+                    task_log.push(TranslationQualityRecord {
                         cue_index: index,
                         source: single_line(&cues[position].text),
                         candidate_before_review,
@@ -608,6 +757,14 @@ fn audit_alignment(
                         review_model: model.to_owned(),
                     });
                 }
+                note_reviewed(
+                    &expected,
+                    translations,
+                    pending_review,
+                    &task_log,
+                    checkpoint,
+                    persist,
+                )?;
             }
             Err(_) if task.positions.len() > 1 => {
                 let midpoint = task.positions.len() / 2;
@@ -651,9 +808,18 @@ fn audit_alignment(
                     "translation review_check unresolved_index={} action=keep_current_translation error={error:#}",
                     cues[first].index
                 );
+                note_reviewed(
+                    &BTreeSet::from([cues[first].index]),
+                    translations,
+                    pending_review,
+                    &[],
+                    checkpoint,
+                    persist,
+                )?;
             }
         }
     }
+    outcome.quality_log.clone_from(&checkpoint.quality_log);
     Ok(outcome)
 }
 
@@ -858,7 +1024,7 @@ target_language_code = "zh-CN"
         cfg.max_retries = 0;
 
         let _human = subtrans_core::report::capture(false);
-        let error = translate(&cues(1), &cfg, &Fail, "Show/episode.mkv").unwrap_err();
+        let error = translate_for_test(&cfg, &Fail).unwrap_err();
         assert!(error.to_string().contains("refusing to publish"));
         let human_lines = subtrans_core::report::captured();
         assert!(
@@ -874,7 +1040,7 @@ target_language_code = "zh-CN"
         drop(_human);
 
         let _json = subtrans_core::report::capture(true);
-        let _ = translate(&cues(1), &cfg, &Fail, "Show/episode.mkv").unwrap_err();
+        let _ = translate_for_test(&cfg, &Fail).unwrap_err();
         let blocked = subtrans_core::report::captured()
             .into_iter()
             .filter_map(|(_, line)| serde_json::from_str::<serde_json::Value>(&line).ok())
@@ -889,5 +1055,22 @@ target_language_code = "zh-CN"
                 .any(|reason| reason == "primary_translation_failed")
         );
         assert_eq!(blocked["index"], 1);
+    }
+
+    fn translate_for_test(
+        cfg: &crate::config::TranslationConfig,
+        client: &dyn LlmClient,
+    ) -> Result<TranslationOutcome> {
+        let mut checkpoint =
+            super::SubtitleCheckpoint::new("Show/episode.mkv", "source".into(), "cache".into());
+        translate(
+            &cues(1),
+            cfg,
+            client,
+            "Show/episode.mkv",
+            super::SubtitleStage::Both,
+            &mut checkpoint,
+            &mut |_| Ok(()),
+        )
     }
 }

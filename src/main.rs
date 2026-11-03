@@ -52,6 +52,9 @@ enum Command {
         force: bool,
         #[arg(long)]
         limit: Option<usize>,
+        /// Run translation, review, or both. Review publishes; translation only checkpoints.
+        #[arg(long, value_enum, default_value_t = SubtitleStageArg::Both)]
+        stage: SubtitleStageArg,
     },
     /// Build or apply auditable media migration plans.
     Migrate {
@@ -63,6 +66,23 @@ enum Command {
         #[arg(long)]
         config: PathBuf,
     },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum SubtitleStageArg {
+    Translate,
+    Review,
+    Both,
+}
+
+impl From<SubtitleStageArg> for subtrans::subtitles::SubtitleStage {
+    fn from(stage: SubtitleStageArg) -> Self {
+        match stage {
+            SubtitleStageArg::Translate => subtrans::subtitles::SubtitleStage::Translate,
+            SubtitleStageArg::Review => subtrans::subtitles::SubtitleStage::Review,
+            SubtitleStageArg::Both => subtrans::subtitles::SubtitleStage::Both,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -135,6 +155,7 @@ fn main() -> Result<()> {
             dry_run,
             force,
             limit,
+            stage,
         } => {
             let mut cfg = load_runtime_config(config)?;
             if let Some(local_dir) = local_dir {
@@ -152,7 +173,15 @@ fn main() -> Result<()> {
                     local_dir.display()
                 );
             }
-            subtrans::subtitles::run(&cfg, dry_run, force, limit)
+            subtrans::subtitles::run_with_stage(
+                &cfg,
+                dry_run,
+                force,
+                limit,
+                stage.into(),
+                None,
+                None,
+            )
         }
         Command::Migrate { command } => match command {
             MigrateCommand::Plan {
