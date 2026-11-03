@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# version4 check after step C.
+# version4 check after step D.
 # T0: scripts/agent-check.sh
 # T1: scripts/agent-check.sh --workspace
 # Both run fmt, clippy, and locked tests for the whole workspace.

@@ -92,7 +92,12 @@ pub(crate) fn hash_reader(reader: &mut dyn Read) -> Result<String> {
 /// silently ignoring empty shells.
 pub fn report_empty_dirs(entries: &[FileEntry]) -> usize {
     if entries.is_empty() {
-        println!("scan empty_dir path=(root)");
+        subtrans_core::report_line!(
+            out,
+            "scan.empty_dir",
+            serde_json::json!({"path": "(root)"}),
+            "scan empty_dir path=(root)"
+        );
         return 1;
     }
     let mut empty: Vec<&str> = Vec::new();
@@ -104,7 +109,12 @@ pub fn report_empty_dirs(entries: &[FileEntry]) -> usize {
         }
     }
     for path in &empty {
-        println!("scan empty_dir path={path}");
+        subtrans_core::report_line!(
+            out,
+            "scan.empty_dir",
+            serde_json::json!({"path": path}),
+            "scan empty_dir path={path}"
+        );
     }
     empty.len()
 }
@@ -152,6 +162,28 @@ mod tests {
     fn a_completely_empty_listing_is_reported_as_root() {
         let entries: Vec<FileEntry> = Vec::new();
         assert_eq!(report_empty_dirs(&entries), 1);
+    }
+
+    #[test]
+    fn empty_dir_sentence_and_json_event_use_the_same_path() {
+        let _human = subtrans_core::report::capture(false);
+        assert_eq!(report_empty_dirs(&[]), 1);
+        assert_eq!(
+            subtrans_core::report::captured(),
+            vec![(
+                subtrans_core::report::Stream::Stdout,
+                "scan empty_dir path=(root)".to_owned()
+            )]
+        );
+        drop(_human);
+
+        let _json = subtrans_core::report::capture(true);
+        assert_eq!(report_empty_dirs(&[dir("incoming/show")]), 1);
+        let line = &subtrans_core::report::captured()[0].1;
+        let value: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(value["event"], "scan.empty_dir");
+        assert_eq!(value["path"], "incoming/show");
+        assert!(!line.contains("scan empty_dir path="));
     }
 
     #[test]

@@ -567,7 +567,10 @@ impl Storage for FtpStorage {
                 });
             }
             if final_exists && let Err(error) = ftp.rm(&backup_path) {
-                eprintln!(
+                subtrans_core::report_line!(
+                    err,
+                    "storage.backup_cleanup_failed",
+                    serde_json::json!({"path": backup_path, "error": error.to_string()}),
                     "FTP publish succeeded but backup cleanup failed path={backup_path} error={error}"
                 );
             }

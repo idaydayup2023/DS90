@@ -12,6 +12,9 @@ use subtrans::config::Config;
     long_about = "TMDB metadata, subtitle translation, and safe media migration.\n\nThis product uses the TMDB API but is not endorsed or certified by TMDB."
 )]
 struct Cli {
+    /// Print diagnostics as one JSON object per line on stdout.
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -94,6 +97,7 @@ enum MigrateCommand {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    subtrans_core::report::set_json(cli.json);
     match cli.command {
         Command::Metadata {
             config,
@@ -108,7 +112,13 @@ fn main() -> Result<()> {
                 cfg.source = subtrans::config::StorageConfig::Local {
                     root: local_dir.clone(),
                 };
-                println!("metadata local_mode root={}", local_dir.display());
+                subtrans_core::report_line!(
+                    out,
+                    "metadata.local_mode",
+                    serde_json::json!({"root": local_dir.display().to_string()}),
+                    "metadata local_mode root={}",
+                    local_dir.display()
+                );
             }
             let mode = if force {
                 subtrans::metadata::FetchMode::Force
@@ -131,7 +141,13 @@ fn main() -> Result<()> {
                 cfg.source = subtrans::config::StorageConfig::Local {
                     root: local_dir.clone(),
                 };
-                println!(
+                subtrans_core::report_line!(
+                    out,
+                    "subtitle.local_mode",
+                    serde_json::json!({
+                        "root": local_dir.display().to_string(),
+                        "migration": "disabled"
+                    }),
                     "subtitles local_mode root={} migration=disabled",
                     local_dir.display()
                 );
@@ -147,7 +163,14 @@ fn main() -> Result<()> {
                 let cfg = load_runtime_config(config)?;
                 let plan = subtrans::migration::build_plan(&cfg, limit)?;
                 plan.write(&output)?;
-                println!(
+                subtrans_core::report_line!(
+                    out,
+                    "plan.ready",
+                    serde_json::json!({
+                        "plan_hash": plan.plan_hash,
+                        "items": plan.items.len(),
+                        "pending": plan.pending_count()
+                    }),
                     "plan_hash={} items={} pending={}",
                     plan.plan_hash,
                     plan.items.len(),
@@ -174,32 +197,68 @@ fn main() -> Result<()> {
                 let plan = subtrans::migration::PlanDocument::read(&plan)?;
                 plan.verify_config(&cfg)?;
                 if plan.pending_count() == 0 {
-                    println!(
+                    subtrans_core::report_line!(
+                        out,
+                        "migrate.review",
+                        serde_json::json!({"pending": 0, "plan_hash": plan.plan_hash}),
                         "No pending items. Apply only with plan_hash={}",
                         plan.plan_hash
                     );
                     return Ok(());
                 }
                 for item in plan.items.iter().filter(|item| item.is_pending()) {
-                    println!("PENDING {}", item.source);
-                    if let subtrans::migration::PlanStatus::Pending { reason } = &item.status {
-                        println!("  reason: {reason}");
-                    }
-                    if let Some(destination) = &item.proposed_destination {
-                        println!("  proposed destination (not executable): {destination}");
-                    }
-                    for evidence in &item.classification.evidence {
-                        println!(
-                            "  evidence: {} ({:.2}) {}",
-                            evidence.code, evidence.confidence, evidence.detail
-                        );
-                    }
-                    println!(
-                        "  override key: [migration.overrides.{}]",
+                    let reason = match &item.status {
+                        subtrans::migration::PlanStatus::Pending { reason } => reason.clone(),
+                        subtrans::migration::PlanStatus::Ready => String::new(),
+                    };
+                    let override_key = format!(
+                        "[migration.overrides.{}]",
                         serde_json::to_string(&item.source)?
                     );
+                    let mut lines = vec![format!("PENDING {}", item.source)];
+                    if let subtrans::migration::PlanStatus::Pending { reason } = &item.status {
+                        lines.push(format!("  reason: {reason}"));
+                    }
+                    if let Some(destination) = &item.proposed_destination {
+                        lines.push(format!(
+                            "  proposed destination (not executable): {destination}"
+                        ));
+                    }
+                    for evidence in &item.classification.evidence {
+                        lines.push(format!(
+                            "  evidence: {} ({:.2}) {}",
+                            evidence.code, evidence.confidence, evidence.detail
+                        ));
+                    }
+                    lines.push(format!("  override key: {override_key}"));
+                    let mut fields = serde_json::json!({
+                        "source": item.source,
+                        "reason": reason,
+                        "override_key": override_key,
+                        "evidence": item.classification.evidence.iter().map(|evidence| {
+                            serde_json::json!({
+                                "code": evidence.code,
+                                "confidence": format!("{:.2}", evidence.confidence),
+                                "detail": evidence.detail
+                            })
+                        }).collect::<Vec<_>>()
+                    });
+                    if let Some(destination) = &item.proposed_destination {
+                        fields["proposed_destination"] = serde_json::json!(destination);
+                    }
+                    subtrans_core::report::emit_lines(
+                        subtrans_core::report::Stream::Stdout,
+                        &lines,
+                        "migrate.pending",
+                        fields,
+                    );
                 }
-                println!(
+                subtrans_core::report_line!(
+                    out,
+                    "migrate.hint",
+                    serde_json::json!({
+                        "message": "Edit explicit overrides in the TOML config, then generate and review a new plan. Never edit this plan file."
+                    }),
                     "Edit explicit overrides in the TOML config, then generate and review a new plan. Never edit this plan file."
                 );
                 Ok(())
@@ -224,7 +283,10 @@ fn main() -> Result<()> {
             }
             subtrans::subtitles::doctor(&cfg)?;
             subtrans::metadata::doctor(&cfg)?;
-            println!(
+            subtrans_core::report_line!(
+                out,
+                "doctor.ready",
+                serde_json::json!({"version": subtrans::VERSION}),
                 "subtrans {} configuration and dependencies are ready",
                 subtrans::VERSION
             );

@@ -85,7 +85,10 @@ pub fn parse_valid_indices(
         // full translation instead of discarding the whole batch.
         if let Some(existing) = output.get(&item.index) {
             let merged = format!("{} {}", existing, text);
-            eprintln!(
+            crate::report_line!(
+                err,
+                "translation.merged",
+                serde_json::json!({"index": item.index, "chars": merged.chars().count()}),
                 "translation merged duplicate index {} chars={}",
                 item.index,
                 merged.chars().count()

@@ -116,7 +116,14 @@ pub fn run_with(
     for video in videos {
         if let Some(marker) = incomplete_marker(&video, &by_directory, cfg) {
             pending += 1;
-            println!(
+            subtrans_core::report_line!(
+                out,
+                "subtitle.pending",
+                serde_json::json!({
+                    "video": video.path,
+                    "reason": "incomplete_download_marker",
+                    "marker": marker
+                }),
                 "subtitles pending video={} reason=incomplete_download_marker marker={marker}",
                 video.path
             );
@@ -137,15 +144,36 @@ pub fn run_with(
             Ok(VideoOutcome::Cached) => cached += 1,
             Ok(VideoOutcome::Pending(reason)) => {
                 pending += 1;
-                println!("subtitles pending video={} reason={reason}", video.path);
+                subtrans_core::report_line!(
+                    out,
+                    "subtitle.pending",
+                    serde_json::json!({"video": video.path, "reason": reason}),
+                    "subtitles pending video={} reason={reason}",
+                    video.path
+                );
             }
             Err(error) => {
                 failures.push(format!("{}: {error:#}", video.path));
-                eprintln!("subtitles failed video={} error={error:#}", video.path);
+                subtrans_core::report_line!(
+                    err,
+                    "subtitle.failed",
+                    serde_json::json!({"video": video.path, "error": format!("{error:#}")}),
+                    "subtitles failed video={} error={error:#}",
+                    video.path
+                );
             }
         }
     }
-    println!(
+    subtrans_core::report_line!(
+        out,
+        "subtitle.complete",
+        serde_json::json!({
+            "scanned": scanned,
+            "translated": translated,
+            "cached": cached,
+            "pending": pending,
+            "failed": failures.len()
+        }),
         "subtitles complete scanned={scanned} translated={translated} cached={cached} pending={pending} failed={}",
         failures.len()
     );
@@ -196,15 +224,28 @@ fn process_video(
         let acquisition_matches = manifest.acquisition_key == acquisition_key;
         let cache_matches = manifest.cache_key == expected_cache_key;
         if acquisition_matches && cache_matches {
-            println!(
+            subtrans_core::report_line!(
+                out,
+                "subtitle.cached",
+                serde_json::json!({"video": video.path, "source": manifest.source_kind}),
                 "subtitles cached video={} source={}",
-                video.path, manifest.source_kind
+                video.path,
+                manifest.source_kind
             );
             return Ok(VideoOutcome::Cached);
         }
-        eprintln!(
+        subtrans_core::report_line!(
+            err,
+            "subtitle.cache_miss",
+            serde_json::json!({
+                "video": video.path,
+                "acquisition_match": acquisition_matches,
+                "cache_match": cache_matches
+            }),
             "subtitle artifact cache_miss video={} acquisition_match={} cache_match={}",
-            video.path, acquisition_matches, cache_matches
+            video.path,
+            acquisition_matches,
+            cache_matches
         );
     }
     let existing_source =
@@ -222,9 +263,18 @@ fn process_video(
             || VideoOutcome::Pending("no_existing_source".into()),
             |source| {
                 let paths = artifact_paths(&video.path).expect("validated video path");
-                println!(
+                subtrans_core::report_line!(
+                    out,
+                    "subtitle.plan",
+                    serde_json::json!({
+                        "video": video.path,
+                        "source": source.kind,
+                        "output": paths.output
+                    }),
                     "subtitles plan video={} source={} output={}",
-                    video.path, source.kind, paths.output
+                    video.path,
+                    source.kind,
+                    paths.output
                 );
                 VideoOutcome::Pending("dry_run".into())
             },
@@ -271,7 +321,7 @@ fn process_video(
             std::str::from_utf8(&source.bytes).context("source subtitle is not valid UTF-8")?;
         let source_cues = srt::parse(source_text)?;
         quality::validate_source(&source_cues)?;
-        let translation = translation::translate(&source_cues, &cfg.translation, llm)?;
+        let translation = translation::translate(&source_cues, &cfg.translation, llm, &video.path)?;
         let output = srt::format(&translation.cues)?;
         let reparsed = srt::parse(&output)?;
         translation::validate_output(&source_cues, &reparsed, cfg.translation.bilingual)?;
@@ -352,9 +402,17 @@ fn process_video(
             "READY",
             &serde_json::json!({"output": paths.output, "output_sha256": output_sha256}),
         )?;
-        println!(
+        subtrans_core::report_line!(
+            out,
+            "subtitle.translated",
+            serde_json::json!({
+                "video": video.path,
+                "output": paths.output,
+                "reviewed_cues": reviewed_cues
+            }),
             "subtitles translated video={} output={} reviewed_cues={reviewed_cues}",
-            video.path, paths.output
+            video.path,
+            paths.output
         );
         Ok(VideoOutcome::Translated)
     })();
@@ -585,7 +643,15 @@ fn resolve_existing_source(
         let external_cues = srt::parse(external_text)?;
         let external_quality =
             quality::score_source(&external_cues, &cfg.translation.source_language)?;
-        println!(
+        subtrans_core::report_line!(
+            out,
+            "subtitle.source_evaluation",
+            serde_json::json!({
+                "video": video.path,
+                "decision": "external_selected_no_embedded_english",
+                "external": external_path,
+                "external_quality": format!("{external_quality:.2}")
+            }),
             "subtitles source_evaluation video={} decision=external_selected_no_embedded_english external={external_path} external_quality={external_quality:.2}",
             video.path
         );
@@ -630,7 +696,19 @@ fn resolve_existing_source(
         external_quality: comparison.external_quality,
         embedded_quality: comparison.embedded_quality,
     };
-    println!(
+    subtrans_core::report_line!(
+        out,
+        "subtitle.source_evaluation",
+        serde_json::json!({
+            "video": video.path,
+            "decision": decision,
+            "external": external_path,
+            "embedded": embedded.kind,
+            "timing_match": format!("{:.3}", comparison.timing_match_ratio),
+            "text_similarity": format!("{:.3}", comparison.text_similarity),
+            "external_quality": format!("{:.2}", comparison.external_quality),
+            "embedded_quality": format!("{:.2}", comparison.embedded_quality)
+        }),
         "subtitles source_evaluation video={} decision={decision} external={} embedded={} timing_match={:.3} text_similarity={:.3} external_quality={:.2} embedded_quality={:.2}",
         video.path,
         external_path,
@@ -1111,7 +1189,10 @@ fn run_optional_worker(
     ) {
         Ok(()) => true,
         Err(error) => {
-            eprintln!(
+            subtrans_core::report_line!(
+                err,
+                "subtitle.worker_unavailable",
+                serde_json::json!({"worker": name, "error": format!("{error:#}")}),
                 "{name} worker unavailable; continuing with the next permitted subtitle source.\n{error:#}"
             );
             false
@@ -1191,7 +1272,12 @@ fn select_videos(entries: &[FileEntry], cfg: &Config, limit: Option<usize>) -> V
         .count();
     videos.retain(|video| !cfg.is_excluded(&video.path));
     if excluded > 0 {
-        println!("subtitles excluded videos={excluded} reason=scan_exclude_config");
+        subtrans_core::report_line!(
+            out,
+            "subtitle.excluded",
+            serde_json::json!({"videos": excluded, "reason": "scan_exclude_config"}),
+            "subtitles excluded videos={excluded} reason=scan_exclude_config"
+        );
     }
     videos.truncate(limit.unwrap_or(usize::MAX));
     videos

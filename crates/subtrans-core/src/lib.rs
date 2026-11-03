@@ -7,4 +7,5 @@ pub mod plan;
 pub mod protocol;
 pub mod quality;
 pub mod remote;
+pub mod report;
 pub mod srt;

@@ -193,7 +193,12 @@ fn run_on_storage(
         .count();
     videos.retain(|video| !cfg.is_excluded(&video.path));
     if excluded > 0 {
-        println!("metadata excluded videos={excluded} reason=scan_exclude_config");
+        subtrans_core::report_line!(
+            out,
+            "metadata.excluded",
+            serde_json::json!({"videos": excluded, "reason": "scan_exclude_config"}),
+            "metadata excluded videos={excluded} reason=scan_exclude_config"
+        );
     }
     videos.truncate(limit.unwrap_or(usize::MAX));
 
@@ -206,7 +211,14 @@ fn run_on_storage(
     for video in videos {
         if let Some(marker) = incomplete_marker(&entries, &video, cfg) {
             summary.pending += 1;
-            println!(
+            subtrans_core::report_line!(
+                out,
+                "metadata.pending",
+                serde_json::json!({
+                    "video": video.path,
+                    "reason": "incomplete_download_marker",
+                    "marker": marker
+                }),
                 "metadata pending video={} reason=incomplete_download_marker marker={marker}",
                 video.path
             );
@@ -214,22 +226,37 @@ fn run_on_storage(
         }
         if dry_run {
             let selection = selection_for(cfg, &video.path);
-            println!(
+            let title = selection.title.as_deref().unwrap_or("<pending>");
+            let year = selection
+                .year
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "<unknown>".to_owned());
+            subtrans_core::report_line!(
+                out,
+                "metadata.dry_run",
+                serde_json::json!({
+                    "video": video.path,
+                    "classification": kind_name(selection.kind),
+                    "title": title,
+                    "year": year
+                }),
                 "metadata dry_run video={} classification={} title={} year={}",
                 video.path,
                 kind_name(selection.kind),
-                selection.title.as_deref().unwrap_or("<pending>"),
-                selection
-                    .year
-                    .map(|value| value.to_string())
-                    .as_deref()
-                    .unwrap_or("<unknown>")
+                title,
+                year
             );
             continue;
         }
         if mode != FetchMode::Force && read_ready_metadata(storage, &video, cfg)?.is_some() {
             summary.cached += 1;
-            println!("metadata cached video={}", video.path);
+            subtrans_core::report_line!(
+                out,
+                "metadata.cached",
+                serde_json::json!({"video": video.path}),
+                "metadata cached video={}",
+                video.path
+            );
             continue;
         }
         let source: &dyn MetadataSource = if let Some(source) = injected {
@@ -248,14 +275,34 @@ fn run_on_storage(
             Ok(()) => summary.fetched += 1,
             Err(error) => {
                 summary.failed += 1;
-                eprintln!("metadata failed video={} error={error:#}", video.path);
+                subtrans_core::report_line!(
+                    err,
+                    "metadata.failed",
+                    serde_json::json!({"video": video.path, "error": format!("{error:#}")}),
+                    "metadata failed video={} error={error:#}",
+                    video.path
+                );
                 failures.push(format!("{}: {error:#}", video.path));
             }
         }
     }
-    println!(
+    subtrans_core::report_line!(
+        out,
+        "metadata.complete",
+        serde_json::json!({
+            "scanned": summary.scanned,
+            "fetched": summary.fetched,
+            "cached": summary.cached,
+            "pending": summary.pending,
+            "failed": summary.failed,
+            "provider": "TMDB"
+        }),
         "metadata complete scanned={} fetched={} cached={} pending={} failed={} provider=TMDB",
-        summary.scanned, summary.fetched, summary.cached, summary.pending, summary.failed
+        summary.scanned,
+        summary.fetched,
+        summary.cached,
+        summary.pending,
+        summary.failed
     );
     if failures.is_empty() {
         Ok(summary)
@@ -386,9 +433,18 @@ fn process_video(
     };
     let bytes = serde_json::to_vec_pretty(&manifest)?;
     storage.upload_atomic(&paths.manifest, &mut Cursor::new(bytes))?;
-    println!(
+    subtrans_core::report_line!(
+        out,
+        "metadata.fetched",
+        serde_json::json!({
+            "video": video.path,
+            "tmdb_id": manifest.tmdb_id,
+            "kind": manifest.media_kind
+        }),
         "metadata fetched video={} tmdb_id={} kind={}",
-        video.path, manifest.tmdb_id, manifest.media_kind
+        video.path,
+        manifest.tmdb_id,
+        manifest.media_kind
     );
     Ok(())
 }
@@ -472,7 +528,12 @@ pub fn read_ready_metadata(
 
 pub fn doctor(cfg: &Config) -> Result<()> {
     if !cfg.metadata.enabled {
-        println!("metadata disabled");
+        subtrans_core::report_line!(
+            out,
+            "metadata.disabled",
+            serde_json::json!({}),
+            "metadata disabled"
+        );
         return Ok(());
     }
     let connected = connect_tmdb(&cfg.metadata)?;
@@ -481,9 +542,17 @@ pub fn doctor(cfg: &Config) -> Result<()> {
         config: cfg.metadata.clone(),
     };
     let _: Value = client.json("configuration", &[])?;
-    println!(
+    subtrans_core::report_line!(
+        out,
+        "metadata.ready",
+        serde_json::json!({
+            "provider": "TMDB",
+            "language": cfg.metadata.language,
+            "fallback": cfg.metadata.fallback_language
+        }),
         "metadata provider=TMDB language={} fallback={} ready",
-        cfg.metadata.language, cfg.metadata.fallback_language
+        cfg.metadata.language,
+        cfg.metadata.fallback_language
     );
     Ok(())
 }
@@ -805,7 +874,15 @@ impl<'a> TmdbClient<'a> {
         ) {
             Ok(value) => value,
             Err(error) => {
-                eprintln!(
+                subtrans_core::report_line!(
+                    err,
+                    "metadata.warning",
+                    serde_json::json!({
+                        "provider": "TMDB",
+                        "endpoint": endpoint,
+                        "fallback_language": self.config.fallback_language,
+                        "error": format!("{error:#}")
+                    }),
                     "metadata warning provider=TMDB endpoint={endpoint} fallback_language={} error={error:#}",
                     self.config.fallback_language
                 );

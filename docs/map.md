@@ -1,12 +1,13 @@
 # 代码地图
 
-workspace 成员是根 crate `subtrans`（`Cargo.toml`，库 `src/lib.rs`，二进制 `src/main.rs`）、`subtrans-core`、`subtrans-io`、`subtrans-remote`。步骤 C 让工作流走 trait。`subtrans-app`、`subtrans-cli`、`subtrans-evals` 还没有建。
+workspace 成员是根 crate `subtrans`（`Cargo.toml`，库 `src/lib.rs`，二进制 `src/main.rs`）、`subtrans-core`、`subtrans-io`、`subtrans-remote`。步骤 C 让工作流走 trait。步骤 D 把诊断收进 `Reporter`。`subtrans-app`、`subtrans-cli`、`subtrans-evals` 还没有建。
 
 验证命令：`scripts/agent-check.sh`。CI 使用 `scripts/agent-check.sh --workspace`。`evals/` 还没有运行器；下表的 JSONL 是从测试抄出的断言，执行它们的是对应的 `cargo test`。
 
 | 模块 | 路径 | 职责 | 断言抄本 | 现有测试 |
 | --- | --- | --- | --- | --- |
-| CLI | `src/main.rs` | 四个子命令；人读 stdout | 步骤 D 才加 `--json` | `tests/rust_cli.rs` |
+| CLI | `src/main.rs` | 四个子命令。默认人读句子；`--json` 打事件 | `tests/rust_cli.rs` 钉住 `plan_hash=`、`PENDING`、覆盖键 | `tests/rust_cli.rs` |
+| Reporter | `crates/subtrans-core/src/report.rs` | 人读句子或一行一个 JSON 事件。不写计划文件 | 见 `AGENTS.md` 的事件形状 | `crates/subtrans-core/src/report.rs`、`tests/rust_cli.rs` |
 | 配置 | `src/config.rs` | 严格 TOML、`version = 3`、扫描排除 | `evals/scan/exclude-and-empty.jsonl` | `src/config.rs` 内测试 |
 | 路径规则 | `crates/subtrans-core/src/path.rs` | 相对路径规范化。根 crate 再导出 `storage::validate_relative_path` | `evals/path/safety.jsonl` | `tests/rust_storage.rs` |
 | 方括号列举判断 | `crates/subtrans-core/src/listing.rs` | 含 `[]` 则目录内列举。无网络 | `evals/path/listing.jsonl` | `crates/subtrans-core/src/listing.rs` |

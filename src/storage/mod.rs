@@ -185,7 +185,10 @@ pub fn try_server_side_rename(
             let destination_exists = storage.exists(&to)?;
             match (source_exists, destination_exists) {
                 (true, false) => {
-                    eprintln!(
+                    subtrans_core::report_line!(
+                        err,
+                        "storage.rename_fallback",
+                        serde_json::json!({"from": from, "to": to}),
                         "FTP server-side rename is unavailable for {from} -> {to}; using verified streaming copy"
                     );
                     Ok(false)

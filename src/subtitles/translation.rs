@@ -64,6 +64,7 @@ pub fn translate(
     cues: &[Cue],
     cfg: &TranslationConfig,
     client: &dyn LlmClient,
+    video: &str,
 ) -> Result<TranslationOutcome> {
     if cues.is_empty() || cfg.batch_size == 0 || cfg.max_batch_chars == 0 {
         bail!("source cues and translation batch limits must be non-empty");
@@ -82,7 +83,10 @@ pub fn translate(
             &mut translated,
             &mut pending_review,
         )?;
-        println!(
+        subtrans_core::report_line!(
+            out,
+            "translation.progress",
+            serde_json::json!({"translated": translated.len(), "cues": cues.len()}),
             "translation progress translated={}/{}",
             translated.len(),
             cues.len()
@@ -91,7 +95,13 @@ pub fn translate(
     queue_quality_concerns(cues, &translated, cfg, &mut pending_review);
     let mut quality_log = Vec::new();
     if cfg.alignment_check || cfg.consistency_check || !pending_review.is_empty() {
-        println!("translation review_check cues={}", cues.len());
+        subtrans_core::report_line!(
+            out,
+            "translation.review_check",
+            serde_json::json!({"cues": cues.len()}),
+            "translation review_check cues={}",
+            cues.len()
+        );
         let outcome = audit_alignment(
             client,
             api_key.as_deref(),
@@ -99,14 +109,27 @@ pub fn translate(
             &mut translated,
             cfg,
             &mut pending_review,
+            video,
         )?;
-        println!(
+        subtrans_core::report_line!(
+            out,
+            "translation.review_check",
+            serde_json::json!({
+                "corrected": outcome.corrected,
+                "flagged": outcome.flagged,
+                "unresolved": outcome.unresolved
+            }),
             "translation review_check corrected={} flagged={} unresolved={}",
-            outcome.corrected, outcome.flagged, outcome.unresolved
+            outcome.corrected,
+            outcome.flagged,
+            outcome.unresolved
         );
         quality_log = outcome.quality_log;
     }
     if !pending_review.is_empty() {
+        for (index, review) in &pending_review {
+            report_blocked(video, *index, &blocked_reason(Some(review)));
+        }
         bail!(
             "review model did not resolve required cue indices {:?}; refusing to publish untranslated or questionable text",
             pending_review.keys().collect::<Vec<_>>()
@@ -242,7 +265,15 @@ fn translate_range_adaptive(
                     "primary_translation_failed",
                     Some(format!("{error:#}")),
                 );
-                eprintln!(
+                subtrans_core::report_line!(
+                    err,
+                    "translation.review_required",
+                    serde_json::json!({
+                        "index": cue.index,
+                        "attempts": cfg.max_retries.saturating_add(1),
+                        "reason": "primary_translation_failed",
+                        "error": format!("{error:#}")
+                    }),
                     "translation review_required index={} attempts={} reason=primary_translation_failed error={error:#}",
                     cue.index,
                     cfg.max_retries.saturating_add(1)
@@ -377,6 +408,24 @@ fn prompt_context_range(core: Range<usize>, context_cues: usize) -> Range<usize>
     core.start.saturating_sub(context_cues)..core.end
 }
 
+fn report_blocked(video: &str, index: u32, reason: &str) {
+    subtrans_core::report::emit(
+        subtrans_core::report::Stream::Stdout,
+        "",
+        "subtitle.blocked",
+        serde_json::json!({"video": video, "reason": reason, "index": index}),
+    );
+}
+
+fn blocked_reason(review: Option<&PendingReview>) -> String {
+    match review {
+        Some(review) if !review.reasons.is_empty() => {
+            review.reasons.iter().cloned().collect::<Vec<_>>().join(",")
+        }
+        _ => "review_failed".to_owned(),
+    }
+}
+
 fn audit_alignment(
     client: &dyn LlmClient,
     api_key: Option<&str>,
@@ -384,6 +433,7 @@ fn audit_alignment(
     translations: &mut BTreeMap<u32, String>,
     cfg: &TranslationConfig,
     pending_review: &mut BTreeMap<u32, PendingReview>,
+    video: &str,
 ) -> Result<AlignmentOutcome> {
     let model = cfg
         .alignment_model
@@ -484,7 +534,14 @@ fn audit_alignment(
                     .collect();
                 if !missing_required.is_empty() && task.positions.len() > 1 {
                     let midpoint = task.positions.len() / 2;
-                    eprintln!(
+                    subtrans_core::report_line!(
+                        err,
+                        "translation.review_split",
+                        serde_json::json!({
+                            "indices": task.positions,
+                            "reason": "missing_required_corrections",
+                            "missing": missing_required
+                        }),
                         "translation review_check split_indices={:?} reason=missing_required_corrections indices={missing_required:?}",
                         task.positions
                     );
@@ -497,6 +554,9 @@ fn audit_alignment(
                     continue;
                 }
                 if !missing_required.is_empty() {
+                    for index in &missing_required {
+                        report_blocked(video, *index, &blocked_reason(pending_review.get(index)));
+                    }
                     bail!(
                         "review model omitted mandatory correction for cue indices {missing_required:?}"
                     );
@@ -517,6 +577,7 @@ fn audit_alignment(
                         cfg.min_target_script_ratio,
                     );
                     if !concerns.is_empty() {
+                        report_blocked(video, index, &concerns.join(","));
                         bail!(
                             "review model returned a questionable final correction for cue {index}: {}",
                             concerns.join(",")
@@ -550,7 +611,10 @@ fn audit_alignment(
             }
             Err(_) if task.positions.len() > 1 => {
                 let midpoint = task.positions.len() / 2;
-                println!(
+                subtrans_core::report_line!(
+                    out,
+                    "translation.review_split",
+                    serde_json::json!({"indices": task.positions, "at": midpoint}),
                     "translation review_check split_indices={:?} at={midpoint}",
                     task.positions
                 );
@@ -564,6 +628,11 @@ fn audit_alignment(
             Err(error) => {
                 outcome.unresolved = outcome.unresolved.saturating_add(1);
                 if pending_review.contains_key(&cues[first].index) {
+                    report_blocked(
+                        video,
+                        cues[first].index,
+                        &blocked_reason(pending_review.get(&cues[first].index)),
+                    );
                     return Err(error).with_context(|| {
                         format!(
                             "review failed for mandatory cue {}; refusing to publish questionable text",
@@ -571,7 +640,14 @@ fn audit_alignment(
                         )
                     });
                 }
-                eprintln!(
+                subtrans_core::report_line!(
+                    err,
+                    "translation.review_unresolved",
+                    serde_json::json!({
+                        "index": cues[first].index,
+                        "action": "keep_current_translation",
+                        "error": format!("{error:#}")
+                    }),
                     "translation review_check unresolved_index={} action=keep_current_translation error={error:#}",
                     cues[first].index
                 );
@@ -600,7 +676,12 @@ fn request_audit_corrections(
     let envelope = match parse_consistency_envelope(&response) {
         Ok(envelope) => envelope,
         Err(first_error) => {
-            println!("translation {audit_name} response_reformat=true");
+            subtrans_core::report_line!(
+                out,
+                "translation.reformat",
+                serde_json::json!({"audit": audit_name, "response_reformat": true}),
+                "translation {audit_name} response_reformat=true"
+            );
             let repair_prompt = build_reformat_prompt(
                 audit_name,
                 expected.iter().next().copied().unwrap_or_default(),
@@ -689,6 +770,7 @@ fn request(
 mod tests {
     use super::*;
     use crate::config::TranslationConfig;
+    use anyhow::bail;
 
     fn cues(count: usize) -> Vec<Cue> {
         (1..=count)
@@ -753,5 +835,59 @@ target_language_code = "zh-CN"
         assert!(!prompt.contains("corrected target text"));
         assert!(!prompt.contains(r#""text":""#));
         assert!(prompt.contains(r#"{"corrections":[...]}"#));
+    }
+
+    #[test]
+    fn unresolved_review_emits_subtitle_blocked_only_on_the_json_channel() {
+        struct Fail;
+        impl LlmClient for Fail {
+            fn complete(
+                &self,
+                _request: &subtrans_core::remote::LlmCompletion<'_>,
+            ) -> Result<String> {
+                bail!("scripted failure")
+            }
+            fn probe(&self, _request: &subtrans_core::remote::LlmProbe<'_>) -> Result<String> {
+                Ok(String::new())
+            }
+        }
+
+        let mut cfg = config();
+        cfg.alignment_check = false;
+        cfg.consistency_check = false;
+        cfg.max_retries = 0;
+
+        let _human = subtrans_core::report::capture(false);
+        let error = translate(&cues(1), &cfg, &Fail, "Show/episode.mkv").unwrap_err();
+        assert!(error.to_string().contains("refusing to publish"));
+        let human_lines = subtrans_core::report::captured();
+        assert!(
+            human_lines
+                .iter()
+                .any(|(_, line)| line.contains("translation review_required index=1"))
+        );
+        assert!(
+            human_lines
+                .iter()
+                .all(|(_, line)| !line.contains("subtitle.blocked"))
+        );
+        drop(_human);
+
+        let _json = subtrans_core::report::capture(true);
+        let _ = translate(&cues(1), &cfg, &Fail, "Show/episode.mkv").unwrap_err();
+        let blocked = subtrans_core::report::captured()
+            .into_iter()
+            .filter_map(|(_, line)| serde_json::from_str::<serde_json::Value>(&line).ok())
+            .find(|value| value["event"] == "subtitle.blocked")
+            .expect("json channel emits subtitle.blocked");
+        assert_eq!(blocked["video"], "Show/episode.mkv");
+        assert!(
+            blocked["reason"]
+                .as_str()
+                .unwrap()
+                .split(',')
+                .any(|reason| reason == "primary_translation_failed")
+        );
+        assert_eq!(blocked["index"], 1);
     }
 }

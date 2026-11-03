@@ -1,6 +1,6 @@
 # 不变量
 
-本文件把 `ARCHITECTURE.md` 和现有测试已经钉住的安全行为列成检查清单。步骤 A–C 不改这些行为。步骤 C 把存储、状态、进程和 HTTP 客户端拆到 io 与 remote，工作流改走 trait。放宽任何一条，任务卡必须由 iDay 写成 `risk: invariant`。agent 不能自己改这个风险，也不能删掉对应断言。
+本文件把 `ARCHITECTURE.md` 和现有测试已经钉住的安全行为列成检查清单。步骤 A–D 不放宽这些行为。步骤 C 把存储、状态、进程和 HTTP 客户端拆到 io 与 remote。步骤 D 只增加 `--json` 通道，默认人读句子不变。放宽任何一条，任务卡必须由 iDay 写成 `risk: invariant`。agent 不能自己改这个风险，也不能删掉对应断言。
 
 来源：`ARCHITECTURE.md`、`docs/V2_SCOPE_DECISIONS.md`、`src/` 里的 schema 常量，以及 `evals/` 所引用的测试。
 
@@ -17,7 +17,7 @@
 - 存储路径是规范化相对路径。拒绝绝对路径、`..`、空路径段、`.` 段、反斜杠。空字符串和单独的 `.` 规范化成空相对路径。见 `evals/path/safety.jsonl`。
 - 本地符号链接不得逃出存储根。
 - 含 `[` 或 `]` 的远程目录必须进入目录后再列举，不能把该路径当作 `MLSD` 参数。无方括号路径保持原列举方式。见 `evals/path/listing.jsonl`。
-- 这条规则的实盘样本测试是 `#[ignore]`，T0/T1 不跑。步骤 C 才会去掉源码里的默认生产地址。在此之前不要运行它，也不要在新文件里写下生产主机。
+- 这条规则的实盘样本测试是 `#[ignore]`，T0/T1 不跑。主机和样本路径只来自环境变量，缺失时 T2 直接失败。不要在新文件里写下生产主机。
 
 ## 分类
 
@@ -70,6 +70,6 @@
 
 ## 执行面
 
-- 一个二进制 `subtrans`，子命令是 `metadata`、`subtitles`、`migrate`、`doctor`。
-- `migrate apply` 不进无条件定时任务。`deploy/` 里的 launchd 示例只调度字幕命令，步骤 A 不改它。
+- 一个二进制 `subtrans`，子命令是 `metadata`、`subtitles`、`migrate`、`doctor`。`--json` 只改变诊断的形状，不增加子命令，也不代替计划文件。
+- `migrate apply` 不进无条件定时任务。`deploy/` 里的 launchd 示例只调度字幕命令。批准执行仍然要提交精确 `plan_hash`。
 - worker 用显式命令和占位符，不经 shell，运行时不安装。

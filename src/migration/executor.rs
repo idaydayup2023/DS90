@@ -55,15 +55,23 @@ fn apply_plan_inner(
     if ready_count == 0 {
         bail!("migration plan contains no ready items to apply");
     }
-    println!(
+    let pending_skipped = if allow_pending {
+        plan.pending_count()
+    } else {
+        0
+    };
+    subtrans_core::report_line!(
+        out,
+        "migrate.apply",
+        serde_json::json!({
+            "plan_hash": plan.plan_hash,
+            "ready": ready_count,
+            "pending_skipped": pending_skipped
+        }),
         "migration apply plan_hash={} ready={} pending_skipped={}",
         plan.plan_hash,
         ready_count,
-        if allow_pending {
-            plan.pending_count()
-        } else {
-            0
-        }
+        pending_skipped
     );
     let source = open_storage(&config.source).context("failed to open source storage")?;
     let destination =
@@ -197,27 +205,53 @@ fn apply_item(
             .context("registered migration action disappeared")?;
         if action_state == "SOURCE_REMOVED" || action_state == "PROMOTED" {
             verify_destination(destination.storage, action)?;
-            println!(
+            let sha256 = expected_content_hash(&action.source_fingerprint)?;
+            subtrans_core::report_line!(
+                out,
+                "migrate.already_promoted",
+                serde_json::json!({
+                    "source": action.source,
+                    "destination": action.destination,
+                    "size": action.source_fingerprint.size_bytes,
+                    "sha256": sha256
+                }),
                 "migration already_promoted source={} destination={} size={} sha256={}",
                 action.source,
                 action.destination,
                 action.source_fingerprint.size_bytes,
-                expected_content_hash(&action.source_fingerprint)?
+                sha256
             );
             continue;
         }
-        println!(
+        let sha256 = expected_content_hash(&action.source_fingerprint)?;
+        subtrans_core::report_line!(
+            out,
+            "migrate.promoting",
+            serde_json::json!({
+                "source": action.source,
+                "destination": action.destination,
+                "size": action.source_fingerprint.size_bytes,
+                "sha256": sha256
+            }),
             "migration promoting source={} destination={} size={} sha256={}",
             action.source,
             action.destination,
             action.source_fingerprint.size_bytes,
-            expected_content_hash(&action.source_fingerprint)?
+            sha256
         );
         promote_action(source, destination, action)?;
         state.set_action_state(&job_id, index, "PLANNED", "PROMOTED")?;
-        println!(
+        subtrans_core::report_line!(
+            out,
+            "migrate.promoted",
+            serde_json::json!({
+                "source": action.source,
+                "destination": action.destination,
+                "verified": true
+            }),
             "migration promoted source={} destination={} verified=true",
-            action.source, action.destination
+            action.source,
+            action.destination
         );
     }
 
@@ -252,9 +286,17 @@ fn apply_item(
                 .remove(&action.source)
                 .with_context(|| format!("failed to remove verified source {}", action.source))?;
         }
-        println!(
+        subtrans_core::report_line!(
+            out,
+            "migrate.source_removed",
+            serde_json::json!({
+                "source": action.source,
+                "destination": action.destination,
+                "destination_verified": true
+            }),
             "migration source_removed source={} destination={} destination_verified=true",
-            action.source, action.destination
+            action.source,
+            action.destination
         );
         if action_state == "PROMOTED" {
             state.set_action_state(&job_id, index, "PROMOTED", "SOURCE_REMOVED")?;
@@ -275,7 +317,14 @@ fn apply_item(
         "COMMITTED",
         &json!({"source": item.source, "files": actions.len()}),
     )?;
-    println!(
+    subtrans_core::report_line!(
+        out,
+        "migrate.committed",
+        serde_json::json!({
+            "source": item.source,
+            "files": actions.len(),
+            "plan_hash": plan_hash
+        }),
         "migration committed source={} files={} plan_hash={}",
         item.source,
         actions.len(),
@@ -399,20 +448,33 @@ fn verify_source(storage: &dyn Storage, path: &str, expected: &SourceFingerprint
         if !storage.exists(path)? {
             bail!("planned source disappeared: {path}");
         }
-        eprintln!(
+        let reported_size = metadata
+            .as_ref()
+            .map(|value| value.size.to_string())
+            .as_deref()
+            .unwrap_or("unavailable")
+            .to_owned();
+        let reported_is_dir = metadata
+            .as_ref()
+            .map(|value| value.is_dir.to_string())
+            .as_deref()
+            .unwrap_or("unavailable")
+            .to_owned();
+        subtrans_core::report_line!(
+            err,
+            "migrate.metadata_unreliable",
+            serde_json::json!({
+                "path": path,
+                "expected_size": expected.size_bytes,
+                "reported_size": reported_size,
+                "reported_is_dir": reported_is_dir,
+                "verification": "sha256"
+            }),
             "migration metadata_unreliable path={} expected_size={} reported_size={} reported_is_dir={} verification=sha256",
             path,
             expected.size_bytes,
-            metadata
-                .as_ref()
-                .map(|value| value.size.to_string())
-                .as_deref()
-                .unwrap_or("unavailable"),
-            metadata
-                .as_ref()
-                .map(|value| value.is_dir.to_string())
-                .as_deref()
-                .unwrap_or("unavailable")
+            reported_size,
+            reported_is_dir
         );
     }
     let hash = storage.sha256(path)?;
@@ -431,20 +493,33 @@ fn verify_destination(storage: &dyn Storage, action: &FileAction) -> Result<()> 
         if !storage.exists(&action.destination)? {
             bail!("verified destination disappeared: {}", action.destination);
         }
-        eprintln!(
+        let reported_size = metadata
+            .as_ref()
+            .map(|value| value.size.to_string())
+            .as_deref()
+            .unwrap_or("unavailable")
+            .to_owned();
+        let reported_is_dir = metadata
+            .as_ref()
+            .map(|value| value.is_dir.to_string())
+            .as_deref()
+            .unwrap_or("unavailable")
+            .to_owned();
+        subtrans_core::report_line!(
+            err,
+            "migrate.metadata_unreliable",
+            serde_json::json!({
+                "path": action.destination,
+                "expected_size": action.source_fingerprint.size_bytes,
+                "reported_size": reported_size,
+                "reported_is_dir": reported_is_dir,
+                "verification": "sha256"
+            }),
             "migration metadata_unreliable path={} expected_size={} reported_size={} reported_is_dir={} verification=sha256",
             action.destination,
             action.source_fingerprint.size_bytes,
-            metadata
-                .as_ref()
-                .map(|value| value.size.to_string())
-                .as_deref()
-                .unwrap_or("unavailable"),
-            metadata
-                .as_ref()
-                .map(|value| value.is_dir.to_string())
-                .as_deref()
-                .unwrap_or("unavailable")
+            reported_size,
+            reported_is_dir
         );
     }
     if storage.sha256(&action.destination)? != expected_content_hash(&action.source_fingerprint)? {
