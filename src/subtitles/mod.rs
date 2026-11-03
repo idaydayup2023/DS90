@@ -370,11 +370,12 @@ fn process_video(
         let source_sha256 = sha256_bytes(&source.bytes);
         let cue_cache_key = cache_key(&source_sha256, &cfg.translation)?;
         if force {
-            state.delete_subtitle_checkpoint(&job_id)?;
+            state.delete_subtitle_checkpoint(&job_id, owner)?;
         }
         let mut checkpoint = load_checkpoint(
             state,
             &job_id,
+            owner,
             &video.path,
             &source_sha256,
             &cue_cache_key,
@@ -398,7 +399,12 @@ fn process_video(
             stage,
             &mut checkpoint,
             &mut |document| {
-                state.save_subtitle_checkpoint(&job_id, &serde_json::to_string(document)?)?;
+                state.renew(&job_id, owner, cfg.state.lease_seconds)?;
+                state.save_subtitle_checkpoint(
+                    &job_id,
+                    owner,
+                    &serde_json::to_string(document)?,
+                )?;
                 Ok(())
             },
         )?;
@@ -464,36 +470,44 @@ fn process_video(
                 .as_secs(),
         };
         validate_manifest_for_publish(&manifest)?;
-        // The manifest is the commit marker and is deliberately published last.
-        storage.upload_atomic(&paths.output, &mut Cursor::new(&output_bytes))?;
-        if storage.sha256(&paths.output)? != output_sha256 {
-            bail!("published subtitle hash mismatch");
-        }
-        storage.upload_atomic(
-            &paths.manifest,
-            &mut Cursor::new(serde_json::to_vec_pretty(&manifest)?),
-        )?;
-        // A few FTP servers briefly expose a renamed manifest or subtitle
-        // inconsistently across fresh MLST/listing connections. Retry only the
-        // read-after-publish check; every attempt still validates the complete
-        // manifest plus source and output hashes.
-        const READINESS_ATTEMPTS: usize = 6;
-        let mut published_ready = None;
-        for attempt in 0..READINESS_ATTEMPTS {
-            if let Some(artifact) = read_ready_artifact(storage, video)? {
-                published_ready = Some(artifact);
-                break;
+        // Renew immediately before any publish byte. A bot that lost the lease
+        // must not replace another bot's subtitle or manifest.
+        state.renew(&job_id, owner, cfg.state.lease_seconds)?;
+        if !ready_artifact_matches(storage, video, &acquisition_key, &manifest.cache_key)? {
+            // The manifest is the commit marker and is deliberately published last.
+            storage.upload_atomic(&paths.output, &mut Cursor::new(&output_bytes))?;
+            if storage.sha256(&paths.output)? != output_sha256 {
+                bail!("published subtitle hash mismatch");
             }
-            if attempt + 1 < READINESS_ATTEMPTS {
-                std::thread::sleep(Duration::from_millis(250_u64 << attempt));
+            state.renew(&job_id, owner, cfg.state.lease_seconds)?;
+            if !ready_artifact_matches(storage, video, &acquisition_key, &manifest.cache_key)? {
+                storage.upload_atomic(
+                    &paths.manifest,
+                    &mut Cursor::new(serde_json::to_vec_pretty(&manifest)?),
+                )?;
             }
+            // A few FTP servers briefly expose a renamed manifest or subtitle
+            // inconsistently across fresh MLST/listing connections. Retry only the
+            // read-after-publish check; every attempt still validates the complete
+            // manifest plus source and output hashes.
+            const READINESS_ATTEMPTS: usize = 6;
+            let mut published_ready = None;
+            for attempt in 0..READINESS_ATTEMPTS {
+                if let Some(artifact) = read_ready_artifact(storage, video)? {
+                    published_ready = Some(artifact);
+                    break;
+                }
+                if attempt + 1 < READINESS_ATTEMPTS {
+                    std::thread::sleep(Duration::from_millis(250_u64 << attempt));
+                }
+            }
+            published_ready.with_context(|| {
+                format!(
+                    "published subtitle artifact failed its final readiness check after {READINESS_ATTEMPTS} attempts"
+                )
+            })?;
         }
-        published_ready.with_context(|| {
-            format!(
-                "published subtitle artifact failed its final readiness check after {READINESS_ATTEMPTS} attempts"
-            )
-        })?;
-        state.delete_subtitle_checkpoint(&job_id)?;
+        state.delete_subtitle_checkpoint(&job_id, owner)?;
         state.transition(
             &job_id,
             "subtitle",
@@ -1450,9 +1464,23 @@ fn source_rank(path: &str, video_stem: &str) -> Option<(u32, &'static str)> {
     None
 }
 
+fn ready_artifact_matches(
+    storage: &dyn Storage,
+    video: &FileEntry,
+    acquisition_key: &str,
+    cache_key: &str,
+) -> Result<bool> {
+    Ok(
+        read_ready_artifact(storage, video)?.is_some_and(|existing| {
+            existing.acquisition_key == acquisition_key && existing.cache_key == cache_key
+        }),
+    )
+}
+
 fn load_checkpoint(
     state: &mut StateStore,
     job_id: &str,
+    owner: &str,
     video: &str,
     source_sha256: &str,
     cache_key: &str,
@@ -1469,7 +1497,7 @@ fn load_checkpoint(
                     "translation checkpoint does not match this video, source, or translation settings"
                 )
             } else {
-                state.delete_subtitle_checkpoint(job_id)?;
+                state.delete_subtitle_checkpoint(job_id, owner)?;
                 Ok(SubtitleCheckpoint::new(
                     video,
                     source_sha256.to_owned(),

@@ -4,3 +4,4 @@
 {"id":"stage.translate-resumes","source":"tests/rust_subtitle_stages.rs::translation_resumes_without_repeating_settled_cues","input":{"stage":"translate","settled_indices":[1]},"expect":{"repeated_settled_cue":false}}
 {"id":"stage.review-resumes","source":"tests/rust_subtitle_stages.rs::review_resumes_without_repeating_reviewed_cues","input":{"stage":"review","reviewed_indices":[1]},"expect":{"repeated_reviewed_cue":false}}
 {"id":"stage.checkpoint-has-no-secret","source":"tests/rust_subtitle_stages.rs::checkpoint_does_not_store_the_api_key","input":{"secret_env":"SUBTRANS_STAGE_TEST_TOKEN"},"expect":{"secret_in_checkpoint":false}}
+{"id":"stage.stale-reviewer-cannot-clobber","source":"tests/rust_subtitle_stages.rs::stale_reviewer_cannot_clobber_checkpoint_or_ready_artifact","input":{"stage":"review","lease":"expired-while-model-call"},"expect":{"stale_checkpoint_write":false,"stale_publish":false,"ready_artifact":"winner"}}

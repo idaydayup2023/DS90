@@ -185,6 +185,7 @@ pub fn translate(
     if stage != SubtitleStage::Review {
         for range in batch_ranges(cues, cfg.batch_size, cfg.max_batch_chars) {
             for subrange in unsettled_ranges(cues, range, checkpoint) {
+                persist(checkpoint)?;
                 translate_range_adaptive(
                     client,
                     api_key.as_deref(),
@@ -652,6 +653,7 @@ fn audit_alignment(
             cues[first].index,
             serde_json::to_string(&lines)?
         );
+        persist(checkpoint)?;
         let expected: BTreeSet<u32> = task
             .positions
             .iter()

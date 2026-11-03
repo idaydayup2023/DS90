@@ -391,12 +391,21 @@ impl StateStore {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
-    pub fn save_subtitle_checkpoint(&mut self, job_id: &str, payload_json: &str) -> Result<()> {
+    pub fn save_subtitle_checkpoint(
+        &mut self,
+        job_id: &str,
+        owner: &str,
+        payload_json: &str,
+    ) -> Result<()> {
         if job_id.trim().is_empty() {
             bail!("checkpoint job_id must not be empty");
         }
         let now = now_epoch_seconds()?;
-        self.conn.execute(
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_live_lease(&tx, job_id, owner, now)?;
+        tx.execute(
             r#"
             INSERT INTO subtitle_checkpoints(job_id, payload_json, updated_at)
             VALUES(?1, ?2, ?3)
@@ -406,12 +415,18 @@ impl StateStore {
             "#,
             params![job_id, payload_json, now],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
-    pub fn delete_subtitle_checkpoint(&mut self, job_id: &str) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM subtitle_checkpoints WHERE job_id=?1", [job_id])?;
+    pub fn delete_subtitle_checkpoint(&mut self, job_id: &str, owner: &str) -> Result<()> {
+        let now = now_epoch_seconds()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_live_lease(&tx, job_id, owner, now)?;
+        tx.execute("DELETE FROM subtitle_checkpoints WHERE job_id=?1", [job_id])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -423,6 +438,27 @@ impl StateStore {
         )?;
         Ok(count as u64)
     }
+}
+
+fn require_live_lease(
+    tx: &rusqlite::Transaction<'_>,
+    job_id: &str,
+    owner: &str,
+    now: i64,
+) -> Result<()> {
+    let held: Option<i64> = tx
+        .query_row(
+            "SELECT 1 FROM jobs WHERE job_id=?1 AND owner=?2 AND lease_until>=?3",
+            params![job_id, owner, now],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if held.is_none() {
+        bail!(
+            "checkpoint for {job_id} is leased by another owner or the lease for {owner} has ended"
+        );
+    }
+    Ok(())
 }
 
 fn append_event(tx: &rusqlite::Transaction<'_>, event: &EventRecord<'_>) -> Result<()> {
@@ -720,11 +756,32 @@ mod tests {
         );
         assert_eq!(1, store.schema_version().unwrap());
         store
-            .save_subtitle_checkpoint("legacy-job", r#"{"schema":1,"video":"legacy"}"#)
+            .claim(
+                "checkpoint-job",
+                "subtitle",
+                "owner",
+                60,
+                "READY",
+                &json!({}),
+            )
+            .unwrap();
+        let denied = store
+            .save_subtitle_checkpoint("legacy-job", "owner", r#"{"schema":1,"video":"legacy"}"#)
+            .unwrap_err();
+        assert!(
+            denied.to_string().contains("lease"),
+            "checkpoint write without a live lease should fail, got {denied:#}"
+        );
+        store
+            .save_subtitle_checkpoint(
+                "checkpoint-job",
+                "owner",
+                r#"{"schema":1,"video":"legacy"}"#,
+            )
             .unwrap();
         assert_eq!(
             Some(r#"{"schema":1,"video":"legacy"}"#.to_owned()),
-            store.subtitle_checkpoint("legacy-job").unwrap()
+            store.subtitle_checkpoint("checkpoint-job").unwrap()
         );
 
         let reopened = StateStore::open(&path).unwrap();
@@ -734,10 +791,61 @@ mod tests {
         );
         assert_eq!(
             vec![(
-                "legacy-job".to_owned(),
+                "checkpoint-job".to_owned(),
                 r#"{"schema":1,"video":"legacy"}"#.to_owned()
             )],
             reopened.subtitle_checkpoints().unwrap()
         );
+    }
+
+    #[test]
+    fn checkpoint_mutation_requires_the_live_owner() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("state.sqlite3");
+        let mut store = StateStore::open(&path).unwrap();
+        store
+            .claim("video", "subtitle", "bot-a", 60, "READY", &json!({}))
+            .unwrap();
+        store
+            .save_subtitle_checkpoint("video", "bot-a", r#"{"schema":1,"video":"a"}"#)
+            .unwrap();
+        let outsider = store
+            .save_subtitle_checkpoint("video", "bot-b", r#"{"schema":1,"video":"b"}"#)
+            .unwrap_err();
+        assert!(outsider.to_string().contains("lease"));
+        let outsider_delete = store
+            .delete_subtitle_checkpoint("video", "bot-b")
+            .unwrap_err();
+        assert!(outsider_delete.to_string().contains("lease"));
+
+        store
+            .conn
+            .execute("UPDATE jobs SET lease_until=0 WHERE job_id='video'", [])
+            .unwrap();
+        let expired = store
+            .save_subtitle_checkpoint("video", "bot-a", r#"{"schema":1,"video":"expired"}"#)
+            .unwrap_err();
+        assert!(expired.to_string().contains("lease"));
+        assert_eq!(
+            Some(r#"{"schema":1,"video":"a"}"#.to_owned()),
+            store.subtitle_checkpoint("video").unwrap()
+        );
+
+        store
+            .claim("video", "subtitle", "bot-b", 60, "READY", &json!({}))
+            .unwrap();
+        store
+            .save_subtitle_checkpoint("video", "bot-b", r#"{"schema":1,"video":"b"}"#)
+            .unwrap();
+        assert!(
+            store
+                .delete_subtitle_checkpoint("video", "bot-a")
+                .unwrap_err()
+                .to_string()
+                .contains("lease")
+        );
+        store.delete_subtitle_checkpoint("video", "bot-b").unwrap();
+        store.delete_subtitle_checkpoint("video", "bot-b").unwrap();
+        assert_eq!(None, store.subtitle_checkpoint("video").unwrap());
     }
 }

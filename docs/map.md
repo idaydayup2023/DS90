@@ -12,7 +12,7 @@ workspace 成员是根 crate `subtrans`（`Cargo.toml`，库 `src/lib.rs`，二�
 | 路径规则 | `crates/subtrans-core/src/path.rs` | 相对路径规范化。根 crate 再导出 `storage::validate_relative_path` | `evals/path/safety.jsonl` | `tests/rust_storage.rs` |
 | 方括号列举判断 | `crates/subtrans-core/src/listing.rs` | 含 `[]` 则目录内列举。无网络 | `evals/path/listing.jsonl` | `crates/subtrans-core/src/listing.rs` |
 | 存储 | `crates/subtrans-io/src/storage/` | 本地/FTP 与 `Storage`。根 crate 再导出并按配置打开 | `evals/path/`、`evals/scan/exclude-and-empty.jsonl` | `tests/rust_storage.rs`、`crates/subtrans-io` |
-| 状态 | `crates/subtrans-io/src/state.rs` | SQLite 租约、进度、事件。字幕检查点在表 `subtitle_checkpoints`，schema 1 | 见不变量；阶段断言在 `evals/srt-protocol/stages.jsonl` | `crates/subtrans-io/src/state.rs`、`tests/rust_subtitle_stages.rs` |
+| 状态 | `crates/subtrans-io/src/state.rs` | SQLite 租约、进度、事件。字幕检查点在表 `subtitle_checkpoints`，schema 1。写入和删除都要求调用方持有未过期租约 | 见不变量；阶段断言在 `evals/srt-protocol/stages.jsonl` | `crates/subtrans-io/src/state.rs`、`tests/rust_subtitle_stages.rs` |
 | 外部进程 | `crates/subtrans-io/src/process.rs` | ffmpeg、ffprobe、worker 进程 | 见不变量 | `crates/subtrans-io/src/process.rs` |
 | 密钥读取 | `crates/subtrans-io/src/secrets.rs` | 环境变量、launchd、钥匙串。值不进计划或日志 | 见不变量 | `src/config.rs` 内测试 |
 | 分类 | `crates/subtrans-core/src/classify.rs` | 规则分类。根 crate 再导出 `migration::classify_path` | `evals/classify/kinds.jsonl` | `tests/rust_migration_plan.rs` |
