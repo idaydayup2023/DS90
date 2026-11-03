@@ -1,6 +1,6 @@
 # 不变量
 
-本文件把 `ARCHITECTURE.md` 和现有测试已经钉住的安全行为列成检查清单。步骤 A 和步骤 B 不改这些行为。步骤 B 只把纯规则搬进 `subtrans-core`。放宽任何一条，任务卡必须由 iDay 写成 `risk: invariant`。agent 不能自己改这个风险，也不能删掉对应断言。
+本文件把 `ARCHITECTURE.md` 和现有测试已经钉住的安全行为列成检查清单。步骤 A–C 不改这些行为。步骤 C 把存储、状态、进程和 HTTP 客户端拆到 io 与 remote，工作流改走 trait。放宽任何一条，任务卡必须由 iDay 写成 `risk: invariant`。agent 不能自己改这个风险，也不能删掉对应断言。
 
 来源：`ARCHITECTURE.md`、`docs/V2_SCOPE_DECISIONS.md`、`src/` 里的 schema 常量，以及 `evals/` 所引用的测试。
 

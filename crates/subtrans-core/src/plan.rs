@@ -214,10 +214,17 @@ fn mark_destination_collisions(items: &mut [PlanItem]) {
 }
 
 fn temporary_plan_path(path: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let nonce = NONCE.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
     let mut file_name = path
         .file_name()
         .map(|value| value.to_os_string())
         .unwrap_or_else(|| "migration-plan.json".into());
-    file_name.push(format!(".tmp-{}", std::process::id()));
+    file_name.push(format!(".tmp-{nanos}-{nonce}"));
     path.with_file_name(file_name)
 }

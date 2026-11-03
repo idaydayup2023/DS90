@@ -1492,10 +1492,10 @@ dependencies = [
  "serde_json",
  "sha2",
  "subtrans-core",
- "suppaftp",
+ "subtrans-io",
+ "subtrans-remote",
  "tempfile",
  "toml",
- "walkdir",
 ]
 
 [[package]]
@@ -1508,6 +1508,32 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "subtrans-io"
+version = "3.3.1"
+dependencies = [
+ "anyhow",
+ "hex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtrans-core",
+ "suppaftp",
+ "tempfile",
+ "walkdir",
+]
+
+[[package]]
+name = "subtrans-remote"
+version = "3.3.1"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "serde_json",
+ "subtrans-core",
 ]
 
 [[package]]

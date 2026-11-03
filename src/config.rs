@@ -832,76 +832,8 @@ impl TranslationConfig {
 
 impl MetadataConfig {
     pub fn api_token(&self) -> Result<String> {
-        match env::var(&self.api_token_env) {
-            Ok(token) if !token.trim().is_empty() => return Ok(token),
-            Ok(_) => bail!(
-                "TMDB API read token environment variable {} is empty. {}",
-                self.api_token_env,
-                tmdb_token_setup_guidance(&self.api_token_env)
-            ),
-            Err(env::VarError::NotUnicode(_)) => bail!(
-                "TMDB API read token environment variable {} is not valid Unicode. {}",
-                self.api_token_env,
-                tmdb_token_setup_guidance(&self.api_token_env)
-            ),
-            Err(env::VarError::NotPresent) => {}
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            let output = std::process::Command::new("/bin/launchctl")
-                .args(["getenv", &self.api_token_env])
-                .output()
-                .context("failed to query the current macOS launchd environment for the TMDB API read token")?;
-            if output.status.success() {
-                let token = String::from_utf8(output.stdout).context(
-                    "TMDB API read token from the macOS launchd environment is not valid Unicode",
-                )?;
-                let token = token.trim_end_matches(['\r', '\n']).to_owned();
-                if !token.trim().is_empty() {
-                    return Ok(token);
-                }
-            }
-
-            let output = std::process::Command::new("/usr/bin/security")
-                .args([
-                    "find-generic-password",
-                    "-s",
-                    "subtrans.tmdb.read-token",
-                    "-w",
-                ])
-                .output()
-                .context("failed to query macOS Keychain for the TMDB API read token")?;
-            if output.status.success() {
-                let token = String::from_utf8(output.stdout)
-                    .context("TMDB API read token from macOS Keychain is not valid Unicode")?;
-                let token = token.trim_end_matches(['\r', '\n']).to_owned();
-                if !token.trim().is_empty() {
-                    return Ok(token);
-                }
-            }
-        }
-
-        bail!(
-            "missing TMDB API read token. {}",
-            tmdb_token_setup_guidance(&self.api_token_env)
-        )
+        subtrans_io::secrets::read_tmdb_read_token(&self.api_token_env)
     }
-}
-
-fn tmdb_token_setup_guidance(environment_name: &str) -> String {
-    let mut guidance = format!(
-        "Get an API Read Access Token at https://www.themoviedb.org/settings/api, then set it for this shell with `read -s \"{environment_name}?TMDB read token: \"; export {environment_name}; echo`"
-    );
-    if cfg!(target_os = "macos") {
-        guidance.push_str(
-            &format!(
-                "; to make it available to current-user launchd jobs without exposing it in shell history, run `read -s \"{environment_name}?TMDB read token: \"; launchctl setenv {environment_name} \"${environment_name}\"; export {environment_name}; echo`; for restart-safe fallback reuse that environment value with `security add-generic-password -U -a \"$USER\" -s \"subtrans.tmdb.read-token\" -w \"${environment_name}\"`"
-            ),
-        );
-    }
-    guidance.push_str("; verify with `subtrans doctor --config subtrans.toml`");
-    guidance
 }
 
 fn validate_metadata(metadata: &MetadataConfig) -> Result<()> {
@@ -1291,7 +1223,7 @@ filename_template = "{source_file}"
 
     #[test]
     fn missing_tmdb_token_guidance_is_actionable_and_secret_free() {
-        let guidance = tmdb_token_setup_guidance("SUBTRANS_TMDB_READ_TOKEN");
+        let guidance = subtrans_io::secrets::tmdb_token_setup_guidance("SUBTRANS_TMDB_READ_TOKEN");
         assert!(guidance.contains("https://www.themoviedb.org/settings/api"));
         assert!(guidance.contains("SUBTRANS_TMDB_READ_TOKEN"));
         assert!(guidance.contains("subtrans doctor"));

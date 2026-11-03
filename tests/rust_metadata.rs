@@ -2,9 +2,6 @@ mod support;
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::thread;
 
 use subtrans::config::{MetadataConfig, MetadataOverride, OverrideKind};
 use subtrans::metadata::{FetchMode, MetadataManifest};
@@ -24,14 +21,19 @@ fn tmdb_movie_artifacts_are_infuse_named_validated_and_cached() {
     let video = "nested/Supergirl.2026.2160p.WEB-DL.mkv";
     fs::write(source.join(video), b"video").unwrap();
 
-    let (base_url, server) = tmdb_server(4);
+    let metadata = support::FixtureMetadata::movie(JPEG.to_vec());
     let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.metadata = metadata_config(&base_url, video, "SUBTRANS_TEST_TMDB_TOKEN_MOVIE");
+    cfg.metadata = metadata_config(
+        "https://api.themoviedb.org/3",
+        video,
+        "SUBTRANS_TEST_TMDB_TOKEN_MOVIE",
+    );
     unsafe { std::env::set_var("SUBTRANS_TEST_TMDB_TOKEN_MOVIE", "secret-token") };
 
-    let summary = subtrans::metadata::run(&cfg, FetchMode::Default, false, None).unwrap();
+    let summary =
+        subtrans::metadata::run_with(&cfg, FetchMode::Default, false, None, Some(&metadata))
+            .unwrap();
     assert_eq!(summary.fetched, 1);
-    server.join().unwrap();
     let stem = "nested/Supergirl.2026.2160p.WEB-DL";
     assert_eq!(fs::read(source.join(format!("{stem}.jpg"))).unwrap(), JPEG);
     assert_eq!(
@@ -87,10 +89,10 @@ fn ambiguous_tmdb_match_blocks_translation_before_the_llm_is_called() {
         "1\n00:00:01,000 --> 00:00:02,000\nHello\n\n",
     )
     .unwrap();
-    let (base_url, server) = ambiguous_search_server();
+    let metadata = support::FixtureMetadata::ambiguous_search();
     let mut cfg = support::config(root.path(), &source, &destination);
     cfg.metadata = metadata_config(
-        &base_url,
+        "https://api.themoviedb.org/3",
         "unused.mkv",
         "SUBTRANS_TEST_TMDB_TOKEN_AMBIGUOUS",
     );
@@ -98,8 +100,8 @@ fn ambiguous_tmdb_match_blocks_translation_before_the_llm_is_called() {
     cfg.translation.base_url = "http://127.0.0.1:1".into();
     unsafe { std::env::set_var("SUBTRANS_TEST_TMDB_TOKEN_AMBIGUOUS", "secret-token") };
 
-    let error = subtrans::subtitles::run(&cfg, false, false, None).unwrap_err();
-    server.join().unwrap();
+    let error =
+        subtrans::subtitles::run_with(&cfg, false, false, None, None, Some(&metadata)).unwrap_err();
     let message = format!("{error:#}");
     assert!(message.contains("ambiguous"));
     assert!(message.contains("metadata prerequisite"));
@@ -118,13 +120,17 @@ fn supplement_preserves_existing_poster_while_force_replaces_it() {
     let stem = "Manual.Poster.2026.WEB-DL";
     fs::write(source.join(video), b"video").unwrap();
     fs::write(source.join(format!("{stem}.jpg")), b"manual-poster").unwrap();
-    let (base_url, server) = tmdb_server(4);
+    let metadata = support::FixtureMetadata::movie(JPEG.to_vec());
     let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.metadata = metadata_config(&base_url, video, "SUBTRANS_TEST_TMDB_TOKEN_SUPPLEMENT");
+    cfg.metadata = metadata_config(
+        "https://api.themoviedb.org/3",
+        video,
+        "SUBTRANS_TEST_TMDB_TOKEN_SUPPLEMENT",
+    );
     unsafe { std::env::set_var("SUBTRANS_TEST_TMDB_TOKEN_SUPPLEMENT", "secret-token") };
 
-    subtrans::metadata::run(&cfg, FetchMode::Supplement, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::metadata::run_with(&cfg, FetchMode::Supplement, false, None, Some(&metadata))
+        .unwrap();
     assert_eq!(
         fs::read(source.join(format!("{stem}.jpg"))).unwrap(),
         b"manual-poster"
@@ -134,21 +140,13 @@ fn supplement_preserves_existing_poster_while_force_replaces_it() {
     // Invalidating a managed file triggers a normal refresh, but the poster that
     // supplement mode marked as user-managed must still not be overwritten.
     fs::write(source.join(format!("{stem}.nfo")), b"damaged").unwrap();
-    let (base_url, server) = tmdb_server(4);
-    cfg.metadata.base_url = base_url.clone();
-    cfg.metadata.image_base_url = format!("{base_url}/images");
-    subtrans::metadata::run(&cfg, FetchMode::Default, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::metadata::run_with(&cfg, FetchMode::Default, false, None, Some(&metadata)).unwrap();
     assert_eq!(
         fs::read(source.join(format!("{stem}.jpg"))).unwrap(),
         b"manual-poster"
     );
 
-    let (base_url, server) = tmdb_server(4);
-    cfg.metadata.base_url = base_url.clone();
-    cfg.metadata.image_base_url = format!("{base_url}/images");
-    subtrans::metadata::run(&cfg, FetchMode::Force, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::metadata::run_with(&cfg, FetchMode::Force, false, None, Some(&metadata)).unwrap();
     assert_eq!(fs::read(source.join(format!("{stem}.jpg"))).unwrap(), JPEG);
     unsafe { std::env::remove_var("SUBTRANS_TEST_TMDB_TOKEN_SUPPLEMENT") };
 }
@@ -163,9 +161,13 @@ fn tmdb_tv_episode_writes_infuse_episode_artwork_and_nfo() {
     let video = "Show.Name.S01E02.2160p.WEB-DL.mkv";
     let stem = "Show.Name.S01E02.2160p.WEB-DL";
     fs::write(source.join(video), b"episode").unwrap();
-    let (base_url, server) = tv_server(6);
+    let metadata = support::FixtureMetadata::tv(JPEG.to_vec());
     let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.metadata = metadata_config(&base_url, video, "SUBTRANS_TEST_TMDB_TOKEN_TV");
+    cfg.metadata = metadata_config(
+        "https://api.themoviedb.org/3",
+        video,
+        "SUBTRANS_TEST_TMDB_TOKEN_TV",
+    );
     cfg.metadata.overrides.insert(
         video.into(),
         MetadataOverride {
@@ -177,8 +179,7 @@ fn tmdb_tv_episode_writes_infuse_episode_artwork_and_nfo() {
     );
     unsafe { std::env::set_var("SUBTRANS_TEST_TMDB_TOKEN_TV", "secret-token") };
 
-    subtrans::metadata::run(&cfg, FetchMode::Default, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::metadata::run_with(&cfg, FetchMode::Default, false, None, Some(&metadata)).unwrap();
     assert_eq!(fs::read(source.join(format!("{stem}.jpg"))).unwrap(), JPEG);
     let nfo = fs::read_to_string(source.join(format!("{stem}.nfo"))).unwrap();
     assert!(nfo.contains("<episodedetails>"));
@@ -221,103 +222,4 @@ fn metadata_config(base_url: &str, video: &str, token_env: &str) -> MetadataConf
             },
         )]),
     }
-}
-
-fn tmdb_server(request_count: usize) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let handle = thread::spawn(move || {
-        for stream in listener.incoming().take(request_count) {
-            respond(stream.unwrap());
-        }
-    });
-    (format!("http://{address}"), handle)
-}
-
-fn ambiguous_search_server() -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let handle = thread::spawn(move || {
-        let stream = listener.incoming().next().unwrap().unwrap();
-        respond_json(
-            stream,
-            r#"{"results":[{"id":1,"title":"Ambiguous Movie","release_date":"2026-01-01"},{"id":2,"title":"Ambiguous Movie","release_date":"2026-02-02"}]}"#,
-        );
-    });
-    (format!("http://{address}"), handle)
-}
-
-fn tv_server(request_count: usize) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let handle = thread::spawn(move || {
-        for stream in listener.incoming().take(request_count) {
-            let mut stream = stream.unwrap();
-            let mut request = [0u8; 4096];
-            let read = stream.read(&mut request).unwrap();
-            let request = String::from_utf8_lossy(&request[..read]);
-            let target = request.split_whitespace().nth(1).unwrap_or("/");
-            let (content_type, body): (&str, Vec<u8>) = if target.starts_with("/images/") {
-                ("image/jpeg", JPEG.to_vec())
-            } else if target.starts_with("/tv/99/season/1/episode/2") {
-                (
-                    "application/json",
-                    r#"{"id":990102,"name":"第二集","overview":"分集简介","air_date":"2026-01-02","runtime":50,"vote_average":8.2,"still_path":"/still.jpg"}"#
-                        .as_bytes()
-                        .to_vec(),
-                )
-            } else {
-                (
-                    "application/json",
-                    r#"{"id":99,"name":"示例剧","original_name":"Example Show","overview":"剧集简介","first_air_date":"2026-01-01","genres":[{"name":"Drama"}],"production_companies":[{"name":"Studio"}],"poster_path":"/show-poster.jpg","backdrop_path":"/show-backdrop.jpg"}"#
-                        .as_bytes()
-                        .to_vec(),
-                )
-            };
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            )
-            .unwrap();
-            stream.write_all(&body).unwrap();
-        }
-    });
-    (format!("http://{address}"), handle)
-}
-
-fn respond(mut stream: TcpStream) {
-    let mut request = [0u8; 4096];
-    let read = stream.read(&mut request).unwrap();
-    let request = String::from_utf8_lossy(&request[..read]);
-    let target = request.split_whitespace().nth(1).unwrap_or("/");
-    let (content_type, body): (&str, Vec<u8>) = if target.starts_with("/images/") {
-        ("image/jpeg", JPEG.to_vec())
-    } else {
-        (
-            "application/json",
-            r#"{"id":42,"title":"超级少女","original_title":"Supergirl","overview":"A hero.","tagline":"Hope","release_date":"2026-06-01","runtime":120,"vote_average":8.1,"genres":[{"name":"Action"}],"production_companies":[{"name":"Studio"}],"production_countries":[{"name":"USA"}],"credits":{"crew":[{"name":"Director","job":"Director"}],"cast":[{"name":"Actor","character":"Hero"}]},"imdb_id":"tt1234567","poster_path":"/poster.jpg","backdrop_path":"/backdrop.jpg"}"#
-                .as_bytes()
-                .to_vec(),
-        )
-    };
-    write!(
-        stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    )
-    .unwrap();
-    stream.write_all(&body).unwrap();
-}
-
-fn respond_json(mut stream: TcpStream, body: &str) {
-    let mut request = [0u8; 4096];
-    let _ = stream.read(&mut request).unwrap();
-    write!(
-        stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body.len(),
-        body
-    )
-    .unwrap();
 }

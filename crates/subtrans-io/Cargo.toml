@@ -1,0 +1,23 @@
+[package]
+name = "subtrans-io"
+version = "3.3.1"
+edition = "2024"
+rust-version = "1.89"
+description = "Storage, SQLite state, external processes, and secret reads for subtrans"
+license = "MIT"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+hex = "0.4"
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.11.0"
+subtrans-core = { path = "../subtrans-core" }
+suppaftp = "10.0.2"
+walkdir = "2.5.0"
+
+[dev-dependencies]
+suppaftp = "10.0.2"
+tempfile = "3.23"

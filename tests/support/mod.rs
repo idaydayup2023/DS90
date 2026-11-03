@@ -169,3 +169,124 @@ pub fn write_ready_artifact(source_root: &Path, video_path: &str) {
 fn hash(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
+
+use std::collections::VecDeque;
+use std::sync::Mutex;
+
+use anyhow::{Result, bail};
+use subtrans::remote::{LlmClient, LlmCompletion, LlmProbe, MetadataSource};
+
+pub enum LlmReply {
+    Text(String),
+    Failure,
+}
+
+pub struct ScriptedLlm {
+    replies: Mutex<VecDeque<LlmReply>>,
+}
+
+impl ScriptedLlm {
+    pub fn new(replies: Vec<LlmReply>) -> Self {
+        Self {
+            replies: Mutex::new(VecDeque::from(replies)),
+        }
+    }
+}
+
+pub fn translations(lines: &[(u32, &str)]) -> LlmReply {
+    LlmReply::Text(model_lines("translations", lines))
+}
+
+pub fn corrections(lines: &[(u32, &str)]) -> LlmReply {
+    LlmReply::Text(model_lines("corrections", lines))
+}
+
+pub fn malformed(body: &str) -> LlmReply {
+    LlmReply::Text(body.to_owned())
+}
+
+pub fn failure() -> LlmReply {
+    LlmReply::Failure
+}
+
+fn model_lines(field: &str, lines: &[(u32, &str)]) -> String {
+    let items: Vec<_> = lines
+        .iter()
+        .map(|(index, text)| serde_json::json!({"index": index, "text": text}))
+        .collect();
+    serde_json::json!({field: items}).to_string()
+}
+
+impl LlmClient for ScriptedLlm {
+    fn complete(&self, _request: &LlmCompletion<'_>) -> Result<String> {
+        match self.replies.lock().expect("scripted LLM lock").pop_front() {
+            Some(LlmReply::Text(text)) => Ok(text),
+            Some(LlmReply::Failure) => {
+                bail!("translation service rejected the scripted model call")
+            }
+            None => bail!("scripted LLM has no remaining replies"),
+        }
+    }
+
+    fn probe(&self, _request: &LlmProbe<'_>) -> Result<String> {
+        Ok(r#"{"models":[]}"#.to_owned())
+    }
+}
+
+pub enum FixtureKind {
+    Movie,
+    AmbiguousSearch,
+    Tv,
+}
+
+pub struct FixtureMetadata {
+    kind: FixtureKind,
+    image: Vec<u8>,
+}
+
+impl FixtureMetadata {
+    pub fn movie(image: Vec<u8>) -> Self {
+        Self {
+            kind: FixtureKind::Movie,
+            image,
+        }
+    }
+
+    pub fn ambiguous_search() -> Self {
+        Self {
+            kind: FixtureKind::AmbiguousSearch,
+            image: Vec::new(),
+        }
+    }
+
+    pub fn tv(image: Vec<u8>) -> Self {
+        Self {
+            kind: FixtureKind::Tv,
+            image,
+        }
+    }
+}
+
+impl MetadataSource for FixtureMetadata {
+    fn get_json(&self, endpoint: &str, _parameters: &[(&str, &str)]) -> Result<Vec<u8>> {
+        let body = match self.kind {
+            FixtureKind::Movie => {
+                r#"{"id":42,"title":"超级少女","original_title":"Supergirl","overview":"A hero.","tagline":"Hope","release_date":"2026-06-01","runtime":120,"vote_average":8.1,"genres":[{"name":"Action"}],"production_companies":[{"name":"Studio"}],"production_countries":[{"name":"USA"}],"credits":{"crew":[{"name":"Director","job":"Director"}],"cast":[{"name":"Actor","character":"Hero"}]},"imdb_id":"tt1234567","poster_path":"/poster.jpg","backdrop_path":"/backdrop.jpg"}"#
+            }
+            FixtureKind::AmbiguousSearch => {
+                r#"{"results":[{"id":1,"title":"Ambiguous Movie","release_date":"2026-01-01"},{"id":2,"title":"Ambiguous Movie","release_date":"2026-02-02"}]}"#
+            }
+            FixtureKind::Tv if endpoint.contains("/season/") => {
+                r#"{"id":990102,"name":"第二集","overview":"分集简介","air_date":"2026-01-02","runtime":50,"vote_average":8.2,"still_path":"/still.jpg"}"#
+            }
+            FixtureKind::Tv => {
+                r#"{"id":99,"name":"示例剧","original_name":"Example Show","overview":"剧集简介","first_air_date":"2026-01-01","genres":[{"name":"Drama"}],"production_companies":[{"name":"Studio"}],"poster_path":"/show-poster.jpg","backdrop_path":"/show-backdrop.jpg"}"#
+            }
+        };
+        Ok(body.as_bytes().to_vec())
+    }
+
+    fn get_image(&self, _path: &str) -> Result<Vec<u8>> {
+        Ok(self.image.clone())
+    }
+}

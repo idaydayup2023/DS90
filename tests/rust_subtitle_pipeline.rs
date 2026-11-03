@@ -1,13 +1,8 @@
 mod support;
 
 use std::fs;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::thread;
-use std::time::Duration;
-
 use subtrans::artifact::read_ready_artifact;
 use subtrans::migration::build_plan;
 use subtrans::storage::{LocalStorage, Storage};
@@ -40,13 +35,10 @@ fn translated_artifact_unlocks_migration_and_is_reused_without_llm() {
         "1\n00:00:01,000 --> 00:00:02,000\nHello\n\n2\n00:00:03,000 --> 00:00:04,000\nGoodbye\n\n",
     )
     .unwrap();
-    let (base_url, server) =
-        ollama_server(vec![Reply::Translations(vec![(1, "你好"), (2, "再见")])]);
-    let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.translation.base_url = base_url;
+    let llm = support::ScriptedLlm::new(vec![support::translations(&[(1, "你好"), (2, "再见")])]);
+    let cfg = support::config(root.path(), &source, &destination);
 
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
     let storage = LocalStorage::new(&source).unwrap();
     let entry = storage.metadata(video).unwrap().unwrap();
     assert!(read_ready_artifact(&storage, &entry).unwrap().is_some());
@@ -76,16 +68,14 @@ fn one_translation_failure_is_repaired_by_review_and_later_videos_publish() {
         )
         .unwrap();
     }
-    let (base_url, server) = ollama_server(vec![
-        Reply::Error(500),
-        Reply::Corrections(vec![(1, "你好")]),
-        Reply::Translations(vec![(1, "你好")]),
+    let llm = support::ScriptedLlm::new(vec![
+        support::failure(),
+        support::corrections(&[(1, "你好")]),
+        support::translations(&[(1, "你好")]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.translation.base_url = base_url;
     cfg.translation.max_retries = 0;
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
     assert!(
         source
             .join("A.Movie.2026.WEB-DL.ai.srt.subtrans.json")
@@ -124,15 +114,13 @@ fn untranslated_english_candidate_is_replaced_by_review_and_logged() {
     let srt = "1\n00:00:01,000 --> 00:00:02,000\nThis stayed English.\n\n";
     fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
     fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
-    let (base_url, server) = ollama_server(vec![
-        Reply::Translations(vec![(1, "This stayed English.")]),
-        Reply::Corrections(vec![(1, "这仍然是英文。")]),
+    let llm = support::ScriptedLlm::new(vec![
+        support::translations(&[(1, "This stayed English.")]),
+        support::corrections(&[(1, "这仍然是英文。")]),
     ]);
-    let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.translation.base_url = base_url;
+    let cfg = support::config(root.path(), &source, &destination);
 
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
 
     let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
     assert!(output.contains("这仍然是英文。\nThis stayed English."));
@@ -192,13 +180,10 @@ fn mismatched_external_srt_is_rejected_in_favor_of_embedded_english() {
         "1\n00:00:01,000 --> 00:00:02,000\nHello\n\n2\n00:00:03,000 --> 00:00:04,000\nGoodbye\n\n",
     )
     .unwrap();
-    let (base_url, server) =
-        ollama_server(vec![Reply::Translations(vec![(1, "你好"), (2, "再见")])]);
-    let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.translation.base_url = base_url;
+    let llm = support::ScriptedLlm::new(vec![support::translations(&[(1, "你好"), (2, "再见")])]);
+    let cfg = support::config(root.path(), &source, &destination);
 
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
 
     let storage = LocalStorage::new(&source).unwrap();
     let entry = storage.metadata(video).unwrap().unwrap();
@@ -236,13 +221,11 @@ fn external_english_is_trusted_when_video_has_no_embedded_english() {
     .unwrap();
     let ffprobe = root.path().join("fake-ffprobe");
     executable_script(&ffprobe, "#!/bin/sh\nprintf '{\"streams\":[]}'\n");
-    let (base_url, server) = ollama_server(vec![Reply::Translations(vec![(1, "你好")])]);
+    let llm = support::ScriptedLlm::new(vec![support::translations(&[(1, "你好")])]);
     let mut cfg = support::config(root.path(), &source, &destination);
     cfg.subtitles.ffprobe = ffprobe.to_string_lossy().into_owned();
-    cfg.translation.base_url = base_url;
 
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
 
     let storage = LocalStorage::new(&source).unwrap();
     let entry = storage.metadata(&video).unwrap().unwrap();
@@ -271,7 +254,7 @@ fn asr_is_used_when_external_and_embedded_english_are_both_absent() {
         &asr,
         "#!/bin/sh\noutput=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--output' ]; then output=$2; shift 2; else shift; fi\ndone\nprintf '1\\n00:00:01,000 --> 00:00:02,000\\nRecognized speech\\n\\n' > \"$output\"\n",
     );
-    let (base_url, server) = ollama_server(vec![Reply::Translations(vec![(1, "识别出的语音")])]);
+    let llm = support::ScriptedLlm::new(vec![support::translations(&[(1, "识别出的语音")])]);
     let mut cfg = support::config(root.path(), &source, &destination);
     cfg.subtitles.ffprobe = ffprobe.to_string_lossy().into_owned();
     cfg.subtitles.asr = Some(subtrans::config::ExternalWorkerConfig {
@@ -288,10 +271,8 @@ fn asr_is_used_when_external_and_embedded_english_are_both_absent() {
         enabled: true,
         version: "fake-asr-1".into(),
     });
-    cfg.translation.base_url = base_url;
 
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
 
     let storage = LocalStorage::new(&source).unwrap();
     let entry = storage.metadata(&video).unwrap().unwrap();
@@ -334,20 +315,18 @@ fn failed_large_translation_batch_is_split_and_retried_sequentially() {
     let srt = "1\n00:00:01,000 --> 00:00:02,000\nOne\n\n2\n00:00:03,000 --> 00:00:04,000\nTwo\n\n3\n00:00:05,000 --> 00:00:06,000\nThree\n\n4\n00:00:07,000 --> 00:00:08,000\nFour\n\n";
     fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
     fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
-    let (base_url, server) = ollama_server(vec![
-        Reply::Error(500),
-        Reply::Translations(vec![(1, "一"), (2, "二")]),
-        Reply::Translations(vec![(3, "三"), (4, "四")]),
+    let llm = support::ScriptedLlm::new(vec![
+        support::failure(),
+        support::translations(&[(1, "一"), (2, "二")]),
+        support::translations(&[(3, "三"), (4, "四")]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.translation.base_url = base_url;
     cfg.translation.batch_size = 4;
     cfg.translation.min_batch_size = 2;
     cfg.translation.context_cues = 1;
     cfg.translation.max_retries = 0;
 
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
 
     let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
     for text in ["一", "二", "三", "四"] {
@@ -367,19 +346,17 @@ fn malformed_model_json_is_split_immediately_instead_of_retried_unchanged() {
     let srt = "1\n00:00:01,000 --> 00:00:02,000\nOne\n\n2\n00:00:03,000 --> 00:00:04,000\nTwo\n\n3\n00:00:05,000 --> 00:00:06,000\nThree\n\n4\n00:00:07,000 --> 00:00:08,000\nFour\n\n";
     fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
     fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
-    let (base_url, server) = ollama_server(vec![
-        Reply::Malformed(r#"{"translations":[{"index":1,"unexpected_text":"坏结构"}]}"#),
-        Reply::Translations(vec![(1, "一"), (2, "二")]),
-        Reply::Translations(vec![(3, "三"), (4, "四")]),
+    let llm = support::ScriptedLlm::new(vec![
+        support::malformed(r#"{"translations":[{"index":1,"unexpected_text":"坏结构"}]}"#),
+        support::translations(&[(1, "一"), (2, "二")]),
+        support::translations(&[(3, "三"), (4, "四")]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.translation.base_url = base_url;
     cfg.translation.batch_size = 4;
     cfg.translation.min_batch_size = 1;
     cfg.translation.max_retries = 2;
 
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
 
     let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
     for text in ["一", "二", "三", "四"] {
@@ -399,24 +376,22 @@ fn repeatedly_malformed_single_cue_is_repaired_once_by_review_model() {
     let srt = "1\n00:00:01,000 --> 00:00:02,000\nKeep me safe\n\n2\n00:00:03,000 --> 00:00:04,000\nTranslate me\n\n";
     fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
     fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
-    let (base_url, server) = ollama_server(vec![
+    let llm = support::ScriptedLlm::new(vec![
         // The malformed two-cue response is split immediately. Cue 1 then
         // fails all three strict singleton attempts and enters final review.
-        Reply::Malformed("not-json"),
-        Reply::Malformed("still-not-json"),
-        Reply::Malformed("truncated"),
-        Reply::Malformed("duplicate-index"),
-        Reply::Translations(vec![(2, "翻译我")]),
-        Reply::Corrections(vec![(1, "请小心")]),
+        support::malformed("not-json"),
+        support::malformed("still-not-json"),
+        support::malformed("truncated"),
+        support::malformed("duplicate-index"),
+        support::translations(&[(2, "翻译我")]),
+        support::corrections(&[(1, "请小心")]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.translation.base_url = base_url;
     cfg.translation.batch_size = 2;
     cfg.translation.min_batch_size = 1;
     cfg.translation.max_retries = 2;
 
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
 
     let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
     let cues = subtrans::subtitles::parse_srt(&output).unwrap();
@@ -445,23 +420,17 @@ fn omitted_repeated_cue_is_repaired_without_retranslating_valid_items() {
     let srt = "1\n00:00:01,000 --> 00:00:02,000\nJace.\n\n2\n00:00:03,000 --> 00:00:04,000\nJace.\n\n3\n00:00:05,000 --> 00:00:06,000\nWhat have you done?\n\n4\n00:00:07,000 --> 00:00:08,000\nWhat have you done?\n\n5\n00:00:09,000 --> 00:00:10,000\nAnswer me.\n\n";
     fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
     fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
-    let (base_url, server) = ollama_server(vec![
-        Reply::Translations(vec![
-            (1, "杰斯。"),
-            (3, "你做了什么？"),
-            (4, "你做了什么？"),
-        ]),
-        Reply::Translations(vec![(2, "杰斯。")]),
-        Reply::Translations(vec![(5, "回答我。")]),
+    let llm = support::ScriptedLlm::new(vec![
+        support::translations(&[(1, "杰斯。"), (3, "你做了什么？"), (4, "你做了什么？")]),
+        support::translations(&[(2, "杰斯。")]),
+        support::translations(&[(5, "回答我。")]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.translation.base_url = base_url;
     cfg.translation.batch_size = 4;
     cfg.translation.min_batch_size = 2;
     cfg.translation.context_cues = 1;
 
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
 
     let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
     assert_eq!(output.matches("杰斯。").count(), 2);
@@ -481,16 +450,14 @@ fn complete_subtitle_consistency_review_accepts_auxiliary_fields() {
     let srt = "1\n00:00:01,000 --> 00:00:02,000\nHello John\n\n2\n00:00:03,000 --> 00:00:04,000\nGoodbye John\n\n";
     fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
     fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
-    let (base_url, server) = ollama_server(vec![
-        Reply::Translations(vec![(1, "你好，约翰"), (2, "再见，强")]),
-        Reply::Malformed(r#"{"corrections":[{"index":2,"text":"再见，约翰","confidence":0.9}]}"#),
+    let llm = support::ScriptedLlm::new(vec![
+        support::translations(&[(1, "你好，约翰"), (2, "再见，强")]),
+        support::malformed(r#"{"corrections":[{"index":2,"text":"再见，约翰","confidence":0.9}]}"#),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.translation.base_url = base_url;
     cfg.translation.consistency_check = true;
 
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
 
     let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
     assert!(output.contains("你好，约翰"));
@@ -510,19 +477,17 @@ fn cue_alignment_review_repairs_neighbor_shift_without_changing_source_timing() 
     let srt = "1\n00:00:01,000 --> 00:00:02,000\nSmash it to pieces.\n\n2\n00:00:03,000 --> 00:00:04,000\nLeave now.\n\n3\n00:00:05,000 --> 00:00:06,000\nAnswer me.\n\n";
     fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
     fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
-    let (base_url, server) = ollama_server(vec![
-        Reply::Translations(vec![(1, "现在离开。"), (2, "回答我。"), (3, "把它砸碎。")]),
-        Reply::Corrections(vec![(1, "把它砸碎。"), (2, "现在离开。"), (3, "回答我。")]),
+    let llm = support::ScriptedLlm::new(vec![
+        support::translations(&[(1, "现在离开。"), (2, "回答我。"), (3, "把它砸碎。")]),
+        support::corrections(&[(1, "把它砸碎。"), (2, "现在离开。"), (3, "回答我。")]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.translation.base_url = base_url;
     cfg.translation.alignment_check = true;
     cfg.translation.alignment_batch_size = 3;
     cfg.translation.alignment_context_cues = 1;
     cfg.translation.alignment_max_corrections = 3;
 
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
 
     let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
     let cues = subtrans::subtitles::parse_srt(&output).unwrap();
@@ -545,27 +510,20 @@ fn malformed_alignment_batch_is_split_until_exact_indices_are_auditable() {
     let srt = "1\n00:00:01,000 --> 00:00:02,000\nFirst.\n\n2\n00:00:03,000 --> 00:00:04,000\nSecond.\n\n3\n00:00:05,000 --> 00:00:06,000\nThird.\n\n4\n00:00:07,000 --> 00:00:08,000\nFourth.\n\n";
     fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
     fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
-    let (base_url, server) = ollama_server(vec![
-        Reply::Translations(vec![
-            (1, "第二。"),
-            (2, "第三。"),
-            (3, "第四。"),
-            (4, "第一。"),
-        ]),
-        Reply::Malformed("not-json"),
-        Reply::Malformed("still-not-json"),
-        Reply::Corrections(vec![(1, "第一。"), (2, "第二。")]),
-        Reply::Corrections(vec![(3, "第三。"), (4, "第四。")]),
+    let llm = support::ScriptedLlm::new(vec![
+        support::translations(&[(1, "第二。"), (2, "第三。"), (3, "第四。"), (4, "第一。")]),
+        support::malformed("not-json"),
+        support::malformed("still-not-json"),
+        support::corrections(&[(1, "第一。"), (2, "第二。")]),
+        support::corrections(&[(3, "第三。"), (4, "第四。")]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.translation.base_url = base_url;
     cfg.translation.alignment_check = true;
     cfg.translation.alignment_batch_size = 4;
     cfg.translation.alignment_context_cues = 1;
     cfg.translation.alignment_max_corrections = 4;
 
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
 
     let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
     assert!(output.contains("第一。\nFirst."));
@@ -587,19 +545,17 @@ fn review_model_correction_is_final_without_iteration_and_is_logged() {
         "1\n00:00:01,000 --> 00:00:02,000\nDuck!\n\n2\n00:00:03,000 --> 00:00:04,000\nRun now.\n\n";
     fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
     fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
-    let (base_url, server) = ollama_server(vec![
-        Reply::Translations(vec![(1, "鸭子！"), (2, "快跑。")]),
-        Reply::Corrections(vec![(1, "低头！")]),
+    let llm = support::ScriptedLlm::new(vec![
+        support::translations(&[(1, "鸭子！"), (2, "快跑。")]),
+        support::corrections(&[(1, "低头！")]),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.translation.base_url = base_url;
     cfg.translation.alignment_check = true;
     cfg.translation.alignment_batch_size = 2;
     cfg.translation.alignment_context_cues = 1;
     cfg.translation.alignment_max_corrections = 2;
 
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
 
     let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
     let cues = subtrans::subtitles::parse_srt(&output).unwrap();
@@ -632,109 +588,19 @@ fn undecidable_single_cue_audit_error_does_not_block_publication() {
     let srt = "1\n00:00:01,000 --> 00:00:02,000\nFine.\n\n";
     fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
     fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
-    let (base_url, server) = ollama_server(vec![
-        Reply::Translations(vec![(1, "好吧。")]),
-        Reply::Malformed("uncertain"),
-        Reply::Malformed("still-uncertain"),
+    let llm = support::ScriptedLlm::new(vec![
+        support::translations(&[(1, "好吧。")]),
+        support::malformed("uncertain"),
+        support::malformed("still-uncertain"),
     ]);
     let mut cfg = support::config(root.path(), &source, &destination);
-    cfg.translation.base_url = base_url;
     cfg.translation.alignment_check = true;
     cfg.translation.alignment_batch_size = 1;
     cfg.translation.alignment_context_cues = 0;
     cfg.translation.alignment_max_corrections = 1;
 
-    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
-    server.join().unwrap();
+    subtrans::subtitles::run_with(&cfg, false, false, None, Some(&llm), None).unwrap();
 
     let output = fs::read_to_string(source.join(format!("{stem}.ai.srt"))).unwrap();
     assert!(output.contains("好吧。\nFine."));
-}
-
-enum Reply<'a> {
-    Translations(Vec<(u32, &'a str)>),
-    Corrections(Vec<(u32, &'a str)>),
-    Malformed(&'a str),
-    Error(u16),
-}
-
-fn ollama_server(replies: Vec<Reply<'static>>) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let handle = thread::spawn(move || {
-        for reply in replies {
-            let (mut stream, _) = listener.accept().unwrap();
-            read_request(&mut stream);
-            match reply {
-                Reply::Translations(lines) => {
-                    let generated = serde_json::json!({
-                        "translations": lines
-                            .into_iter()
-                            .map(|(index, text)| serde_json::json!({"index": index, "text": text}))
-                            .collect::<Vec<_>>()
-                    });
-                    let body = serde_json::json!({"response": generated.to_string()}).to_string();
-                    write_response(&mut stream, 200, &body);
-                }
-                Reply::Corrections(lines) => {
-                    let generated = serde_json::json!({
-                        "corrections": lines
-                            .into_iter()
-                            .map(|(index, text)| serde_json::json!({"index": index, "text": text}))
-                            .collect::<Vec<_>>()
-                    });
-                    let body = serde_json::json!({"response": generated.to_string()}).to_string();
-                    write_response(&mut stream, 200, &body);
-                }
-                Reply::Malformed(generated) => {
-                    let body = serde_json::json!({"response": generated}).to_string();
-                    write_response(&mut stream, 200, &body);
-                }
-                Reply::Error(status) => {
-                    write_response(&mut stream, status, "{\"error\":\"injected\"}")
-                }
-            }
-        }
-    });
-    (format!("http://{address}"), handle)
-}
-
-fn read_request(stream: &mut TcpStream) {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    let mut bytes = Vec::new();
-    let mut buffer = [0_u8; 4096];
-    loop {
-        let count = stream.read(&mut buffer).unwrap_or(0);
-        if count == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&buffer[..count]);
-        if let Some(header_end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
-            let headers = String::from_utf8_lossy(&bytes[..header_end]);
-            let content_length = headers
-                .lines()
-                .find_map(|line| {
-                    line.strip_prefix("content-length: ")
-                        .or_else(|| line.strip_prefix("Content-Length: "))
-                })
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(0);
-            if bytes.len() >= header_end + 4 + content_length {
-                break;
-            }
-        }
-    }
-}
-
-fn write_response(stream: &mut TcpStream, status: u16, body: &str) {
-    let reason = if status == 200 { "OK" } else { "Error" };
-    write!(
-        stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    )
-    .unwrap();
-    stream.flush().unwrap();
 }

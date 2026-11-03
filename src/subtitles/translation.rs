@@ -1,12 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::io::Read;
 use std::ops::Range;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use reqwest::blocking::Client;
 use serde::Serialize;
-use serde_json::{Value, json};
+use subtrans_core::remote::{LlmApi, LlmClient, LlmCompletion};
 
 use crate::artifact::TranslationQualityRecord;
 use crate::config::{LlmProvider, TranslationConfig};
@@ -62,20 +60,21 @@ struct PendingReview {
     primary_error: Option<String>,
 }
 
-pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<TranslationOutcome> {
+pub fn translate(
+    cues: &[Cue],
+    cfg: &TranslationConfig,
+    client: &dyn LlmClient,
+) -> Result<TranslationOutcome> {
     if cues.is_empty() || cfg.batch_size == 0 || cfg.max_batch_chars == 0 {
         bail!("source cues and translation batch limits must be non-empty");
     }
-    let client = Client::builder()
-        .timeout(Duration::from_secs(cfg.timeout_seconds))
-        .build()?;
     let api_key = cfg.api_key()?;
     let mut translated = BTreeMap::new();
     let mut pending_review = BTreeMap::new();
 
     for range in batch_ranges(cues, cfg.batch_size, cfg.max_batch_chars) {
         translate_range_adaptive(
-            &client,
+            client,
             api_key.as_deref(),
             cues,
             range,
@@ -94,7 +93,7 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<TranslationOut
     if cfg.alignment_check || cfg.consistency_check || !pending_review.is_empty() {
         println!("translation review_check cues={}", cues.len());
         let outcome = audit_alignment(
-            &client,
+            client,
             api_key.as_deref(),
             cues,
             &mut translated,
@@ -150,7 +149,7 @@ fn batch_ranges(cues: &[Cue], max_count: usize, max_chars: usize) -> Vec<Range<u
 }
 
 fn translate_range_adaptive(
-    client: &Client,
+    client: &dyn LlmClient,
     api_key: Option<&str>,
     cues: &[Cue],
     initial: Range<usize>,
@@ -379,7 +378,7 @@ fn prompt_context_range(core: Range<usize>, context_cues: usize) -> Range<usize>
 }
 
 fn audit_alignment(
-    client: &Client,
+    client: &dyn LlmClient,
     api_key: Option<&str>,
     cues: &[Cue],
     translations: &mut BTreeMap<u32, String>,
@@ -584,7 +583,7 @@ fn audit_alignment(
 
 #[allow(clippy::too_many_arguments)]
 fn request_audit_corrections(
-    client: &Client,
+    client: &dyn LlmClient,
     cfg: &TranslationConfig,
     api_key: Option<&str>,
     model: &str,
@@ -665,93 +664,25 @@ fn build_reformat_prompt(
 }
 
 fn request(
-    client: &Client,
+    client: &dyn LlmClient,
     cfg: &TranslationConfig,
     api_key: Option<&str>,
     model: &str,
     prompt: &str,
     max_output_tokens: u32,
 ) -> Result<String> {
-    let (url, body, response_path): (String, Value, &[&str]) = match &cfg.provider {
-        LlmProvider::Ollama => (
-            endpoint(&cfg.base_url, "api/generate"),
-            json!({
-                "model": model,
-                "prompt": prompt,
-                "stream": false,
-                "format": "json",
-                "think": false,
-                "keep_alive": "10m",
-                "options": {
-                    "temperature": 0.0,
-                    "num_predict": max_output_tokens
-                }
-            }),
-            &["response"],
-        ),
-        LlmProvider::OpenaiCompatible => (
-            endpoint(&cfg.base_url, "chat/completions"),
-            json!({
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.0,
-                "max_tokens": max_output_tokens,
-                "response_format": {"type": "json_object"}
-            }),
-            &["choices", "0", "message", "content"],
-        ),
-    };
-    let mut request = client.post(url).json(&body);
-    if let Some(key) = api_key {
-        request = request.bearer_auth(key);
-    }
-    let response = request
-        .send()
-        .with_context(|| {
-            format!(
-                "translation model request failed for model {model:?} at {}. Start/verify the configured service and model, check network/API-key settings, then run `subtrans doctor --config <CONFIG>`",
-                cfg.base_url
-            )
-        })?
-        .error_for_status()
-        .with_context(|| {
-            format!(
-                "translation service rejected model {model:?}. Verify the model is installed/enabled (for Ollama: `ollama pull {model}` and `ollama list`), then run `subtrans doctor --config <CONFIG>`"
-            )
-        })?;
-    let mut bytes = Vec::new();
-    response
-        .take(cfg.max_response_bytes as u64 + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > cfg.max_response_bytes {
-        bail!("translation service response exceeds configured size limit");
-    }
-    let response: Value =
-        serde_json::from_slice(&bytes).context("translation service returned invalid JSON")?;
-    value_at(&response, response_path)
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .context("translation service response is missing generated content")
-}
-
-fn endpoint(base: &str, suffix: &str) -> String {
-    let trimmed = base.trim_end_matches('/');
-    if trimmed.ends_with(suffix) {
-        trimmed.to_owned()
-    } else {
-        format!("{trimmed}/{suffix}")
-    }
-}
-
-fn value_at<'a>(mut value: &'a Value, path: &[&str]) -> Option<&'a Value> {
-    for component in path {
-        value = if let Ok(index) = component.parse::<usize>() {
-            value.as_array()?.get(index)?
-        } else {
-            value.get(*component)?
-        };
-    }
-    Some(value)
+    client.complete(&LlmCompletion {
+        api: match cfg.provider {
+            LlmProvider::Ollama => LlmApi::Ollama,
+            LlmProvider::OpenaiCompatible => LlmApi::OpenaiCompatible,
+        },
+        base_url: &cfg.base_url,
+        model,
+        api_key,
+        prompt,
+        max_output_tokens,
+        max_response_bytes: cfg.max_response_bytes,
+    })
 }
 
 #[cfg(test)]

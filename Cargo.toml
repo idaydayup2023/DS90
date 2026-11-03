@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/subtrans-core"]
+members = [".", "crates/subtrans-core", "crates/subtrans-io", "crates/subtrans-remote"]
 
 [package]
 name = "subtrans"
@@ -16,20 +16,22 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0"
 subtrans-core = { path = "crates/subtrans-core" }
+subtrans-io = { path = "crates/subtrans-io" }
+subtrans-remote = { path = "crates/subtrans-remote" }
 clap = { version = "4.6.5", features = ["derive"] }
 hex = "0.4"
 fs2 = "0.4"
 libc = "0.2"
 regex = "1.12"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "query", "rustls"] }
-rusqlite = { version = "0.37.0", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.11.0"
-suppaftp = "10.0.2"
 tempfile = "3.23"
 toml = "1.1.4"
-walkdir = "2.5.0"
+
+[dev-dependencies]
+rusqlite = { version = "0.37.0", features = ["bundled"] }
 
 [profile.release]
 lto = true

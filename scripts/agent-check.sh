@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# version4 check after step B. Workspace members: subtrans and subtrans-core.
+# version4 check after step C.
 # T0: scripts/agent-check.sh
 # T1: scripts/agent-check.sh --workspace
-# Both run fmt, clippy, and locked tests for the whole workspace, so unit
-# tests that moved into subtrans-core still run. --workspace is the CI entry.
-# #[ignore] tests are not run.
-# --live is refused: this script does not contact a NAS or run tools/.
+# Both run fmt, clippy, and locked tests for the whole workspace.
+# #[ignore] tests are not run by T0 or T1.
+# T2: scripts/agent-check.sh --live
+# T2 requires SUBTRANS_LIVE=1 and FTP host, port, account, and sample
+# paths from the environment. Missing variables fail closed. There is no
+# built-in host or sample library. T2 does not run tools/.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,8 +22,31 @@ case "${1:-}" in
     tier="t1"
     ;;
   --live)
-    printf '%s\n' '{"ok":false,"tier":"t2","failed":1,"reason":"live tier is not enabled in step A; this script does not contact a NAS"}' >&2
-    exit 2
+    tier="t2"
+    missing=()
+    if [[ "${SUBTRANS_LIVE:-}" != "1" ]]; then
+      missing+=("SUBTRANS_LIVE=1")
+    fi
+    for name in SUBTRANS_FTP_HOST SUBTRANS_FTP_PORT SUBTRANS_FTP_USERNAME SUBTRANS_FTP_PASSWORD SUBTRANS_FTP_SAMPLES; do
+      if [[ -z "${!name:-}" ]]; then
+        missing+=("$name")
+      fi
+    done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+      printf '%s\n' "{\"ok\":false,\"tier\":\"t2\",\"failed\":1,\"reason\":\"missing ${missing[*]}; refusing to contact a default host or sample library\"}" >&2
+      exit 2
+    fi
+    on_err() {
+      local status=$?
+      trap - ERR
+      printf '%s\n' "{\"ok\":false,\"tier\":\"${tier}\",\"failed\":1,\"exit\":${status}}" >&2
+      exit "$status"
+    }
+    trap on_err ERR
+    cargo test --locked --workspace --test ftp_bracket_realrun -- --ignored --nocapture
+    trap - ERR
+    printf '%s\n' "{\"ok\":true,\"tier\":\"t2\",\"failed\":0}"
+    exit 0
     ;;
   *)
     printf 'usage: scripts/agent-check.sh [--workspace|--live]\n' >&2

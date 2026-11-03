@@ -7,7 +7,7 @@ description = "Path, classification, SRT, quality, protocol, and migration-plan 
 license = "MIT"
 publish = false
 
-# Step B boundary: do not add reqwest or suppaftp here.
+# No reqwest, suppaftp, rusqlite, or std::process. Those belong to io and remote.
 
 [dependencies]
 anyhow = "1.0"

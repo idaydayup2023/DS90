@@ -6,11 +6,11 @@
 
 ## 当前阶段
 
-步骤 A 和步骤 B 已落地。步骤 B 抽出 `subtrans-core`，只搬家：路径规范化、分类、SRT、质量门、协议解析、计划数据结构。产品行为与 `origin/version3` @ `1f19015` 相同。步骤 C–G 没有开始。
+步骤 A–C 已落地。步骤 B 抽出 `subtrans-core`。步骤 C 抽出 `subtrans-io` 和 `subtrans-remote`，工作流通过 `LlmClient` 与 `MetadataSource` 调用它们。产品行为与 `origin/version3` @ `1f19015` 相同。步骤 D–G 没有开始。
 
 在 iDay 点名下一步之前：
 
-- 不再拆 crate。不建 `subtrans-io`、`subtrans-remote`、`subtrans-app`、`subtrans-cli`、`subtrans-evals`。不改已有行为。`subtrans-core` 的 `Cargo.toml` 不加 reqwest 或 suppaftp。
+- 不再拆 crate。不建 `subtrans-app`、`subtrans-cli`、`subtrans-evals`。不改已有行为。`subtrans-core` 不加 reqwest、suppaftp、rusqlite，也不调用 `std::process`。
 - 不删除、不移动 `tools/`。步骤 E 才把 DownloadStation、SSH 和外网站点脚本迁出本仓库，不放进 `ops/`。
 - 不改 `deploy/`，不改 `.github/workflows/release.yml`。`v3.*` 发布和生产 launchd 仍走 `version3`。
 - 不把本分支合并进 `version3`。
@@ -33,7 +33,7 @@
 
 `evals/` 是从现有测试抄出的断言，步骤 A 没有评测运行器。真正执行这些断言的是 `cargo test`。不要改 `evals/` 的 `expect` 来迁就一次失败。
 
-一个 `.rs` 文件超过 400 行时，拆文件属于以后的 `move-only` 任务。步骤 B 只搬了上面列出的纯规则。
+一个 `.rs` 文件超过 400 行时，拆文件属于以后的 `move-only` 任务。步骤 C 只搬了存储、状态、外部进程、密钥读取和 HTTP 客户端。
 
 ## 验证
 
@@ -49,12 +49,12 @@ CI 在 `version4` 的 push 和以 `version4` 为基线的 pull request 上跑 T1
 scripts/agent-check.sh --workspace
 ```
 
-workspace 有两个成员：根 crate `subtrans` 和 `subtrans-core`。两条命令都是 `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --locked --workspace --all-targets`。成功时脚本打印一行 JSON：`{"ok":true,"tier":"t0","failed":0}`。
+workspace 成员是根 crate `subtrans`、`subtrans-core`、`subtrans-io`、`subtrans-remote`。T0 和 T1 都是 `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --locked --workspace --all-targets`。成功时脚本打印一行 JSON：`{"ok":true,"tier":"t0","failed":0}`。
 
-不要加 `--ignored`。`tests/ftp_bracket_realrun.rs` 会连生产存储，不属于 T0/T1。`scripts/agent-check.sh --live` 直接失败，不发起连接。不要跑 `subtrans doctor` 做代码验证，它会在存储根上创建并删除探针。不要执行 `tools/` 里的脚本。
+不要加 `--ignored`。方括号 FTP 的无网络判断在 `subtrans-core`。实盘测试在 `crates/subtrans-io/tests/ftp_bracket_realrun.rs`，默认忽略。`scripts/agent-check.sh --live` 在 `SUBTRANS_LIVE`、主机、端口、账号或样本路径缺失时直接失败，不使用内置地址。不要跑 `subtrans doctor` 做代码验证，它会在存储根上创建并删除探针。不要执行 `tools/` 里的脚本。
 
 ## 记录
 
 任务完成时在卡末尾写 `result`：`behavior`、碰到的 `evals/` 或测试、检查是否通过、`invariants_touched`。已发布的 `CHANGELOG.md` 不改。发布片段是步骤 D 的事。
 
-`--json` 命令输出已经批准，实现留在步骤 D。步骤 B 不改 CLI。
+`--json` 命令输出已经批准，实现留在步骤 D。步骤 C 不改 CLI。

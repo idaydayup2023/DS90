@@ -8,6 +8,8 @@ use suppaftp::list::File as RemoteFile;
 use suppaftp::types::FileType as TransferFileType;
 use suppaftp::{FtpError, FtpStream};
 
+use subtrans_core::listing::needs_directory_listing;
+
 use super::{FileEntry, Storage, hash_reader, validate_relative_path};
 
 #[derive(Debug, Clone)]
@@ -384,37 +386,6 @@ impl FtpStorage {
     }
 }
 
-/// Whether a remote path must be listed by entering it (CWD + `MLSD` without
-/// a path argument) instead of passing it as an `MLSD` argument.
-///
-/// Rule: **any path containing `[` or `]` is always listed from inside the
-/// directory**, never by passing the path as an `MLSD`/`LIST` argument.
-///
-/// Why (measured on the production NAS, 2026-10-27): the server answers
-/// `MLSD <bracketed path>` with a *successful but empty* listing for
-/// directories that exist and hold content, so callers cannot tell that
-/// apart from a genuinely missing or empty directory. Sampled evidence:
-///
-/// | path                 | `MLSD <path>` | `CWD` + `MLSD` |
-/// |----------------------|---------------|----------------|
-/// | `/TV/[ChineseTVs]`   | 0 entries     | 21 entries     |
-/// | `/TV/[A.B.C]`        | 0 entries     | 80 entries     |
-/// | `/TV/[G.H.I.J.K]`    | 0 entries     | 52 entries     |
-///
-/// The same probe showed this is specific to brackets and **not** to
-/// non-ASCII names or spaces: `/Downloads/华语十佳` and its Chinese
-/// sub-directories list correctly either way, plain directories such as
-/// `/TV` (25 entries) and `/MOVIE` (21 entries) agree across all four
-/// listing methods, and the server rejects wildcards (`MLSD 'PTU*'` -> 550),
-/// so this is not glob expansion either.
-///
-/// Regression coverage: `tests/ftp_bracket_realrun.rs` pins the three
-/// sampled paths against the real NAS (ignored by default), and the unit
-/// tests below pin the routing rule itself.
-fn needs_directory_listing(remote: &str) -> bool {
-    remote.contains('[') || remote.contains(']')
-}
-
 impl Storage for FtpStorage {
     fn list_recursive(&self, relative: &str) -> Result<Vec<FileEntry>> {
         let normalized = validate_relative_path(relative)?;
@@ -679,24 +650,5 @@ impl Storage for FtpStorage {
 
     fn local_path_for_write(&self, _relative: &str) -> Result<Option<std::path::PathBuf>> {
         Ok(None)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::needs_directory_listing;
-
-    #[test]
-    fn bracketed_paths_are_listed_from_inside_the_directory() {
-        assert!(needs_directory_listing("/volume1/媒体/[TV] Show/Season 01"));
-        assert!(needs_directory_listing("/media/Show [2024]/S01E01"));
-        assert!(needs_directory_listing("/media/partial]name"));
-    }
-
-    #[test]
-    fn plain_paths_keep_the_mlsd_argument_path() {
-        assert!(!needs_directory_listing("/"));
-        assert!(!needs_directory_listing("/volume1/媒体/Show/Season 01"));
-        assert!(!needs_directory_listing("/media/Movie (2024)"));
     }
 }

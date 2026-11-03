@@ -1,16 +1,15 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 use std::path::Path;
-use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use reqwest::StatusCode;
-use reqwest::blocking::{Client, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use subtrans_core::remote::MetadataSource;
+use subtrans_remote::{HttpTmdb, TmdbSettings};
 
 use crate::config::{Config, MetadataConfig, MetadataOverride, OverrideKind};
 use crate::migration::{Classification, MediaKind, classify_path};
@@ -119,18 +118,37 @@ pub fn run(
     dry_run: bool,
     limit: Option<usize>,
 ) -> Result<MetadataSummary> {
+    run_with(cfg, mode, dry_run, limit, None)
+}
+
+pub fn run_with(
+    cfg: &Config,
+    mode: FetchMode,
+    dry_run: bool,
+    limit: Option<usize>,
+    source: Option<&dyn MetadataSource>,
+) -> Result<MetadataSummary> {
     if !cfg.metadata.enabled {
         bail!("metadata is disabled; set metadata.enabled=true in the configuration");
     }
     let storage = open_storage(&cfg.source).context("failed to open metadata source storage")?;
-    run_on_storage(cfg, storage.as_ref(), mode, dry_run, limit)
+    run_on_storage(cfg, storage.as_ref(), mode, dry_run, limit, source)
 }
 
 pub fn ensure_before(cfg: &Config, dry_run: bool, limit: Option<usize>) -> Result<()> {
+    ensure_before_with(cfg, dry_run, limit, None)
+}
+
+pub fn ensure_before_with(
+    cfg: &Config,
+    dry_run: bool,
+    limit: Option<usize>,
+    source: Option<&dyn MetadataSource>,
+) -> Result<()> {
     if !cfg.metadata.enabled {
         return Ok(());
     }
-    let summary = run(cfg, FetchMode::Default, dry_run, limit)?;
+    let summary = run_with(cfg, FetchMode::Default, dry_run, limit, source)?;
     // Incomplete downloads are pending by design and each downstream stage
     // independently skips the exact marked video. They must not block metadata-
     // ready sibling videos in the same FTP source tree.
@@ -149,6 +167,7 @@ fn run_on_storage(
     mode: FetchMode,
     dry_run: bool,
     limit: Option<usize>,
+    injected: Option<&dyn MetadataSource>,
 ) -> Result<MetadataSummary> {
     let entries = storage.list_recursive("")?;
     crate::storage::report_empty_dirs(&entries);
@@ -178,7 +197,7 @@ fn run_on_storage(
     }
     videos.truncate(limit.unwrap_or(usize::MAX));
 
-    let mut client = None;
+    let mut owned_client = None;
     let mut summary = MetadataSummary {
         scanned: videos.len(),
         ..MetadataSummary::default()
@@ -213,16 +232,19 @@ fn run_on_storage(
             println!("metadata cached video={}", video.path);
             continue;
         }
-        if client.is_none() {
-            client = Some(TmdbClient::new(&cfg.metadata)?);
-        }
-        match process_video(
-            cfg,
-            storage,
-            client.as_ref().expect("client was initialized"),
-            &video,
-            mode,
-        ) {
+        let source: &dyn MetadataSource = if let Some(source) = injected {
+            source
+        } else {
+            if owned_client.is_none() {
+                owned_client = Some(connect_tmdb(&cfg.metadata)?);
+            }
+            owned_client.as_ref().expect("TMDB client was initialized")
+        };
+        let client = TmdbClient {
+            source,
+            config: cfg.metadata.clone(),
+        };
+        match process_video(cfg, storage, &client, &video, mode) {
             Ok(()) => summary.fetched += 1,
             Err(error) => {
                 summary.failed += 1;
@@ -249,7 +271,7 @@ fn run_on_storage(
 fn process_video(
     cfg: &Config,
     storage: &dyn Storage,
-    client: &TmdbClient,
+    client: &TmdbClient<'_>,
     video: &FileEntry,
     mode: FetchMode,
 ) -> Result<()> {
@@ -453,7 +475,11 @@ pub fn doctor(cfg: &Config) -> Result<()> {
         println!("metadata disabled");
         return Ok(());
     }
-    let client = TmdbClient::new(&cfg.metadata)?;
+    let connected = connect_tmdb(&cfg.metadata)?;
+    let client = TmdbClient {
+        source: &connected,
+        config: cfg.metadata.clone(),
+    };
     let _: Value = client.json("configuration", &[])?;
     println!(
         "metadata provider=TMDB language={} fallback={} ready",
@@ -558,26 +584,25 @@ fn apply_metadata_override(base: Classification, value: &MetadataOverride) -> Cl
     }
 }
 
-struct TmdbClient {
-    client: Client,
-    token: String,
+struct TmdbClient<'a> {
+    source: &'a dyn MetadataSource,
     config: MetadataConfig,
 }
 
-impl TmdbClient {
-    fn new(config: &MetadataConfig) -> Result<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(config.timeout_seconds))
-            .user_agent(concat!("subtrans/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .context("failed to create TMDB HTTP client")?;
-        Ok(Self {
-            client,
-            token: config.api_token()?,
-            config: config.clone(),
-        })
-    }
+fn connect_tmdb(config: &MetadataConfig) -> Result<HttpTmdb> {
+    HttpTmdb::connect(TmdbSettings {
+        base_url: config.base_url.clone(),
+        image_base_url: config.image_base_url.clone(),
+        token: config.api_token()?,
+        api_token_env: config.api_token_env.clone(),
+        timeout_seconds: config.timeout_seconds,
+        max_retries: config.max_retries,
+        max_response_bytes: config.max_response_bytes,
+        max_image_bytes: config.max_image_bytes,
+    })
+}
 
+impl<'a> TmdbClient<'a> {
     fn resolve(
         &self,
         selection: &Classification,
@@ -794,73 +819,12 @@ impl TmdbClient {
         endpoint: &str,
         parameters: &[(&str, &str)],
     ) -> Result<T> {
-        let response = self.request(endpoint, parameters)?;
-        let bytes = bounded_bytes(response, self.config.max_response_bytes)?;
+        let bytes = self.source.get_json(endpoint, parameters)?;
         serde_json::from_slice(&bytes).context("TMDB returned invalid JSON")
     }
 
     fn image(&self, path: &str) -> Result<Vec<u8>> {
-        let url = format!(
-            "{}/{}",
-            self.config.image_base_url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        );
-        let response = self.request_url(&url, &[], false)?;
-        bounded_bytes(response, self.config.max_image_bytes)
-    }
-
-    fn request(&self, endpoint: &str, parameters: &[(&str, &str)]) -> Result<Response> {
-        let url = format!(
-            "{}/{}",
-            self.config.base_url.trim_end_matches('/'),
-            endpoint.trim_start_matches('/')
-        );
-        self.request_url(&url, parameters, true)
-    }
-
-    fn request_url(
-        &self,
-        url: &str,
-        parameters: &[(&str, &str)],
-        authenticated: bool,
-    ) -> Result<Response> {
-        let mut last = None;
-        for attempt in 0..=self.config.max_retries {
-            let request = self.client.get(url).query(parameters);
-            let request = if authenticated {
-                request.bearer_auth(&self.token)
-            } else {
-                request
-            };
-            match request.send() {
-                Ok(response) if response.status().is_success() => return Ok(response),
-                Ok(response)
-                    if response.status() == StatusCode::TOO_MANY_REQUESTS
-                        || response.status().is_server_error() =>
-                {
-                    last = Some(anyhow::anyhow!("TMDB returned HTTP {}", response.status()));
-                }
-                Ok(response)
-                    if matches!(
-                        response.status(),
-                        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-                    ) =>
-                {
-                    bail!(
-                        "TMDB rejected the API Read Access Token from environment variable {} with HTTP {}; verify the token and rerun `subtrans doctor`",
-                        self.config.api_token_env,
-                        response.status()
-                    )
-                }
-                Ok(response) => bail!("TMDB returned HTTP {} for {url}", response.status()),
-                Err(error) => last = Some(error.into()),
-            }
-            if attempt < self.config.max_retries {
-                thread::sleep(Duration::from_millis(250 * u64::from(attempt + 1)));
-            }
-        }
-        Err(last.unwrap_or_else(|| anyhow::anyhow!("TMDB request failed")))
-            .with_context(|| format!("TMDB request failed after retries: {url}"))
+        self.source.get_image(path)
     }
 }
 
@@ -1023,24 +987,6 @@ fn normalized_title(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn bounded_bytes(mut response: Response, maximum: usize) -> Result<Vec<u8>> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > maximum as u64)
-    {
-        bail!("TMDB response exceeds configured size limit of {maximum} bytes");
-    }
-    let mut bytes = Vec::new();
-    response
-        .by_ref()
-        .take(maximum as u64 + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > maximum {
-        bail!("TMDB response exceeds configured size limit of {maximum} bytes");
-    }
-    Ok(bytes)
 }
 
 fn validate_jpeg(bytes: &[u8], role: &str) -> Result<()> {
