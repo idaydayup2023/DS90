@@ -1,6 +1,6 @@
 name: rust-ci
 
-# version4 step A. T1 is scripts/agent-check.sh --workspace (fmt, clippy, locked tests).
+# version4. T1 is scripts/agent-check.sh --workspace (fmt, clippy, locked workspace tests).
 # Ignored live tests stay out of this workflow. v3.* tag releases stay on release.yml.
 on:
   push:

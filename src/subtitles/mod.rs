@@ -1,6 +1,7 @@
-mod quality;
-mod srt;
 mod translation;
+
+pub use subtrans_core::quality;
+pub use subtrans_core::srt;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -24,7 +25,7 @@ use crate::storage::{FileEntry, Storage, open_storage};
 
 pub use quality::{score_source, validate_translation_quality};
 pub use srt::{Cue, format as format_srt, parse as parse_srt};
-pub use translation::{parse_aligned, render as render_translation, validate_output};
+pub use subtrans_core::protocol::{parse_aligned, render as render_translation, validate_output};
 
 #[derive(Debug, Clone)]
 struct SourceSubtitle {

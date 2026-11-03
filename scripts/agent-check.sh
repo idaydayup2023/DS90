@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# version4 step A check. Single crate. No product-behavior change.
+# version4 check after step B. Workspace members: subtrans and subtrans-core.
 # T0: scripts/agent-check.sh
 # T1: scripts/agent-check.sh --workspace
-# Both run fmt, clippy, and locked tests. With one crate they are the same
-# commands; --workspace is the CI entry. #[ignore] tests are not run.
-# --live is refused: step A does not contact a NAS or run tools/.
+# Both run fmt, clippy, and locked tests for the whole workspace, so unit
+# tests that moved into subtrans-core still run. --workspace is the CI entry.
+# #[ignore] tests are not run.
+# --live is refused: this script does not contact a NAS or run tools/.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,9 +43,9 @@ on_err() {
 trap on_err ERR
 
 cargo fmt --all --check
-cargo clippy --locked --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets -- -D warnings
 # cargo test does not execute #[ignore] tests unless --ignored is passed.
-cargo test --locked --all-targets
+cargo test --locked --workspace --all-targets
 
 trap - ERR
 printf '%s\n' "{\"ok\":true,\"tier\":\"${tier}\",\"failed\":0}"

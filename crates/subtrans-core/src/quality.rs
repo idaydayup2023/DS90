@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Result, bail};
 
-use super::srt::{Cue, single_line};
+use crate::srt::{Cue, single_line};
 
 pub fn score_source(cues: &[Cue], expected_language: &str) -> Result<f32> {
     validate_source(cues)?;
@@ -123,7 +123,7 @@ pub fn validate_translation_quality(
     Ok(())
 }
 
-pub(crate) fn translation_concerns(
+pub fn translation_concerns(
     source: &str,
     target: &str,
     target_language: &str,

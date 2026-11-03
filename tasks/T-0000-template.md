@@ -16,7 +16,7 @@ record:
 
 # 短标题
 
-这是模板，不是开放任务。复制到 `tasks/T-NNNN-短名.md` 后再填。步骤 A 仍是单 crate，`crates` 只写 `subtrans`。
+这是模板，不是开放任务。复制到 `tasks/T-NNNN-短名.md` 后再填。`crates` 可以写 `subtrans` 或 `subtrans-core`。不要在一张卡里开始步骤 C–G。
 
 ## 做什么
 

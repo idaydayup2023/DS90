@@ -10,7 +10,7 @@ use crate::config::{Config, StorageConfig};
 use crate::state::{ClaimResult, StateStore, process_owner};
 use crate::storage::{Storage, open_storage, try_ftp_streaming_copy, try_server_side_rename};
 
-use super::planner::{FileAction, PlanDocument, PlanItem, PlanStatus, SourceFingerprint};
+use super::{FileAction, PlanDocument, PlanItem, PlanStatus, SourceFingerprint};
 
 #[derive(Clone, Copy)]
 struct BoundStorage<'a> {

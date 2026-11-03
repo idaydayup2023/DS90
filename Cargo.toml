@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/subtrans-core"]
+
 [package]
 name = "subtrans"
 version = "3.3.1"
@@ -12,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
+subtrans-core = { path = "crates/subtrans-core" }
 clap = { version = "4.6.5", features = ["derive"] }
 hex = "0.4"
 fs2 = "0.4"
