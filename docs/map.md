@@ -27,7 +27,7 @@ workspace 成员是根 crate `subtrans`（`Cargo.toml`，库 `src/lib.rs`，二�
 | TMDB HTTP | `crates/subtrans-remote/src/tmdb.rs` | TMDB JSON 与图片。实现 `MetadataSource` | 见资料测试 | `tests/support/mod.rs` 的 `FixtureMetadata` |
 | 产物 | `src/artifact.rs` | 字幕 `ready` manifest，schema 3 | 见不变量 | 随字幕与迁移测试 |
 
-`tools/` 不是这条地图的一部分。那里是下载站、SSH 和外网站点脚本，步骤 E 迁出仓库。`scripts/agent-check.sh` 不调用它们。
+`extra/` 不是这条地图的一部分。DownloadStation、SSH 和外网站点脚本暂存在那里，不是默认可写面。以后迁出仓库仍是开放项。`scripts/agent-check.sh` 不调用它们的实弹入口。
 
 `crates/subtrans-io/tests/ftp_bracket_realrun.rs` 是忽略的实盘测试。它不带默认主机或样本库路径。无网络的方括号规则在 `crates/subtrans-core/src/listing.rs`，并抄到 `evals/path/listing.jsonl`。
 

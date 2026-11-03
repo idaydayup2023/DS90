@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# version4 check after step D.
+# version4 check after step E.
 # T0: scripts/agent-check.sh
 # T1: scripts/agent-check.sh --workspace
 # Both run fmt, clippy, and locked tests for the whole workspace.
@@ -7,7 +7,9 @@
 # T2: scripts/agent-check.sh --live
 # T2 requires SUBTRANS_LIVE=1 and FTP host, port, account, and sample
 # paths from the environment. Missing variables fail closed. There is no
-# built-in host or sample library. T2 does not run tools/.
+# built-in host or sample library.
+# T0, T1, and T2 do not run extra/. That directory holds DownloadStation,
+# SSH, and external-site scripts. Their live entry points are not verification.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

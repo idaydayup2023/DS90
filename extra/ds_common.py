@@ -87,7 +87,7 @@ def ssh(cmd, timeout=300):
     """NAS 侧只读/暂存命令通道。工具目录内自带 ds90_ssh.sh 包装。"""
     wrapper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ds90_ssh.sh")
     if not os.path.exists(wrapper):
-        raise RuntimeError("缺少 tools/ds90_ssh.sh 包装")
+        raise RuntimeError("缺少 extra/ds90_ssh.sh 包装")
     r = subprocess.run([wrapper, cmd], capture_output=True, text=True, timeout=timeout)
     out = (r.stdout or "").strip()
     if r.returncode != 0:

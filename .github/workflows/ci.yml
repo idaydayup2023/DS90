@@ -3,6 +3,7 @@ name: rust-ci
 # version4. T1 is scripts/agent-check.sh --workspace (fmt, clippy, locked workspace tests).
 # Ignored live FTP tests stay out of T1. --live is T2 and fails closed without env.
 # Ignored live tests stay out of this workflow. v3.* tag releases stay on release.yml.
+# extra/ is a holding area. This workflow does not run those live entry points.
 on:
   push:
     branches: [version4]

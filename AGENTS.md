@@ -6,14 +6,14 @@
 
 ## 当前阶段
 
-步骤 A–D 已落地。步骤 B 抽出 `subtrans-core`。步骤 C 抽出 `subtrans-io` 和 `subtrans-remote`。步骤 D 增加 `--json` 事件通道、`Reporter`、`changes/` 片段和任务卡 `result`。默认人读句子与 `origin/version3` @ `1f19015` 相同。步骤 E–G 没有开始。
+步骤 A–E 已落地。步骤 B 抽出 `subtrans-core`。步骤 C 抽出 `subtrans-io` 和 `subtrans-remote`。步骤 D 增加 `--json`。步骤 E 把 DownloadStation、SSH 和外网站点脚本从 `tools/` 移到 `extra/` 暂存。产品行为与 `origin/version3` @ `1f19015` 相同。步骤 F–G 没有开始。
 
 在 iDay 点名下一步之前：
 
 - 不再拆 crate。不建 `subtrans-app`、`subtrans-cli`、`subtrans-evals`。`subtrans-core` 不加 reqwest、suppaftp、rusqlite，也不调用 `std::process`。
-- 不删除、不移动 `tools/`。步骤 E 才把 DownloadStation、SSH 和外网站点脚本迁出本仓库，不放进 `ops/`。
+- `extra/` 是暂存区，不是默认可写面。不要执行其中的实弹入口。以后迁出本仓库仍是开放项。不建 `ops/`，也不另建仓库。
 - 不改 `deploy/`，不改 `.github/workflows/release.yml`。`v3.*` 发布和生产 launchd 仍走 `version3`。
-- 不把本分支合并进 `version3`。
+- 不把本分支合并进 `version3`。不开始步骤 F、G。
 
 ## 发现工作
 
@@ -25,6 +25,7 @@
 
 `normal` 任务的禁止路径：
 
+- `extra/**`
 - `tools/**`
 - `deploy/**`
 - `.github/workflows/release.yml`
@@ -51,7 +52,7 @@ scripts/agent-check.sh --workspace
 
 workspace 成员是根 crate `subtrans`、`subtrans-core`、`subtrans-io`、`subtrans-remote`。T0 和 T1 都是 `cargo fmt --all --check`、`cargo clippy --locked --workspace --all-targets -- -D warnings`、`cargo test --locked --workspace --all-targets`。成功时脚本打印一行 JSON：`{"ok":true,"tier":"t0","failed":0}`。
 
-不要加 `--ignored`。方括号 FTP 的无网络判断在 `subtrans-core`。实盘测试在 `crates/subtrans-io/tests/ftp_bracket_realrun.rs`，默认忽略。`scripts/agent-check.sh --live` 在 `SUBTRANS_LIVE`、主机、端口、账号或样本路径缺失时直接失败，不使用内置地址。不要跑 `subtrans doctor` 做代码验证，它会在存储根上创建并删除探针。不要执行 `tools/` 里的脚本。
+不要加 `--ignored`。方括号 FTP 的无网络判断在 `subtrans-core`。实盘测试在 `crates/subtrans-io/tests/ftp_bracket_realrun.rs`，默认忽略。`scripts/agent-check.sh --live` 在 `SUBTRANS_LIVE`、主机、端口、账号或样本路径缺失时直接失败，不使用内置地址。不要跑 `subtrans doctor` 做代码验证，它会在存储根上创建并删除探针。T0、T1、T2 都不执行 `extra/` 里的实弹入口。
 
 ## 记录
 

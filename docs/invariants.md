@@ -1,6 +1,6 @@
 # 不变量
 
-本文件把 `ARCHITECTURE.md` 和现有测试已经钉住的安全行为列成检查清单。步骤 A–D 不放宽这些行为。步骤 C 把存储、状态、进程和 HTTP 客户端拆到 io 与 remote。步骤 D 只增加 `--json` 通道，默认人读句子不变。放宽任何一条，任务卡必须由 iDay 写成 `risk: invariant`。agent 不能自己改这个风险，也不能删掉对应断言。
+本文件把 `ARCHITECTURE.md` 和现有测试已经钉住的安全行为列成检查清单。步骤 A–E 不放宽这些行为。步骤 C 把存储、状态、进程和 HTTP 客户端拆到 io 与 remote。步骤 D 只增加 `--json` 通道，默认人读句子不变。步骤 E 只把 DownloadStation、SSH 和外网站点脚本从 `tools/` 改放到 `extra/` 暂存。放宽任何一条，任务卡必须由 iDay 写成 `risk: invariant`。agent 不能自己改这个风险，也不能删掉对应断言。
 
 来源：`ARCHITECTURE.md`、`docs/V2_SCOPE_DECISIONS.md`、`src/` 里的 schema 常量，以及 `evals/` 所引用的测试。
 
@@ -73,3 +73,4 @@
 - 一个二进制 `subtrans`，子命令是 `metadata`、`subtitles`、`migrate`、`doctor`。`--json` 只改变诊断的形状，不增加子命令，也不代替计划文件。
 - `migrate apply` 不进无条件定时任务。`deploy/` 里的 launchd 示例只调度字幕命令。批准执行仍然要提交精确 `plan_hash`。
 - worker 用显式命令和占位符，不经 shell，运行时不安装。
+- `extra/` 只暂存 DownloadStation、SSH 和外网站点脚本。T0、T1、T2 不调用它们的实弹入口。它不是默认可写面。以后迁出本仓库仍是开放项。
