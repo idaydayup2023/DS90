@@ -229,6 +229,16 @@ pub struct SubtitleConfig {
     pub asr: Option<ExternalWorkerConfig>,
     #[serde(default)]
     pub pgs_ocr: Option<ExternalWorkerConfig>,
+    /// Destination-relative root that a finished `.ai.srt` is archived under
+    /// when a run is about to overwrite it while its manifest is missing or
+    /// stale (the cached early return did not hit). The archive keeps the
+    /// output's relative path and the manifest's team marker, as
+    /// `<stem>.ai.srt.<team>.predel.<unix-seconds>.bak`. When unset, the
+    /// archive lands beside the output itself. Publishing proceeds only
+    /// after the archive's hash verifies; a failed archive aborts the
+    /// publish, so an un-backuped finished output is never overwritten.
+    #[serde(default)]
+    pub output_backup_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

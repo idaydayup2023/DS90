@@ -388,6 +388,7 @@ fn config_for(
             external_srt_validation: ExternalSrtValidationConfig::default(),
             asr: None,
             pgs_ocr: None,
+            output_backup_root: None,
         },
         translation: TranslationConfig {
             provider: LlmProvider::Ollama,
