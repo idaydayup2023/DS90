@@ -69,6 +69,10 @@ min_video_bytes = 1048576
 ffmpeg = "ffmpeg"
 ffprobe = "ffprobe"
 external_process_timeout_seconds = 7200
+# 终稿防误覆盖闸：发布前若现成 .ai.srt 的 manifest 缺失或不匹配，先把现件
+# 归档为 <stem>.ai.srt.<team>.predel.<ts>.bak 并校验哈希，归档失败即中止发布。
+# 取消注释可把归档集中到指定根目录（保留相对路径）；注释掉则归档落在终稿旁边。
+# output_backup_root = "subtitle-overwrite-archives"
 
 [subtitles.external_srt_validation]
 # 有内置英文字幕时必须与外置英文 SRT 交叉验证；没有内置英文时直接信任

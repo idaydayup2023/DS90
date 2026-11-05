@@ -15,8 +15,8 @@ use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 use crate::artifact::{
-    ARTIFACT_SCHEMA, SubtitleArtifact, SubtitleSourceEvidence, artifact_paths, read_ready_artifact,
-    validate_manifest_for_publish, video_identity,
+    ARTIFACT_SCHEMA, ArtifactPaths, SubtitleArtifact, SubtitleSourceEvidence, artifact_paths,
+    read_ready_artifact, validate_manifest_for_publish, video_identity,
 };
 use crate::config::{Config, ExternalWorkerConfig, LlmProvider, TranslationConfig};
 use crate::state::{ClaimResult, StateStore, process_owner};
@@ -294,6 +294,11 @@ fn process_video(
                 .as_secs(),
         };
         validate_manifest_for_publish(&manifest)?;
+        // Gate the destructive step: an existing output whose manifest is
+        // missing or stale is archived and verified before the new bytes
+        // replace it, so a finished hand-finished .ai.srt can never be
+        // silently overwritten.
+        guard_existing_output(storage, &paths, cfg.subtitles.output_backup_root.as_deref())?;
         // The manifest is the commit marker and is deliberately published last.
         storage.upload_atomic(&paths.output, &mut Cursor::new(&output_bytes))?;
         if storage.sha256(&paths.output)? != output_sha256 {
@@ -513,6 +518,67 @@ pub fn cache_key(source_sha256: &str, cfg: &TranslationConfig) -> Result<String>
 
 pub fn should_translate(force: bool, output_exists: bool, manifest_matches: bool) -> bool {
     force || !output_exists || !manifest_matches
+}
+
+/// Archive path for an `.ai.srt` about to be overwritten. The manifest's
+/// `<team>` marker is preserved so provenance survives the archive; with a
+/// configured backup root the output keeps its full relative path under it,
+/// otherwise the archive lands beside the output itself.
+pub fn output_backup_path(
+    output: &str,
+    manifest: &str,
+    backup_root: Option<&str>,
+    stamp: u64,
+) -> String {
+    let full = manifest.strip_suffix(".json").map_or_else(
+        || format!("{output}.predel.{stamp}.bak"),
+        |stem| format!("{stem}.predel.{stamp}.bak"),
+    );
+    match backup_root.map(str::trim).filter(|root| !root.is_empty()) {
+        Some(root) => format!("{}/{full}", root.trim_matches('/')),
+        None => full,
+    }
+}
+
+/// Mis-overwrite gate: when a publish reaches an existing `.ai.srt`, the
+/// cached early return in `process_video` has already established that the
+/// manifest is absent or does not match — i.e. this publish would destroy a
+/// finished output that no manifest vouches for. Archive the current bytes
+/// first and verify the copy; refuse to proceed unless the archive is
+/// byte-identical, so no existing output is ever silently overwritten.
+fn guard_existing_output(
+    storage: &dyn Storage,
+    paths: &ArtifactPaths,
+    backup_root: Option<&str>,
+) -> Result<()> {
+    if !storage.exists(&paths.output)? {
+        return Ok(());
+    }
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let backup = output_backup_path(&paths.output, &paths.manifest, backup_root, stamp);
+    let expected = storage.sha256(&paths.output)?;
+    let bytes = storage.read(&paths.output)?;
+    if let Some((parent, _)) = backup.rsplit_once('/') {
+        storage.create_dir_all(parent)?;
+    }
+    storage.upload_atomic(&backup, &mut Cursor::new(bytes))?;
+    let stored = storage
+        .sha256(&backup)
+        .with_context(|| format!("backup {backup} unreadable after publish"))?;
+    if stored != expected {
+        bail!(
+            "refusing to overwrite {}: archive {backup} hash mismatch (want {expected}, got {stored})",
+            paths.output
+        );
+    }
+    println!(
+        "subtitle overwrite guarded output={} backup={}",
+        paths.output, backup
+    );
+    Ok(())
 }
 
 fn acquisition_key(video: &FileEntry, cfg: &Config) -> Result<String> {
@@ -1567,5 +1633,116 @@ mod tests {
             aligned_text_similarity(&wrong_dialogue, &matching_embedded),
             0.0
         );
+    }
+
+    fn guard_paths() -> ArtifactPaths {
+        ArtifactPaths {
+            output: "TV/Show/movie.ai.srt".to_owned(),
+            manifest: "TV/Show/movie.ai.srt.teamx.json".to_owned(),
+        }
+    }
+
+    #[test]
+    fn existing_output_without_manifest_is_archived_before_overwrite() {
+        use crate::storage::LocalStorage;
+        let scratch = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(scratch.path()).unwrap();
+        let paths = guard_paths();
+        // The video's directory always exists in production; seeding needs it.
+        storage.create_dir_all("TV/Show").unwrap();
+        storage
+            .upload_atomic(
+                &paths.output,
+                &mut Cursor::new(b"hand-finished draft".to_vec()),
+            )
+            .unwrap();
+        // The overwrite path is genuinely reachable without a manifest…
+        assert!(should_translate(false, true, false));
+        // …yet the gate archives the finished output first, byte-identically.
+        guard_existing_output(&storage, &paths, None).unwrap();
+        let files = storage.list_recursive("TV/Show").unwrap();
+        let archives: Vec<_> = files
+            .iter()
+            .filter(|e| {
+                e.path.ends_with(".predel.bak")
+                    || (e.path.contains(".predel.") && e.path.ends_with(".bak"))
+            })
+            .map(|e| e.path.clone())
+            .collect();
+        assert_eq!(
+            archives.len(),
+            1,
+            "expected exactly one archive, got {archives:?}"
+        );
+        assert!(archives[0].starts_with("TV/Show/movie.ai.srt.teamx.predel."));
+        assert_eq!(storage.read(&archives[0]).unwrap(), b"hand-finished draft");
+        // The output itself is untouched by the gate; publishing continues only after.
+        assert_eq!(storage.read(&paths.output).unwrap(), b"hand-finished draft");
+        assert!(storage.exists(&paths.output).unwrap());
+    }
+
+    #[test]
+    fn guard_is_noop_when_no_output_exists() {
+        use crate::storage::LocalStorage;
+        let scratch = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(scratch.path()).unwrap();
+        guard_existing_output(&storage, &guard_paths(), None).unwrap();
+        assert!(storage.list_recursive(".").unwrap().is_empty());
+    }
+
+    #[test]
+    fn output_backup_path_honors_backup_root_and_team_marker() {
+        // Same directory: the archive keeps the manifest stem, team marker and
+        // the output's directory.
+        assert_eq!(
+            output_backup_path(
+                "TV/Show/movie.ai.srt",
+                "TV/Show/movie.ai.srt.teamx.json",
+                None,
+                42
+            ),
+            "TV/Show/movie.ai.srt.teamx.predel.42.bak"
+        );
+        // Configured root: full relative path is preserved under it.
+        assert_eq!(
+            output_backup_path(
+                "TV/Show/movie.ai.srt",
+                "TV/Show/movie.ai.srt.teamx.json",
+                Some("/archive/root/"),
+                42
+            ),
+            "archive/root/TV/Show/movie.ai.srt.teamx.predel.42.bak"
+        );
+        // Empty or whitespace-only roots behave like None.
+        assert_eq!(
+            output_backup_path("movie.ai.srt", "movie.ai.srt.teamx.json", Some("  "), 7),
+            "movie.ai.srt.teamx.predel.7.bak"
+        );
+    }
+
+    #[test]
+    fn guard_creates_missing_backup_root_and_archives_under_it() {
+        use crate::storage::LocalStorage;
+        let scratch = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(scratch.path()).unwrap();
+        let paths = guard_paths();
+        storage.create_dir_all("TV/Show").unwrap();
+        storage
+            .upload_atomic(&paths.output, &mut Cursor::new(b"draft".to_vec()))
+            .unwrap();
+        guard_existing_output(&storage, &paths, Some("guard-archives")).unwrap();
+        let entries = storage.list_recursive("guard-archives").unwrap();
+        let files: Vec<_> = entries.iter().filter(|e| !e.is_dir).collect();
+        assert_eq!(
+            files.len(),
+            1,
+            "expected one archived file, got {entries:?}"
+        );
+        assert!(
+            files[0]
+                .path
+                .starts_with("guard-archives/TV/Show/movie.ai.srt.teamx.predel.")
+        );
+        assert_eq!(storage.read(&files[0].path).unwrap(), b"draft");
     }
 }
