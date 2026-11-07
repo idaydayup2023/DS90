@@ -61,6 +61,27 @@ def read_jsonl(path):
     return out
 
 
+# —— 译评型思考流结构判据（站长 11-07 22:0x 令；与 fbwl_stor_gate_20261107.py 逐字同口径，
+#    fixture 绑 tools/_gate_e_samples_20261107.json：阳性 971 必咬、阴性 29 零误判）——
+META_E = ["如下：", "补充说明", "建议改", "待复核", "更准确", "多译", "漏译", "超译",
+          "译为", "译作", "该译是", "这样译", "该译成", "这个译"]
+TQUOTE_E = re.compile(r"[\"'“”‘’「『]\s*译|译\s*[\"'“”‘’「『]")
+ALPHA_E = re.compile(r"[A-Za-z]")
+
+
+def yi_ping_type(zh):
+    """译评型泄漏结构判据：A 引号贴译评 / B 半角引号失衡+译评语境 / C 句级元话语。未命中回 None。"""
+    if TQUOTE_E.search(zh):
+        return "A译评贴引号"
+    if (zh.count('"') % 2 == 1 and ALPHA_E.search(zh)
+            and (re.search(r"译|评|注", zh) or any(m in zh for m in META_E))):
+        return "B引号失衡+译评语"
+    for m in META_E:
+        if m in zh:
+            return "C元话语:" + m
+    return None
+
+
 def suspect(zh):
     """E 样探测器——与 fbwl_stor_gate_20261107.py 逐字同口径。命中回原因，否则 None。"""
     han_n = len(HAN.findall(zh))
@@ -73,6 +94,9 @@ def suspect(zh):
         return "超长%d" % len(zh)
     if re.search(r"[A-Za-z]", zh) and en_ratio > 0.6:
         return "英比%.2f" % en_ratio   # 仅含 ASCII 字母的行才谈英比（数数行/符号行不误咬）
+    vp = yi_ping_type(zh)
+    if vp:
+        return vp
     grams = [zh[k:k + 8] for k in range(0, max(len(zh) - 7, 0), 2)]
     gc = Counter(grams)
     if any(v >= 3 for v in gc.values()):
@@ -222,6 +246,16 @@ def selftest():
     want_fail("E 豁免不覆盖别条", [dict(good[0], zh="让我帮你拿吧，正常台词。"),
                                   dict(good[1], zh="让我帮你拿吧，这句没豁免。")] + good[2:],
               waive=frozenset({1}), token="E思考流")
+    # 译评型判据绑 fixture（站长 11-07 22:0x 令）：阳性必咬、阴性零误判
+    fp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_gate_e_samples_20261107.json")
+    fix = json.load(open(fp, encoding="utf-8"))
+    for p in fix["positives"]:
+        if not suspect(p["zh"]):
+            fails.append("E 译评型阳性漏检 i=%s %r" % (p["i"], p["zh"][:40]))
+    for n in fix["negatives"]:
+        v = suspect(n["zh"])
+        if v:
+            fails.append("E 译评型阴性误判 i=%s %r 咬=%s" % (n["i"], n["zh"][:40], v))
 
     if fails:
         for f in fails:
