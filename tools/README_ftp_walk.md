@@ -63,3 +63,21 @@ NLST 绝对路径归一、unknown 试探定性、jsonl 死活契约。
 | `NLST /TV/[A.B.C]` 带参 | 0（坑复现） |
 | `MLSD /TV/[A.B.C]` 带参 | 0（坑复现） |
 | CWD 后无参 NLST / MLSD | 80 / 80 |
+
+## 判主件别用扩展名正则（坑，2026-11-07）
+
+种源壳目录里的正片常**没有扩展名**（如 `The Bone Collector 1080p BluRay
+x265 HEVC 10bit AA`）。用 `\.(mkv|mp4|...)$` 之类正则筛会把它们全判成
+"壳里没片"，白下一趟种。
+
+用本库公开 helper：
+
+```python
+from ds90_ftp_walk import classify_file, is_video_candidate
+classify_file(name, size)   # "main" | "noext" | "other"
+is_video_candidate(name, size)  # main/noext 均为 True
+```
+
+默认口径：**size > 300 MB 且扩展名 ∉ nfo/sfv/字幕/图档排除表 即认主件**；
+无扩展名大文件返回 `"noext"`（是主件，单列便于人工复核）。阈值与排除表
+可经 `min_bytes` / `non_main_ext` 覆写。自检：`--selftest-classify`。

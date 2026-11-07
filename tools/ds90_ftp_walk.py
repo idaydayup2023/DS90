@@ -363,20 +363,94 @@ class FtpWalker:
         self._op(op)
 
 
+# ---------------------------------------------------------------- 主件判定
+# 坑（站长 11-07 派单）：种源壳目录里主件常**无扩展名**
+# （如 `The Bone Collector 1080p BluRay x265 ... AA`），按扩展名正则会把它
+# 判成"壳里没片"，白下一趟种。**判主件别用扩展名正则**——用本 helper。
+# 默认口径（库务台账脚本验证过的）：>300 MB 且非 nfo/sfv/字幕/图档 即认主件；
+# 无扩展名者单独标 kind="noext" 以便人工复核，但仍算主件。
+
+MAIN_MIN_BYTES = 300 * 1024 * 1024          # 300 MB，可按需覆写
+NON_MAIN_EXT = frozenset({
+    # 元数据/校验
+    ".nfo", ".sfv", ".md5", ".sha1", ".sha256", ".txt", ".pdf",
+    # 字幕轨
+    ".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt", ".smi",
+    # 图档
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tbn", ".url",
+})
+
+
+def classify_file(name, size, min_bytes=MAIN_MIN_BYTES, non_main_ext=NON_MAIN_EXT):
+    """返回 "main" / "noext" / "other"。
+
+    "main"  有扩展名的大主件（mkv/mp4/avi… 一律按体积认，不查白名单）
+    "noext" 无扩展名的大主件（种源壳常见）——同属主件，单列便于复核
+    "other" 小文件 / nfo/sfv/字幕/图档等附属件
+    """
+    if size < min_bytes:
+        return "other"
+    base = name.replace("\\", "/").rsplit("/", 1)[-1]
+    ext = "." + base.rsplit(".", 1)[-1].lower() if "." in base else ""
+    if ext and ext in non_main_ext:
+        return "other"
+    return "noext" if not ext else "main"
+
+
+def is_video_candidate(name, size, min_bytes=MAIN_MIN_BYTES, non_main_ext=NON_MAIN_EXT):
+    """主件布尔便捷式：main 与 noext 都为 True。"""
+    return classify_file(name, size, min_bytes, non_main_ext) in ("main", "noext")
+
+
+def selftest_classify():
+    fails = []
+
+    def want(name, size, expect):
+        got = classify_file(name, size)
+        if got != expect:
+            fails.append("classify(%r,%d)=%s 应为 %s" % (name, size, got, expect))
+
+    # 用例①：无扩展名大文件必须被认为主件（noext），且布尔式认它
+    want("The Bone Collector 1080p BluRay x265 HEVC 10bit AA", 4200000000, "noext")
+    if not is_video_candidate("The Bone Collector 1080p BluRay x265 HEVC 10bit AA",
+                              4200000000):
+        fails.append("无扩展名大文件 must be candidate")
+    # 用例②：附属件与小文件不得误认
+    for nm in ("movie.nfo", "checksum.sfv", "movie.chs.srt", "poster.jpg",
+               "movie.ass", "folder.png", "readme.TXT"):
+        want(nm, 9000000000, "other")            # 再大也不是主件
+    want("movie.mkv", 300 * 1024 * 1024 - 1, "other")   # 不足阈值
+    want("movie.mkv", 300 * 1024 * 1024 + 1, "main")
+    want("movie.mp4", 1200000000, "main")
+    if fails:
+        print("CLASSIFY SELFTEST FAIL %d 项" % len(fails))
+        for f in fails:
+            print("  " + f)
+        return 1
+    print("CLASSIFY SELFTEST PASS 全部用例通过（无扩展名大文件=主件）")
+    return 0
+
+
 # ---------------------------------------------------------------- CLI
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="FTP 列举/遍历共用库（CWD+无参 LIST 为准绳）")
-    ap.add_argument("--root", action="append", required=True, help="遍历根，可多次")
-    ap.add_argument("--out", required=True, help="jsonl 输出（逐条 fsync，尾行 DONE）")
+    ap.add_argument("--root", action="append", help="遍历根，可多次")
+    ap.add_argument("--out", help="jsonl 输出（逐条 fsync，尾行 DONE）")
     ap.add_argument("--host"), ap.add_argument("--port", type=int)
     ap.add_argument("--corroborate", choices=["lean", "all", "facts"], default="lean")
     ap.add_argument("--exclude", action="append", default=None, help="子串排除，可多次（默认含 #recycle）")
     ap.add_argument("--depth", type=int, default=None)
     ap.add_argument("--retries", type=int, default=3)
     ap.add_argument("--timeout", type=float, default=60)
+    ap.add_argument("--selftest-classify", action="store_true",
+                    help="主件判定 helper 自检（不连 FTP）")
     a = ap.parse_args(argv)
+    if a.selftest_classify:
+        return sys.exit(selftest_classify())
+    if not a.root or not a.out:
+        ap.error("--root/--out 必填（或改用 --selftest-classify）")
     w = FtpWalker(host=a.host, port=a.port, retries=a.retries, timeout=a.timeout)
     done = w.walk(a.root, a.out,
                   exclude=tuple(a.exclude) if a.exclude else ("#recycle",),
