@@ -54,3 +54,12 @@ python3 tools/fbwl_rerun_gate.py --batch R2-strict-1830
 U1 无 i 批级记录被跳过 / U2 全量重写不丢段（对照实现行为用例）+ 源码钉
 （跳过守卫与全量重写姿势、review.jsonl 禁 append）。作者不得再自改 sc_review；
 姿势被改动即红。**交卷卷须点名带 --src 实跑的读数**，CI 里缺件只算 SKIP。
+
+## 台账一页纸：用 ds90_ledger.py，别拿纯 append 当真值（11-07 裁定⑤ 仓级规矩）
+
+两条合法姿势各一个原语：快照台账 `atomic_write_json()`（tmp+os.replace 全量
+重写，断电不留半截）；流水台账 `append_record()`（必带键）+ 读侧
+`recompute_done()` 按键取最后一条定性，`status="undone"` 撤单。
+**禁止 `set(所有行)` 当 done 集。** 高危名单存量件（acgs_s05 两支 journal、
+gap_scan 五支 STATE、newseed AUDIT/POOL）新改一律迁本库。
+自检：`python3 tools/ds90_ledger.py`。
