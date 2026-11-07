@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""ds_task_upload.py — DS 建 BT 任务正解姿势（案1固化，2026-11-02 zhero 破案）。
+"""ds_task_upload.py — DS 建 BT 任务正解姿势（V5 实测姿势，2026-11-08 定稿）。
 
-破案出处：logs/zhero_upload_case_2026-11-02.md
-  真身 = POST /webapi/entry.cgi/SYNO.DownloadStation2.Task（**非 task.cgi**）
-  源码 = /volume1/@appstore/DownloadStation/ui/download.js QueueAddFileUploader
-  · body 字段：api/version=2/method=create + type='"file"'(JSON 带引号)
-    + file='["torrent"]'（=multipart part 名列表）+ destination(JSON 编码串)
-    + create_list=false + size=<字节> + extract_password
+破案出处：logs/ds119_err119_forensics_2026-11-07.md §9（11-07 同包 A/B 闭环）。
+  真身 = POST /webapi/entry.cgi/SYNO.DownloadStation2.Task?api=…&version=2
+         &method=create&_sid=…（**非 task.cgi**；路由参数全部走 URL query）
+  · **api/version/method/_sid 必须放 URL query**——塞进 multipart body 即被
+    路由层拒回 `{"error":{"code":119}}`，11-07 当日 body 姿势 9 试 9 灭零例外，
+    同包改 query 姿势首发即成（18326/18328 出生件 raw 在案）。
+    本文件 11-02「案1」旧版把这些参数放 body（注释却写"_sid 走 URL query"，
+    文实不符），致上传式 create 历史零成功——11-08 依实测 raw 改正。
+  · body 字段：type='"file"'(JSON 带引号) + file='["torrent"]'
+    （=multipart part 名列表）+ destination(JSON 编码串) + create_list=false
+    + size=<字节> + extract_password + uri='"z"'（出生件字段全集，照抄勿动）
   · 文件 part **name 必须是 "torrent"**（FILEFILEDNAME，写 "file" 必挂 101）
-  · _sid 走 URL query
-  · 旧 101 根因＝v3 task.cgi + 参数姿势混搭；119＝缺 size 类条件参数 **或**
-    同 hash 在 @download/ 有残留目录（删单未清障，案2实证）
+  · 旧 101 根因＝v3 task.cgi + 参数姿势混搭；119 主因＝上述路由参数位置错，
+    「同 hash 在 @download/ 有残留」降级为次要候补（预检保留，只报不清）。
   · 出生秒抢 v2 pause：create 成功 DS 自动开下，v3 pause 慢一步报 103；
     **v2 pause 实测 1 秒内抢停成功**（18245 实证）。
 
@@ -37,13 +41,21 @@ from ds_common import (BASE, CTX, bdecode, bencode, bare_id, login, logout,
 UNFINISHED_CAP = 60  # 满仓线（18240 案实测 403 风险位；队列闸沿用 zhero_upload_fix）
 
 
-def upload_create_raw_shape(sid, fname, fbytes, dest_json, bnd="----DsUp20261102"):
-    """构造正解 multipart 请求（拆出来给 --dry-run 与 --selftest 复用）。"""
+def upload_create_raw_shape(sid, fname, fbytes, dest_json, bnd="----DsUp20261108"):
+    """构造 V5 实测正解 multipart 请求（拆出来给 --dry-run 与 --selftest 复用）。
+
+    11-07 A/B 定稿：路由参数 api/version/method/_sid 走 URL query，body 只留业务
+    字段（含 uri="z"）。路由参数放 body ＝ 119 错姿势（9 试 9 灭），禁止回退。
+    出生件参照：logs/raw_upload_matrix2_2026-11-07.json（V5_query_all_bodyfiled_uri_z
+    → dbid_18326）、tj_subsolo_build6（→ 18328）。
+    """
+    q = urllib.parse.urlencode({
+        "api": "SYNO.DownloadStation2.Task", "version": "2",
+        "method": "create", "_sid": sid})
     fields = {
-        "api": "SYNO.DownloadStation2.Task", "version": "2", "method": "create",
-        "_sid": sid, "type": '"file"', "file": '["torrent"]',
+        "type": '"file"', "file": '["torrent"]',
         "destination": dest_json, "create_list": "false", "size": str(len(fbytes)),
-        "extract_password": '""',
+        "extract_password": '""', "uri": '"z"',
     }
     body = b""
     for k, v in fields.items():
@@ -53,7 +65,7 @@ def upload_create_raw_shape(sid, fname, fbytes, dest_json, bnd="----DsUp20261102
     body += fbytes + ("\r\n--%s--\r\n" % bnd).encode()
     headers = {"Content-Type": "multipart/form-data; boundary=" + bnd,
                "Content-Length": str(len(body))}
-    return BASE + "/entry.cgi/SYNO.DownloadStation2.Task", fields, headers, body
+    return BASE + "/entry.cgi/SYNO.DownloadStation2.Task?" + q, fields, headers, body
 
 
 def upload_post(url, headers, body, timeout=90):
@@ -172,17 +184,21 @@ def selftest():
     ih = hashlib.sha1(bencode(td[b"info"])).hexdigest().upper()
     assert ih == expect_ih, "验包 info_hash 不一致"
     print("selftest[验包] OK ih=%s" % ih[:12])
-    # 2) 请求形状：part 名必须 torrent、type/file 带 JSON 引号、destination JSON 编码、size 在场
+    # 2) 请求形状（V5 实测姿势）：路由参数必须在 query、业务字段带 JSON 引号、part 名必须 torrent
     url, fields, headers, body = upload_create_raw_shape("SID123", "demo.torrent", tor, json.dumps("Downloads/x"))
     assert fields["type"] == '"file"' and fields["file"] == '["torrent"]'
     assert fields["destination"] == '"Downloads/x"' and fields["size"] == str(len(tor))
+    assert fields.get("uri") == '"z"', "V5 出生件必带 uri=\"z\""
     assert 'name="torrent"; filename="demo.torrent"' in body.decode("latin1")
     assert "/entry.cgi/SYNO.DownloadStation2.Task" in url
     assert "task.cgi" not in url  # 案1：非 task.cgi
-    # 反例对照（旧 101 姿势）：part 名写 file → 形状断言应抓出
-    bad = body.decode("latin1").replace('name="torrent"', 'name="file"')
-    assert 'name="file"' in bad  # 模拟旧姿势确会偏离正解（断言形状可比对）
-    print("selftest[姿势形状] OK（part=torrent、JSON 引号、destination 编码、size、entry.cgi 全对）")
+    # 11-07 定谳断言：路由参数只准在 URL query，落回 body 即 119 错姿势，直接红
+    for k in ("api", "version", "method", "_sid"):
+        assert k not in fields, "路由参数 %s 混入 body = 119 错姿势（forensics §9）" % k
+        assert ('name="%s"' % k) not in body.decode("latin1")
+    for frag in ("api=SYNO.DownloadStation2.Task", "version=2", "method=create", "_sid=SID123"):
+        assert frag in url, "URL query 缺 %s" % frag
+    print("selftest[姿势形状] OK（query 路由四参、body 业务字段含 uri=z、part=torrent、entry.cgi 非 task.cgi）")
     # 3) 裸任务号（案2）
     assert bare_id("dbid_18245") == "18245" and bare_id(18232) == "18232"
     print("selftest[裸任务号] OK")
