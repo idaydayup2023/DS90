@@ -25,6 +25,7 @@
 豁免账默认: logs/fbwl_stor_adjudicate_2026-11-07.json（代码运维签核件；--waive none 停用）
 """
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -231,6 +232,18 @@ def selftest():
     return 0
 
 
+def stamp(path):
+    """数据源存证（站长 11-07 21:0x 令）：双读数一律带取数时刻的 mtime+size+sha256。
+    今日两次「快照时点错开导致假红/假绿」（41 条 miss 旧快照案），凡无存证行的读数不算交卷。"""
+    try:
+        st = os.stat(path)
+        h = hashlib.sha256(open(path, "rb").read()).hexdigest()
+        t = datetime.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        return "SOURCE %s mtime=%s size=%d sha256=%s" % (path, t, st.st_size, h)
+    except FileNotFoundError:
+        return "SOURCE %s MISSING" % path
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("rest", nargs="*", help="[review.jsonl] [journal ...]")
@@ -252,6 +265,9 @@ def main():
     if wp and os.path.exists(wp):
         waive = frozenset(json.load(open(wp, encoding="utf-8"))["waive"])
 
+    # 取数前钉存证（mtime 取在读文件之前的时刻，读数与存证同批）
+    for p in [rp, cp] + list(jps) + ([wp] if wp else []):
+        print(stamp(p))
     review_rows = read_jsonl(rp)
     journal_rows = [o for jp in jps for o in read_jsonl(jp)]
     cue_ids = [c["i"] for c in json.load(open(cp, encoding="utf-8"))]
