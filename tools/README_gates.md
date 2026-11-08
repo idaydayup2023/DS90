@@ -124,5 +124,25 @@ EN 行/时间轴/Style 头零改动。
 每件全量旧↔新逐 cue 对拍，抽样只用于新文正确性人工复核面。
 
 `GO` 用法：`emb_gate_postcheck_v1_20261108.py GO --batch-name <en.dotted> --journal <path>
---trash /volume1/homes/_Trash/<batch> [--only f1 f2 ...]`；`_Trash` 批次名英文点号化，
+--trash /homes/_Trash/<batch> [--only f1 f2 ...]`；`_Trash` 批次名英文点号化，
 df 先核落 volume1（11-04 规矩，禁 md0）。两遍独立新连接读数须逐位一致，任何红 exit 2 停手报站长。
+
+## inline_bilingual 特例形制（站长 11-08 特例批裁定，Spit 案）
+
+合并双语行件（单条 Dialogue 内 `{\r中文}中文段\N{\rEnglish_N}英文段`、Style 全列单一）
+天然违反「cue 偶=中文行」——**豁免生效唯一通道＝清单逐件显式声明**
+`file_formats{"<file>": "inline_bilingual"}` 或 `item.format` 同值（两源自洽断言）。
+**双向 fail-closed**：声明而实测不符＝红；实测符合而未声明＝红停报，绝不自动豁免。
+
+四条形制断言（对声明件替代 ①奇偶自证，序号连续照跑）：
+inline-a Style 段全文件零改动；inline-b 每条英文段逐字同（闸门侧独立两段式解析器自切，
+不信任改写方切分）；inline-c 每行结构不变量（`\N`/`{\r`/override 标签集合旧↔新一致）；
+inline-d 改动面 ⊆ 清单 cue 集。`new_zh_semantics="full_line"`（整行语义，cur_zh 用
+`Dialogue:` 整行）随清单顶层与条目自洽断言。selftest 含 inline 六例（好例+五种破坏注入）。
+
+## 目录列举定式（11-08 PR#17 教训固化）
+
+群晖 FTPd 对**目录名含 `[ ]`** 的路径，绝对路径 MLSD/LIST 一律返 0 条（e1 作用域 50 目录
+21 个中招）；CWD 进目录再列完全正常。器具定式：一律 `CWD` 进目录再 `MLSD ""`，空退
+`LIST ""`，两路皆空即抛（fail-closed）——严禁拿空表过「目录无残留」（空表假绿教训）。
+执行侧 `zz_auto_land.listdir` 早有同款定式，闸门侧自此同步。
