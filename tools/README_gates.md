@@ -94,3 +94,35 @@ sha 前缀与 mtime（与流水线所报互钉）。
 **禁止 `set(所有行)` 当 done 集。** 高危名单存量件（acgs_s05 两支 journal、
 gap_scan 五支 STATE、newseed AUDIT/POOL）新改一律迁本库。
 自检：`python3 tools/ds90_ledger.py`。
+
+## emb 元话语修复写库后验：ass 版五断言（站长 11-08 四点全批，首批 emb_landing 起用）
+
+`.ai.ass` 双行块（Dialogue 全局序号，偶=中文行/奇=EN 伴侣），无 srt 的 `i` 序号，
+故五断言走 **ass 版**（区别于 FBWL 的 .srt 版）。器具两件套，只准代码运维改：
+
+- `tools/emb_gate_leaklex_20261108.py` —— **独立泄漏词表（唯一真源·落仓固化）**。
+  站长 11-08 第 1 条③：词表闸门侧自建、落仓、**全站后验以此为准，跑批中途不得换表**；
+  换表＝向 version3 再提 PR 升 `LEX_VERSION`，旧读数作废重跑。版本号随每轮 round 卷面记录。
+- `tools/emb_gate_postcheck_v1_20261108.py` —— 闸门侧连库后验（FTP 新连接 RETR + 本地实算
+  sha，不走作者代码路径）。`GO` 前必先 `selftest` 全绿（零连库，验断言器本身：泄漏/占位/
+  畸形标签/越白名单/纯标点五类注入故障必红、正常行不误伤）。
+
+**ass 版五断言**（站长四条全批）：①Dialogue 全局序号连续 + 奇偶自证（偶=中文行）
+②新中文行非空/非纯标点/占位符残留=0（限本批新写行；全卷占位数旧↔新只断不增——
+非本批半件本就占位）③新中文行无元话语/思考流（走上面的落仓词表，不复用作者 leakscan）
+④tag 白名单 `<i>/<b>/<u>/<font color>/</font>` + BROKEN 畸形开标签两段式解析（10-22 教训，
+不与改写方共用正则）⑤去标签后全文件文字逐字相同、豁免面恰为清单本批中文行；
+EN 行/时间轴/Style 头零改动。
+
+**完卷三件套**＝sha 全值 + size + Dialogue 序号数（srt 的 cue 数断言不适用 .ass）。
+
+**TOCTOU 三断言**（站长第 3 条 + 硬规矩）：`_Trash` 留底逐条==清单 `cur_zh`；
+`journal` 改前 sha==闸门侧 `_Trash` 实拉、改后 sha==库内实拉；改动面 ⊆ 清单中文行
+（以「留底按清单正向映射重建 ≡ 库内新件」字节级还原强化＝FBWL④ 定式）。
+**留底对拍一旦红（区间内件被动过）＝该件即停报站长，由执行方重编该件清单——
+闸门侧不改写清单内容，只判红绿。** 续批口径：10 重点疑点 + PREFIX 9 条一律必查，
+每件全量旧↔新逐 cue 对拍，抽样只用于新文正确性人工复核面。
+
+`GO` 用法：`emb_gate_postcheck_v1_20261108.py GO --batch-name <en.dotted> --journal <path>
+--trash /volume1/homes/_Trash/<batch> [--only f1 f2 ...]`；`_Trash` 批次名英文点号化，
+df 先核落 volume1（11-04 规矩，禁 md0）。两遍独立新连接读数须逐位一致，任何红 exit 2 停手报站长。
