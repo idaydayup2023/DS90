@@ -39,6 +39,7 @@ pub fn config(root: &Path, source: &Path, destination: &Path) -> Config {
             asr: None,
             pgs_ocr: None,
             output_backup_root: None,
+            artifact_output_extension: "srt".into(),
         },
         translation: TranslationConfig {
             provider: LlmProvider::Ollama,

@@ -15,8 +15,9 @@ use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 use crate::artifact::{
-    ARTIFACT_SCHEMA, ArtifactPaths, SubtitleArtifact, SubtitleSourceEvidence, artifact_paths,
-    read_ready_artifact, validate_manifest_for_publish, video_identity,
+    ARTIFACT_SCHEMA, ArtifactPaths, KNOWN_ARTIFACT_OUTPUT_EXTENSIONS, SubtitleArtifact,
+    SubtitleSourceEvidence, artifact_paths_with_extension, read_ready_artifact,
+    validate_manifest_for_publish, video_identity,
 };
 use crate::config::{Config, ExternalWorkerConfig, LlmProvider, TranslationConfig};
 use crate::state::{ClaimResult, StateStore, process_owner};
@@ -200,7 +201,11 @@ fn process_video(
         return Ok(source.map_or_else(
             || VideoOutcome::Pending("no_existing_source".into()),
             |source| {
-                let paths = artifact_paths(&video.path).expect("validated video path");
+                let paths = artifact_paths_with_extension(
+                    &video.path,
+                    &cfg.subtitles.artifact_output_extension,
+                )
+                .expect("validated video path and artifact extension");
                 println!(
                     "subtitles plan video={} source={} output={}",
                     video.path, source.kind, paths.output
@@ -271,7 +276,8 @@ fn process_video(
             &serde_json::json!({"cues": reparsed.len(), "reviewed_cues": reviewed_cues}),
         )?;
 
-        let paths = artifact_paths(&video.path)?;
+        let paths =
+            artifact_paths_with_extension(&video.path, &cfg.subtitles.artifact_output_extension)?;
         let output_bytes = output.into_bytes();
         let output_sha256 = sha256_bytes(&output_bytes);
         let source_sha256 = sha256_bytes(&source.bytes);
@@ -1351,7 +1357,11 @@ fn incomplete_marker(
 fn source_rank(path: &str, video_stem: &str) -> Option<(u32, &'static str)> {
     let name = basename(path).to_ascii_lowercase();
     let stem = video_stem.to_ascii_lowercase();
-    if name.ends_with(".ai.srt") || name.ends_with(".subtrans.json") {
+    if KNOWN_ARTIFACT_OUTPUT_EXTENSIONS
+        .iter()
+        .any(|extension| name.ends_with(&format!(".ai.{extension}")))
+        || name.ends_with(".subtrans.json")
+    {
         return None;
     }
     if name == format!("{stem}.en.srt") || name == format!("{stem}.eng.srt") {

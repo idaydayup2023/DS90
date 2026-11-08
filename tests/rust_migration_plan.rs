@@ -389,6 +389,7 @@ fn config_for(
             asr: None,
             pgs_ocr: None,
             output_backup_root: None,
+            artifact_output_extension: "srt".to_owned(),
         },
         translation: TranslationConfig {
             provider: LlmProvider::Ollama,
