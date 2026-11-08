@@ -61,14 +61,50 @@ pub struct ArtifactPaths {
     pub manifest: String,
 }
 
+/// Extension of the `.ai.<ext>` subtitle output the engine publishes unless
+/// `subtitles.artifact_output_extension` says otherwise.
+pub const DEFAULT_ARTIFACT_OUTPUT_EXTENSION: &str = "srt";
+
+/// Output extensions the read side recognizes. `.ai.ass` outputs are produced
+/// by the roster tooling under `tools/`, so the engine must see them as ready
+/// artifacts (and must never treat them as blind-overwrite candidates).
+pub const KNOWN_ARTIFACT_OUTPUT_EXTENSIONS: [&str; 2] = ["srt", "ass"];
+
+/// Validate a `.ai.<ext>` output extension: 1-8 lowercase ASCII letters or
+/// digits, no leading dot, no separators. Keeps a configured value from
+/// ever steering the writer outside the `<stem>.ai.<ext>` naming shape.
+fn validate_artifact_output_extension(extension: &str) -> Result<()> {
+    let ok = !extension.is_empty()
+        && extension.len() <= 8
+        && extension
+            .chars()
+            .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit());
+    if !ok {
+        bail!(
+            "subtitle artifact output extension {extension:?} must be 1-8 lowercase ASCII letters or digits without a dot"
+        );
+    }
+    Ok(())
+}
+
 pub fn artifact_paths(video_path: &str) -> Result<ArtifactPaths> {
+    artifact_paths_with_extension(video_path, DEFAULT_ARTIFACT_OUTPUT_EXTENSION)
+}
+
+/// Artifact paths for one concrete output extension (no dot, e.g. `srt` or
+/// `ass`). The manifest name always tracks the output it vouches for.
+pub fn artifact_paths_with_extension(
+    video_path: &str,
+    output_extension: &str,
+) -> Result<ArtifactPaths> {
+    validate_artifact_output_extension(output_extension)?;
     let path = Path::new(video_path);
     let stem = path
         .file_stem()
         .and_then(|value| value.to_str())
         .context("video file name is not valid UTF-8")?;
     let parent = path.parent().and_then(Path::to_str).unwrap_or("");
-    let output_name = format!("{stem}.ai.srt");
+    let output_name = format!("{stem}.ai.{output_extension}");
     let output = if parent.is_empty() {
         output_name
     } else {
@@ -98,11 +134,34 @@ pub fn identity(path: &str, size: u64, modified: Option<u64>) -> String {
     hex::encode(digest.finalize())
 }
 
+/// Read the ready artifact for a video, recognizing every known output
+/// form. Candidates are probed in `KNOWN_ARTIFACT_OUTPUT_EXTENSIONS` order
+/// and the first candidate with any trace (output or manifest) owns the
+/// verdict. That keeps the historical single-form behavior exactly for
+/// libraries that only ever held `.ai.srt` pairs, while roster-produced
+/// `.ai.ass` pairs are honored whenever no `.ai.srt` trace exists.
 pub fn read_ready_artifact(
     storage: &dyn Storage,
     video: &FileEntry,
 ) -> Result<Option<SubtitleArtifact>> {
-    let paths = artifact_paths(&video.path)?;
+    for extension in KNOWN_ARTIFACT_OUTPUT_EXTENSIONS {
+        let paths = artifact_paths_with_extension(&video.path, extension)?;
+        if storage.exists(&paths.output)? || storage.exists(&paths.manifest)? {
+            return validate_ready_manifest(storage, video, &paths);
+        }
+    }
+    eprintln!(
+        "subtitle artifact not_ready video={} reason=missing output_exists=false manifest_exists=false",
+        video.path
+    );
+    Ok(None)
+}
+
+fn validate_ready_manifest(
+    storage: &dyn Storage,
+    video: &FileEntry,
+    paths: &ArtifactPaths,
+) -> Result<Option<SubtitleArtifact>> {
     let output_exists = storage.exists(&paths.output)?;
     let manifest_exists = storage.exists(&paths.manifest)?;
     if !output_exists || !manifest_exists {
@@ -215,4 +274,131 @@ pub fn validate_manifest_for_publish(manifest: &SubtitleArtifact) -> Result<()> 
         bail!("subtitle manifest is missing required identity fields");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::{LocalStorage, Storage};
+    use std::io::Cursor;
+
+    fn sha(bytes: &[u8]) -> String {
+        let mut digest = Sha256::new();
+        digest.update(bytes);
+        hex::encode(digest.finalize())
+    }
+
+    fn entry(path: &str, bytes: &[u8]) -> FileEntry {
+        FileEntry {
+            path: path.to_owned(),
+            size: bytes.len() as u64,
+            is_dir: false,
+            modified: None,
+        }
+    }
+
+    fn ready_manifest(video: &FileEntry, output_sha256: &str) -> SubtitleArtifact {
+        SubtitleArtifact {
+            schema: ARTIFACT_SCHEMA,
+            status: "ready".into(),
+            video_path: video.path.clone(),
+            video_identity_sha256: video_identity(video),
+            source_sha256: "a".repeat(64),
+            output_sha256: output_sha256.into(),
+            cache_key: "cache-key".into(),
+            acquisition_key: "acquisition-key".into(),
+            source_kind: "embedded".into(),
+            source_path: None,
+            source_evidence: None,
+            translation_quality_log: vec![],
+            created_unix_seconds: 1,
+        }
+    }
+
+    #[test]
+    fn default_paths_keep_the_historical_ai_srt_naming() {
+        let paths = artifact_paths("TV/Show/movie.mkv").unwrap();
+        assert_eq!(paths.output, "TV/Show/movie.ai.srt");
+        assert!(paths.manifest.starts_with("TV/Show/movie.ai.srt."));
+        assert!(paths.manifest.ends_with(".json"));
+    }
+
+    #[test]
+    fn ass_extension_produces_the_ass_form() {
+        let paths = artifact_paths_with_extension("movie.mkv", "ass").unwrap();
+        assert_eq!(paths.output, "movie.ai.ass");
+        assert!(paths.manifest.starts_with("movie.ai.ass."));
+        assert!(paths.manifest.ends_with(".json"));
+    }
+
+    #[test]
+    fn unsafe_output_extensions_are_rejected() {
+        for bad in ["", "SRT", "s rt", "sr.t", "srt/", ".srt", "abcdefghij"] {
+            assert!(
+                artifact_paths_with_extension("movie.mkv", bad).is_err(),
+                "extension {bad:?} must be rejected"
+            );
+        }
+    }
+
+    fn seeded_storage() -> (tempfile::TempDir, LocalStorage) {
+        let scratch = tempfile::tempdir().unwrap();
+        let storage = LocalStorage::new(scratch.path()).unwrap();
+        storage.create_dir_all("TV/Show").unwrap();
+        (scratch, storage)
+    }
+
+    fn upload(storage: &dyn Storage, path: &str, bytes: &[u8]) {
+        storage
+            .upload_atomic(path, &mut Cursor::new(bytes.to_vec()))
+            .unwrap();
+    }
+
+    #[test]
+    fn ready_ass_pair_is_recognized_when_no_srt_trace_exists() {
+        let (_scratch, storage) = seeded_storage();
+        let video_path = "TV/Show/movie.mkv";
+        let output_bytes = b"1\n00:00:01,000 --> 00:00:02,000\nhello\n".to_vec();
+        let video = entry(video_path, b"video-bytes");
+        let paths = artifact_paths_with_extension(video_path, "ass").unwrap();
+        upload(&storage, &paths.output, &output_bytes);
+        let manifest = ready_manifest(&video, &sha(&output_bytes));
+        upload(
+            &storage,
+            &paths.manifest,
+            &serde_json::to_vec(&manifest).unwrap(),
+        );
+        // Nothing exists for the srt candidate, so the ass pair must count.
+        let ready = read_ready_artifact(&storage, &video).unwrap();
+        assert!(ready.is_some(), "ass pair must be recognized as ready");
+        assert_eq!(ready.unwrap().cache_key, "cache-key");
+    }
+
+    #[test]
+    fn missing_pair_yields_not_ready() {
+        let (_scratch, storage) = seeded_storage();
+        let video = entry("TV/Show/movie.mkv", b"video-bytes");
+        assert!(read_ready_artifact(&storage, &video).unwrap().is_none());
+    }
+
+    #[test]
+    fn partial_srt_trace_owns_the_verdict_over_a_valid_ass_pair() {
+        let (_scratch, storage) = seeded_storage();
+        let video_path = "TV/Show/movie.mkv";
+        let video = entry(video_path, b"video-bytes");
+        // A half-published srt (output without its manifest) keeps the
+        // historical partial_publish verdict; it is not rescued by another form.
+        let srt = artifact_paths(video_path).unwrap();
+        upload(&storage, &srt.output, b"partial");
+        let ass_bytes = b"1\n00:00:01,000 --> 00:00:02,000\nhello\n".to_vec();
+        let ass = artifact_paths_with_extension(video_path, "ass").unwrap();
+        upload(&storage, &ass.output, &ass_bytes);
+        let manifest = ready_manifest(&video, &sha(&ass_bytes));
+        upload(
+            &storage,
+            &ass.manifest,
+            &serde_json::to_vec(&manifest).unwrap(),
+        );
+        assert!(read_ready_artifact(&storage, &video).unwrap().is_none());
+    }
 }

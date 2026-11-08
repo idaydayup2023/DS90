@@ -239,6 +239,12 @@ pub struct SubtitleConfig {
     /// publish, so an un-backuped finished output is never overwritten.
     #[serde(default)]
     pub output_backup_root: Option<String>,
+    /// Output extension (no leading dot) the engine publishes its `.ai.<ext>`
+    /// subtitle artifact under. Reader-side readiness checks always recognize
+    /// the known forms `srt` and `ass` in addition, so roster-produced
+    /// `.ai.ass` outputs are honored regardless of this setting.
+    #[serde(default = "default_artifact_output_extension")]
+    pub artifact_output_extension: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -467,6 +473,22 @@ impl Config {
             || self.subtitles.external_process_timeout_seconds == 0
         {
             bail!("translation and external process timeouts must be greater than zero");
+        }
+        let artifact_extension = self
+            .subtitles
+            .artifact_output_extension
+            .trim_start_matches('.');
+        if artifact_extension.is_empty()
+            || artifact_extension.len() > 8
+            || !artifact_extension
+                .chars()
+                .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+            || artifact_extension != self.subtitles.artifact_output_extension
+        {
+            bail!(
+                "subtitles.artifact_output_extension must be 1-8 lowercase ASCII letters or digits without a dot, got {:?}",
+                self.subtitles.artifact_output_extension
+            );
         }
         if self.translation.max_batch_chars == 0
             || self.translation.max_response_bytes < 1024
@@ -1153,6 +1175,10 @@ fn default_alignment_max_output_tokens() -> u32 {
 }
 fn default_auto_apply_confidence() -> f32 {
     0.95
+}
+
+fn default_artifact_output_extension() -> String {
+    "srt".to_owned()
 }
 
 fn default_video_extensions() -> Vec<String> {

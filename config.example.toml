@@ -73,6 +73,10 @@ external_process_timeout_seconds = 7200
 # 归档为 <stem>.ai.srt.<team>.predel.<ts>.bak 并校验哈希，归档失败即中止发布。
 # 取消注释可把归档集中到指定根目录（保留相对路径）；注释掉则归档落在终稿旁边。
 # output_backup_root = "subtitle-overwrite-archives"
+# 引擎发布 .ai.<ext> 终稿使用的扩展名（默认 srt）。读取侧一律并认已知形
+# srt 与 ass：名册工具产的 .ai.ass 终稿+manifest 会被直接承认为 ready，
+# 不必改此项；只有要让引擎直接发布 .ass 时才取消注释。
+# artifact_output_extension = "srt"
 
 [subtitles.external_srt_validation]
 # 有内置英文字幕时必须与外置英文 SRT 交叉验证；没有内置英文时直接信任
