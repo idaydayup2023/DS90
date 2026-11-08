@@ -58,22 +58,33 @@ def conn():
 
 
 def listing(d):
+    """目录清单。11-08 实测坑：群晖 FTPd 对**目录名含 [ ]** 的路径，绝对路径 MLSD/LIST
+    一律返 0 条（e1 作用域 50 目录里 21 个中招），而 CWD 进目录再列完全正常。
+    绝对路径直列会让 size 断言变红（尚可发现），但「目录无残留」拿到空表＝**空表假绿**。
+    故：一律 CWD 进目录再列；MLSD 空则退 LIST；两路皆空即抛（fail-closed，禁空表过关）。"""
     f = conn()
     try:
+        try:
+            f.cwd(d)
+        except ftplib.error_perm as e:
+            raise AssertionError("CWD 失败（目录不存在或不可达）%s: %s" % (d, e))
         out = {}
-        for name, facts in f.mlsd(d):
+        for name, facts in f.mlsd(""):
+            facts = dict(facts)
             if facts.get("type") != "file":
                 continue
             out[name] = {"size": int(facts.get("size", -1)), "modify": facts.get("modify", ""),
                          "owner": facts.get("unix.owner", "")}
         if not out:
             rows = []
-            f.dir(d, rows.append)
+            f.dir("", rows.append)
             for r in rows:
                 parts = r.split()
-                if len(parts) >= 9:
+                if len(parts) >= 9 and parts[0][0] in "-l":
                     out[parts[-1]] = {"size": int(parts[4]), "modify": " ".join(parts[5:8]),
                                       "owner": parts[2]}
+        if not out:
+            raise AssertionError("目录列空（MLSD/LIST 双路皆空），无法核 size/残留: %s" % d)
         return out
     finally:
         f.quit()
@@ -229,7 +240,12 @@ def check_new_text(g, base, text, side):
     g.ck("③无强元话语[%s]" % side, not hs, got=",".join(hs) or None, expected="0", file=base)
     bw = broken_tags(text)
     g.ck("④无BROKEN畸形开标签[%s]" % side, not bw, got=bw or None, expected="[]", file=base)
-    unknown = [t for t in TAG_WELL.findall(text) if not TAG_WHITELIST.match(t.strip().lower())]
+    # TAG_WELL 连尖角括号一起吐出（`<i>`），而 TAG_WHITELIST 表体是**去括号的内文形**
+    # （`/?[ibuf]`、`/font`、`font color="#hex6"`）——原样喂入则永不命中＝任何带 tag 的
+    # 行必红（11-08 e1 实测 5 件 8 条误红）。表体冻结不动（站长「中途不得换表」），
+    # 只修正调用侧：剥掉尖角括号再按表体口径匹配。
+    unknown = [t for t in TAG_WELL.findall(text)
+               if not TAG_WHITELIST.match(t.strip().strip("<>").lower())]
     g.ck("④tag白名单内[%s]" % side, not unknown, got=",".join(unknown) or None,
          expected="⊆{i,b,u,font color,#font}", file=base)
     weak = [m.group(0) for m in LEAK_WEAK.finditer(st)]
@@ -377,10 +393,16 @@ def selftest():
     good = HDR + ("Dialogue: 0,0:00:01.00,0:00:02.00,Chinese,,0,0,0,,All right, man.\n"
                   "Dialogue: 0,0:00:01.00,0:00:02.00,Chinese,,0,0,0,,没问题，伙计。\n")
     cases = [("good", good, False),
+             # 白名单回归闸：库内真实 tag 形（A.Complete.Unknown 等件实拉所见）必须判绿。
+             # 11-08 之前这条会误红——调用侧把尖角括号一起喂给白名单，表体永不命中。
+             ("good_tags", good.replace("没问题，伙计。",
+                                        '<i><font color="80FFFF">没问题</i></font>，伙计。'), False),
              ("leak", good.replace("没问题，伙计。", "没问题，翻译如下："), True),
              ("placeholder", good.replace("没问题，伙计。", "[中文翻译]"), True),
              ("broken", good.replace("没问题，伙计。", "<i没问题，伙计。</i>"), True),
              ("badtag", good.replace("没问题，伙计。", '<blink>没问题</blink>'), True),
+             ("badtag_attr", good.replace("没问题，伙计。", '<font color=red>没问题</font>'), True),
+             ("badtag_attr2", good.replace("没问题，伙计。", '<font size="3">没问题</font>'), True),
              ("punct", good.replace("没问题，伙计。", "……！"), True)]
     for name, blob, exp_fail in cases:
         gg = Gate()
