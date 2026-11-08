@@ -146,3 +146,19 @@ inline-d 改动面 ⊆ 清单 cue 集。`new_zh_semantics="full_line"`（整行�
 21 个中招）；CWD 进目录再列完全正常。器具定式：一律 `CWD` 进目录再 `MLSD ""`，空退
 `LIST ""`，两路皆空即抛（fail-closed）——严禁拿空表过「目录无残留」（空表假绿教训）。
 执行侧 `zz_auto_land.listdir` 早有同款定式，闸门侧自此同步。
+
+## 清单落库前 LIST 可达性预检（站长 11-08 第 2 单，`ds90_list_preflight_20261108.py`）
+
+扫描/读判清单曾把拼错目录（`Grey's.Anatomy`，真目录 `Greys.Anatomy`）静默写进清单，
+取件才暴雷。与上节 MLSD 空表同族：**路径真实性必须对库实测，不得信生成侧**。
+
+- 用法：`python3 ds90_list_preflight_20261108.py <清单.json|清单.txt|-> [--out 报告.json]`；
+  故障注入自检 `--dry-selftest`（11 例，不连库）。
+- 口径：目录 CWD 实测可达＝绿，不可达＝红并**从最深可达祖先定位断点成分**，对断点父目录
+  清单给近邻候选（difflib + 撇号/空白变体，`Grey's.Anatomy→Greys.Anatomy` 直读命中）；
+  文件＝父目录可达 + basename 在列；纯文本行不猜形（先目录后文件，影视目录名满点禁用
+  splitext 启发）；JSON 清单信任 `dir*`/`file*` 键、`file` 可为相对 dir 文件名（landing list 定式）。
+- fail-closed：任一红＝exit 2 **清单不得落库**；空表只警不红（存在性预检，空表禁过关仍归后验）；
+  连接失败＝exit 3。
+- 已实测：v4 写库清单 272 目录/274 文件（含 `[TGx]` 方括号件）PASS，报告
+  `logs/landing_2026-11-08/preflight_v4_2026-11-08.json`。
