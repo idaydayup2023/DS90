@@ -162,3 +162,26 @@ inline-d 改动面 ⊆ 清单 cue 集。`new_zh_semantics="full_line"`（整行�
   连接失败＝exit 3。
 - 已实测：v4 写库清单 272 目录/274 文件（含 `[TGx]` 方括号件）PASS，报告
   `logs/landing_2026-11-08/preflight_v4_2026-11-08.json`。
+
+## 样2 非中文行白名单（双闸 + 背书，站长 11-08 18:2x 批「品牌不译」形制）
+
+`fbwl_stor_gate_20261107.py` 第 2 样拦「无汉字且无数字」的中文行（占位符/纯标点）。
+但存在正当例外：品牌名、专有唤醒词等**不译**条——如 `P77.2025` 的 `Siri`（同轴英文行逐字即
+`Siri`，中文行镜像英文行就是正译）。这类只能**逐条点名放行**，故加白名单，用法：
+
+```
+python3 tools/fbwl_stor_gate_20261107.py <workdir> [waive.json] --allow <nonhan_allow.json>
+```
+
+- **双闸**（`allow_hit`，两道缺一即 FAIL）：
+  ① 同轴配对英文行**逐字** == `new_zh_fingerprint`（review.jsonl 的 `en`，不裁剪、不剥标签、不去空格）；
+  ② 中文行**逐字** == 同一指纹，且 `(file_prefix, cue)` 精确命中——不许按件/按目录泛化。
+- **背书闸**（两道都核，纵深防御）：顶层与条目 `approved_by` 必须 == `DS90站长` 且 `quote` 非空。
+  交付方不得自行加条；新增只认站长原话。
+- **fail-closed**：白名单里打不到任何样2命中的条目（陈旧/夹带）判 FAIL（`2白名单空转条目`）；
+  缺背书的条目在装载期即丢弃并计入 `2白名单丢弃条目` 并 FAIL，不许静默忽略。
+- **正反例绑 fixture**：`tools/_gate_nonhan_allow_fixtures_20261108.json`（阳性 1 / 阴性 9：
+  句点差、件名差、cue 冒名、自签、空 quote、顶层非站长、空指纹、无白名单同形件）。
+  `python3 tools/fbwl_stor_gate_20261107.py --selftest` 必须双 PASS 才算器具合格。
+- 与 `waive.json` 分工：waive 只管第 3 样（思考流启发式人工判），白名单只管第 2 样；互不越界。
+- 本件属闸门，**被闸的人不许改闸**，仅 代码运维 可改。
