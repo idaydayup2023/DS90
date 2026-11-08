@@ -1,0 +1,71 @@
+{
+ "_meta": {
+  "purpose": "样2（纯标点/无汉字占位）非中文行白名单双闸正反例。PR 合格线：阳性恰 1 条例外成立，其余阴性全部拦住。",
+  "case_origin": "half36 档3b P77.2025 品牌不译 3 条（站长 2026-11-08 18:2x 批准）；阴性为闸门必须拦住的伪冒形",
+  "date": "2026-11-08",
+  "maintainer": "代码运维（被闸的人不许改闸）"
+ },
+ "cases": [
+  {
+   "name": "阳性-真白名单：同轴英文行逐字==中文行==指纹",
+   "row": {"i": 28, "file": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "zh": "Siri", "en": "Siri"},
+   "allow": [{"file_prefix": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "new_zh_fingerprint": "Siri", "reason": "品牌名不译（语音助手唤醒词）", "approved_by": "DS90站长", "quote": "站长落刀批复原话节选"}],
+   "expect_exempt": true
+  },
+  {
+   "name": "阴性-同轴英文行多一个句点（闸①）",
+   "row": {"i": 28, "file": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "zh": "Siri", "en": "Siri."},
+   "allow": [{"file_prefix": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "new_zh_fingerprint": "Siri", "approved_by": "DS90站长", "quote": "x"}],
+   "expect_exempt": false
+  },
+  {
+   "name": "阴性-中文行被换成别的品牌（闸②）",
+   "row": {"i": 28, "file": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "zh": "Alexa", "en": "Siri"},
+   "allow": [{"file_prefix": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "new_zh_fingerprint": "Siri", "approved_by": "DS90站长", "quote": "x"}],
+   "expect_exempt": false
+  },
+  {
+   "name": "阴性-cue 张冠李戴（657 冒 656）",
+   "row": {"i": 28, "file": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 657, "zh": "Siri", "en": "Siri"},
+   "allow": [{"file_prefix": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "new_zh_fingerprint": "Siri", "approved_by": "DS90站长", "quote": "x"}],
+   "expect_exempt": false
+  },
+  {
+   "name": "阴性-件名不同目录同名（file_prefix 不命中）",
+   "row": {"i": 28, "file": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.ass", "cue": 656, "zh": "Siri", "en": "Siri"},
+   "allow": [{"file_prefix": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "new_zh_fingerprint": "Siri", "approved_by": "DS90站长", "quote": "x"}],
+   "expect_exempt": false
+  },
+  {
+   "name": "阴性-条目自签（approved_by 非站长）",
+   "row": {"i": 28, "file": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "zh": "Siri", "en": "Siri"},
+   "allow": [{"file_prefix": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "new_zh_fingerprint": "Siri", "approved_by": "字幕B线", "quote": "我自己批的"}],
+   "expect_exempt": false
+  },
+  {
+   "name": "阴性-站长背书无原话（quote 空）",
+   "row": {"i": 28, "file": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "zh": "Siri", "en": "Siri"},
+   "allow": [{"file_prefix": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "new_zh_fingerprint": "Siri", "approved_by": "DS90站长", "quote": "   "}],
+   "expect_exempt": false
+  },
+  {
+   "name": "阴性-整份白名单顶层 approved_by 缺失",
+   "row": {"i": 28, "file": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "zh": "Siri", "en": "Siri"},
+   "top_approved_by": "字幕B线",
+   "allow": [{"file_prefix": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "new_zh_fingerprint": "Siri", "approved_by": "DS90站长", "quote": "x"}],
+   "expect_exempt": false
+  },
+  {
+   "name": "阴性-指纹为空串（不许用空指纹通吃）",
+   "row": {"i": 28, "file": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "zh": "", "en": ""},
+   "allow": [{"file_prefix": "P77.2025.1080p.Filipino.WEB-DL.HEVC.x265.BONE.ai.srt", "cue": 656, "new_zh_fingerprint": "Siri", "approved_by": "DS90站长", "quote": "x"}],
+   "expect_exempt": false
+  },
+  {
+   "name": "阴性-未提供白名单时的同形件（须仍拦）",
+   "row": {"i": 31, "file": "Other.2025.1080p.ai.srt", "cue": 12, "zh": "OK", "en": "OK"},
+   "allow": [],
+   "expect_exempt": false
+  }
+ ]
+}

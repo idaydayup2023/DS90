@@ -12,8 +12,15 @@
   5 i 连续 1..N cues.json 的 i 必须恰为 1..N 连续无缺无重 → FAIL
 参考行（不拦五样，但 STOR 时 miss 应为 0，读数给站长）：miss 残留数、journal 对账。
 
+样2 非中文行白名单（站长 11-08 18:2x 批「品牌不译」形制；被闸的人不许改闸，本件仅代码运维可改）：
+  第三/四个入参可给 --allow <白名单.json>，条目须同时过双闸才豁免样2：
+    闸①同轴配对英文行逐字 == new_zh_fingerprint（review.jsonl 的 en 逐字，不裁不剥标签）
+    闸②中文行逐字 == new_zh_fingerprint，且 (file_prefix, cue) 精确命中
+    外加背书闸：条目 approved_by == "DS90站长" 且 quote 非空；顶层 approved_by 同上。
+  fail-closed：白名单里打不着任何样2命中的条目（空转/陈旧）判 FAIL，防夹带。
+
 只读器具，不改任何被检件。用法:
-  python3 tools/fbwl_stor_gate_20261107.py [workdir=tmp_fbwl_work/fbwl_run]
+  python3 tools/fbwl_stor_gate_20261107.py [workdir=tmp_fbwl_work/fbwl_run] [waive.json] [--allow nonhan_allow.json]
 
 双读数存证（站长 11-07 21:0x 令）：输出头部逐件印 SOURCE 行（mtime+size+sha256），
 无存证行的读数不算交卷——今日两次「快照时点错开导致假红/假绿」（41 条 miss 旧快照案）。
@@ -25,10 +32,74 @@ import os
 import re
 import sys
 
-W = sys.argv[1] if len(sys.argv) > 1 else "tmp_fbwl_work/fbwl_run"
+def _split_argv(argv):
+    """位置参 [workdir] [waive.json] + 开关 --allow <path>；返回 (workdir, waive, allow)。"""
+    pos, allow = [], None
+    it = iter(range(1, len(argv)))
+    for k in it:
+        if argv[k] == "--allow":
+            allow = argv[k + 1] if k + 1 < len(argv) else None
+            next(it, None)
+        elif argv[k] == "--selftest":
+            pass
+        else:
+            pos.append(argv[k])
+    return (pos[0] if pos else "tmp_fbwl_work/fbwl_run", pos[1] if len(pos) > 1 else None, allow)
+
+
+W, _WAIVE_ARG, ALLOW_ARG = _split_argv(sys.argv)
 WAIVE = set()
-if len(sys.argv) > 2:                      # 人工判豁免账（代码运维签核），仅第3样生效
-    WAIVE = set(json.load(open(sys.argv[2], encoding="utf-8"))["waive"])
+if _WAIVE_ARG:                       # 人工判豁免账（代码运维签核），仅第3样生效
+    WAIVE = set(json.load(open(_WAIVE_ARG, encoding="utf-8"))["waive"])
+
+
+def load_allow(path):
+    """样2 白名单读入并做背书闸；不合格条目直接丢弃（fail-closed，宁 FAIL 不误放）。"""
+    if not path:
+        return None, []
+    doc = json.load(open(path, encoding="utf-8"))
+    dropped = []
+    if doc.get("approved_by") != "DS90站长":
+        return doc, ["顶层 approved_by 非 DS90站长 → 整份白名单不生效"]
+    keep = []
+    for a in doc.get("allow", []):
+        why = []
+        if a.get("approved_by") != "DS90站长":
+            why.append("条目 approved_by 非站长")
+        if not str(a.get("quote", "")).strip():
+            why.append("quote 为空")
+        if not str(a.get("new_zh_fingerprint", "")):
+            why.append("指纹为空")
+        if why:
+            dropped.append("%s#%s: %s" % (a.get("file_prefix"), a.get("cue"), "/".join(why)))
+        else:
+            keep.append(a)
+    doc["allow"] = keep
+    return doc, dropped
+
+
+ALLOW, ALLOW_DROPPED = load_allow(ALLOW_ARG)
+
+
+def allow_hit(row):
+    """样2 双闸：返回 (是否豁免, 依据/不成立原因)。背书闸在此再核一遍（纵深防御，
+    与 load_allow 双保险——任何一道漏了都不许放行）。"""
+    if ALLOW is None:
+        return False, "未提供 --allow 白名单"
+    if ALLOW.get("approved_by") != "DS90站长":
+        return False, "白名单顶层 approved_by 非 DS90站长"
+    for a in ALLOW.get("allow", []):
+        if a.get("file_prefix") != row.get("file") or str(a.get("cue")) != str(row.get("cue")):
+            continue
+        if a.get("approved_by") != "DS90站长" or not str(a.get("quote", "")).strip():
+            return False, "条目缺站长背书（approved_by/quote）"
+        fp = a["new_zh_fingerprint"]
+        if row.get("zh", "") != fp:
+            return False, "闸②中文行逐字 != 指纹 %r" % fp
+        if row.get("en", "") != fp:
+            return False, "闸①同轴配对英文行逐字 != 指纹 %r（en=%r）" % (fp, row.get("en"))
+        return True, "双闸成立 fp=%r reason=%s" % (fp, str(a.get("reason", ""))[:60])
+    return False, "无 (file_prefix,cue) 命中条目"
 
 
 def stamp(path):
@@ -85,13 +156,37 @@ def _e_selftest():
     return 0
 
 
+def _allow_selftest():
+    """样2 白名单双闸正反例（阴性必须拦住，阳性才可豁免）。"""
+    fp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "_gate_nonhan_allow_fixtures_20261108.json")
+    fix = json.load(open(fp, encoding="utf-8"))
+    prev = globals()["ALLOW"]
+    fails = []
+    for c in fix["cases"]:
+        globals()["ALLOW"] = {"approved_by": c.get("top_approved_by", "DS90站长"), "allow": c["allow"]}
+        hit, why = allow_hit(c["row"])
+        if hit != c["expect_exempt"]:
+            fails.append("%s expect_exempt=%s got=%s (%s)" % (c["name"], c["expect_exempt"], hit, why))
+    globals()["ALLOW"] = prev          # 复原，勿污染正式读数
+    if fails:
+        print("GATE ALLOW-SELFTEST FAIL %d 项" % len(fails))
+        for f_ in fails:
+            print(" ", f_)
+        return 1
+    print("GATE ALLOW-SELFTEST PASS 正反例%d（样2 双闸：同轴英文行逐字 + 指纹 + 站长背书）" % len(fix["cases"]))
+    return 0
+
+
 if "--selftest" in sys.argv:
-    sys.exit(_e_selftest())
+    sys.exit(max(_e_selftest(), _allow_selftest()))
 
 print(stamp(W + "/review.jsonl"))
 print(stamp(W + "/cues.json"))
-if len(sys.argv) > 2:
-    print(stamp(sys.argv[2]))
+if _WAIVE_ARG:
+    print(stamp(_WAIVE_ARG))
+if ALLOW_ARG:
+    print(stamp(ALLOW_ARG))
 
 HAN = re.compile(r"[\u4e00-\u9fff]")
 HASDIGIT = re.compile(r"[0-9]")
@@ -108,9 +203,26 @@ for r in rows:
     cnt[r["i"]] = cnt.get(r["i"], 0) + 1
 dup = sorted(i for i, n in cnt.items() if n > 1)
 
-# 2 纯标点/无数字占位
-punct = [r["i"] for r in rows
-         if not HAN.search(r.get("zh", "")) and not HASDIGIT.search(r.get("zh", "").strip())]
+# 2 纯标点/无数字占位（样2）——白名单双闸过者豁免，其余一律 FAIL
+punct, punct_exempt = [], []
+for r in rows:
+    if HAN.search(r.get("zh", "")) or HASDIGIT.search(r.get("zh", "").strip()):
+        continue
+    ok_a, why = allow_hit(r)
+    (punct_exempt if ok_a else punct).append(
+        r["i"] if ok_a else {"i": r["i"], "why": why})
+# fail-closed：白名单空转条目（打不到任何样2命中）视为陈旧/夹带 → FAIL
+allow_idle = []
+if ALLOW is not None:
+    hit_pairs = set()
+    for r in rows:
+        if not HAN.search(r.get("zh", "")) and not HASDIGIT.search(r.get("zh", "").strip()):
+            h, _ = allow_hit(r)
+            if h:
+                hit_pairs.add((r["file"], str(r["cue"])))
+    for a in ALLOW.get("allow", []):
+        if (a["file_prefix"], str(a["cue"])) not in hit_pairs:
+            allow_idle.append("%s#%s fp=%r" % (a["file_prefix"], a["cue"], a["new_zh_fingerprint"]))
 
 # 3 思考流 SUSPECT（启发式，列出人工判）
 sus = []
@@ -152,13 +264,22 @@ missing = sorted(set(cids) - set(cnt))
 extra_rv = sorted(set(cnt) - set(cids))
 
 miss_n = sum(1 for r in rows if r.get("tag") == "miss")
-ok = not (dup or punct or sus or badtag or gaps or extra_cue or cue_dup or missing or extra_rv)
+ok = not (dup or punct or sus or badtag or gaps or extra_cue or cue_dup or missing or extra_rv
+          or allow_idle or ALLOW_DROPPED)
 print("STOR_GATE %s entries=%d cues=%d" % ("PASS" if ok else "FAIL", len(rows), n))
-for name, val in [("1重复i", dup), ("2标点占位", punct), ("4tag漂移", badtag),
+for name, val in [("1重复i", dup), ("2标点占位", [p["i"] for p in punct]), ("4tag漂移", badtag),
                   ("5断号", gaps), ("5越界cue", extra_cue), ("5cue重复数", cue_dup),
                   ("5覆盖缺", missing), ("5覆盖多", extra_rv),
+                  ("2白名单空转条目", allow_idle), ("2白名单丢弃条目", ALLOW_DROPPED),
                   ("参考miss残留", miss_n)]:
     print("  %s: %s" % (name, (val[:12] if isinstance(val, list) else val)))
+if punct_exempt:
+    print("  2标点占位(白名单双闸豁免): %s" % punct_exempt)
+    for r in rows:
+        if r["i"] in punct_exempt:
+            print("    i=%s %s#%s zh=%r en=%r" % (r["i"], r["file"], r["cue"], r["zh"], r["en"]))
+for p in punct:
+    print("    样2未豁免 i=%s %s" % (p["i"], p["why"]))
 print("  3思考流SUSPECT: %d 条" % len(sus))
 for s in sus[:20]:
     print("    i=%s tag=%s %r" % (s["i"], s["tag"], s["zh"]))
