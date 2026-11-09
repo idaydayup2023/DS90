@@ -690,12 +690,20 @@ fn audit_alignment(
             &format!("alignment cue indices {expected:?}"),
         );
         match result {
-            Ok((corrections, empty_unresolved)) => {
-                let empty_unresolved: BTreeSet<u32> = empty_unresolved.into_iter().collect();
+            Ok(AuditResolution {
+                corrections,
+                unresolved_empty,
+                unresolved_unparseable,
+            }) => {
+                let unresolved_empty: BTreeSet<u32> = unresolved_empty.into_iter().collect();
+                let unresolved_unparseable: BTreeSet<u32> =
+                    unresolved_unparseable.into_iter().collect();
                 let required: BTreeSet<u32> = expected
                     .iter()
                     .filter(|index| {
-                        pending_review.contains_key(index) && !empty_unresolved.contains(index)
+                        pending_review.contains_key(index)
+                            && !unresolved_empty.contains(index)
+                            && !unresolved_unparseable.contains(index)
                     })
                     .copied()
                     .collect();
@@ -770,11 +778,21 @@ fn audit_alignment(
                     });
                 }
                 // Indices still answering with empty corrections after the
-                // rescue round: keep the current translation and downgrade
-                // them to unresolved instead of aborting the run. Mandatory
-                // cues are recorded in the quality log so the review trail
-                // survives; omission of a correction is still a hard bail.
-                for index in empty_unresolved {
+                // rescue round, and indices whose consistency/rescue response
+                // never parsed at all (model outage), both keep the current
+                // translation and downgrade to unresolved instead of aborting
+                // the run. Mandatory cues are recorded in the quality log so
+                // the review trail survives; a parsed response that simply
+                // omits a mandatory correction is still a hard bail.
+                let downgrades = unresolved_empty
+                    .iter()
+                    .map(|index| (*index, "review_empty_correction_unresolved"))
+                    .chain(
+                        unresolved_unparseable
+                            .iter()
+                            .map(|index| (*index, "review_unparseable_correction_unresolved")),
+                    );
+                for (index, downgrade_reason) in downgrades {
                     outcome.unresolved = outcome.unresolved.saturating_add(1);
                     let trigger = pending_review.remove(&index);
                     if let Some(trigger) = trigger {
@@ -787,7 +805,7 @@ fn audit_alignment(
                             .cloned()
                             .unwrap_or_else(|| single_line(&cues[position].text));
                         let mut reasons: Vec<String> = trigger.reasons.iter().cloned().collect();
-                        reasons.push("review_empty_correction_unresolved".to_owned());
+                        reasons.push(downgrade_reason.to_owned());
                         outcome.quality_log.push(TranslationQualityRecord {
                             cue_index: index,
                             source: single_line(&cues[position].text),
@@ -800,7 +818,7 @@ fn audit_alignment(
                         });
                     }
                     eprintln!(
-                        "translation review_check unresolved_index={index} action=keep_current_translation reason=empty_correction_after_retry"
+                        "translation review_check unresolved_index={index} action=keep_current_translation reason={downgrade_reason}"
                     );
                 }
             }
@@ -818,18 +836,46 @@ fn audit_alignment(
                 });
             }
             Err(error) => {
-                outcome.unresolved = outcome.unresolved.saturating_add(1);
-                if pending_review.contains_key(&cues[first].index) {
+                // Leaf task (a single cue): a review response that never
+                // parsed even after the one reformat re-ask is a model
+                // outage, not a refusal (2026-11-10, item-5 cue-419 rerun:
+                // the drill-down reached the exact cue and the model kept
+                // answering with an empty body). The cue keeps its current
+                // translation and downgrades to unresolved so the file
+                // still publishes. A parsed-but-refused response (strict
+                // correction checks, omitted mandatory corrections) keeps
+                // its hard bail: outage must not launder a real refusal.
+                let index = cues[first].index;
+                let trigger = pending_review.remove(&index);
+                let outage = error.to_string().contains("remained structurally invalid");
+                if trigger.is_some() && !outage {
                     return Err(error).with_context(|| {
                         format!(
-                            "review failed for mandatory cue {}; refusing to publish questionable text",
-                            cues[first].index
+                            "review failed for mandatory cue {index}; refusing to publish questionable text"
                         )
                     });
                 }
+                outcome.unresolved = outcome.unresolved.saturating_add(1);
+                if let Some(trigger) = trigger {
+                    let current = translations
+                        .get(&index)
+                        .cloned()
+                        .unwrap_or_else(|| single_line(&cues[first].text));
+                    let mut reasons: Vec<String> = trigger.reasons.iter().cloned().collect();
+                    reasons.push("review_unparseable_correction_unresolved".to_owned());
+                    outcome.quality_log.push(TranslationQualityRecord {
+                        cue_index: index,
+                        source: single_line(&cues[first].text),
+                        candidate_before_review: trigger.candidate,
+                        reviewed_translation: current,
+                        reasons,
+                        primary_error: trigger.primary_error,
+                        translation_model: cfg.model.clone(),
+                        review_model: model.to_owned(),
+                    });
+                }
                 eprintln!(
-                    "translation review_check unresolved_index={} action=keep_current_translation error={error:#}",
-                    cues[first].index
+                    "translation review_check unresolved_index={index} action=keep_current_translation error={error:#}"
                 );
             }
         }
@@ -946,6 +992,17 @@ fn validate_corrections(
     Ok(corrections)
 }
 
+/// Outcome of one audit request round: the accepted corrections plus the
+/// two unresolved-downgrade lists — indices answered with an empty `text`
+/// even after the empty-correction rescue round, and indices whose response
+/// never parsed at all (model outage). Both lists keep the current
+/// translation and downgrade to unresolved; neither aborts the run.
+struct AuditResolution {
+    corrections: BTreeMap<u32, String>,
+    unresolved_empty: Vec<u32>,
+    unresolved_unparseable: Vec<u32>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn request_audit_corrections(
     client: &Client,
@@ -957,7 +1014,7 @@ fn request_audit_corrections(
     expected: &BTreeSet<u32>,
     max_corrections: usize,
     audit_name: &str,
-) -> Result<(BTreeMap<u32, String>, Vec<u32>)> {
+) -> Result<AuditResolution> {
     let response = retry(cfg.max_retries, || {
         request(client, cfg, api_key, model, prompt, max_output_tokens)
     })
@@ -992,6 +1049,14 @@ fn request_audit_corrections(
                     "translation {audit_name} response reformat request failed after: {first_error:#}"
                 )
             })?;
+            // An initial (or reformat-repaired) audit response that never
+            // parses must keep hard-failing: `audit_alignment` uses this
+            // error to binary-split the batch until the exact offending
+            // indices are auditable (see the split-until-auditable pin).
+            // Downgrading here would silently kill the splitter. The
+            // model-outage downgrade instead lives in the leaf handling of
+            // `audit_alignment` and in the empty-correction rescue round
+            // below (2026-11-10, item-5 cue-419 rerun death site).
             parse_consistency_envelope(&repaired).with_context(|| {
                 format!(
                     "translation {audit_name} response remained structurally invalid after one reformat attempt; first error: {first_error:#}"
@@ -1002,7 +1067,11 @@ fn request_audit_corrections(
     let (mut corrections, empty) = partition_corrections(envelope, expected, max_corrections)
         .with_context(|| format!("translation {audit_name} failed strict correction checks"))?;
     if empty.is_empty() {
-        return Ok((corrections, Vec::new()));
+        return Ok(AuditResolution {
+            corrections,
+            unresolved_empty: Vec::new(),
+            unresolved_unparseable: Vec::new(),
+        });
     }
     // Empty-text corrections used to abort entire runs (2026-11-09, item 5
     // cue 419: a one-word line burned 4h of translation plus 1h of review).
@@ -1016,19 +1085,37 @@ fn request_audit_corrections(
     .with_context(|| {
         format!("translation {audit_name} empty-correction retry request failed after {empty:?}")
     })?;
-    let retry_envelope = parse_consistency_envelope(&retry_response).with_context(|| {
-        format!(
-            "translation {audit_name} empty-correction retry response was structurally invalid after {empty:?}"
-        )
-    })?;
-    let (retry_corrections, retry_empty) =
-        partition_corrections(retry_envelope, expected, max_corrections).with_context(|| {
-            format!(
-                "translation {audit_name} failed strict correction checks after one empty-correction retry"
-            )
-        })?;
+    let (retry_corrections, retry_empty, retry_unparseable) = match parse_consistency_envelope(
+        &retry_response,
+    ) {
+        Ok(envelope) => {
+            let (retry_corrections, retry_empty) =
+                    partition_corrections(envelope, expected, max_corrections).with_context(
+                        || {
+                            format!(
+                                "translation {audit_name} failed strict correction checks after one empty-correction retry"
+                            )
+                        },
+                    )?;
+            (retry_corrections, retry_empty, Vec::new())
+        }
+        Err(error) => {
+            // The stubborn-empty model answers this round with an empty
+            // body (EOF) or garbage too: still a model outage, so every
+            // index still waiting keeps its current translation and is
+            // downgraded instead of bailing the whole file.
+            eprintln!(
+                "translation {audit_name} empty_correction_retry_unparseable=true indices={empty:?} error={error:#}"
+            );
+            (BTreeMap::new(), Vec::new(), empty.clone())
+        }
+    };
     corrections.extend(retry_corrections);
-    Ok((corrections, retry_empty))
+    Ok(AuditResolution {
+        corrections,
+        unresolved_empty: retry_empty,
+        unresolved_unparseable: retry_unparseable,
+    })
 }
 
 /// Build the repair prompt that asks the model to reformat its previous
@@ -1573,5 +1660,109 @@ target_language_code = "zh-CN"
         cfg.max_retries = 1;
         let error = translate(&cues(1), &cfg).unwrap_err().to_string();
         assert!(error.contains("omitted mandatory correction"), "{error}");
+    }
+
+    /// 2026-11-10 item-5 rerun: the review leg answers the mandatory-cue
+    /// consistency request (and its reformat + empty-correction rescue
+    /// rounds) with a response that never parses — an entirely empty body
+    /// (EOF) or plain garbage. That is a model outage, not a refusal: the
+    /// cue must keep its current translation, downgrade to unresolved with
+    /// `review_unparseable_correction_unresolved`, and the file must publish.
+    fn mandatory_cue_downgrades_when_review_never_parses(bad_response: Value) {
+        let (base_url, seen) = llm_server(move |body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("audit-json-reformat") {
+                return ollama_reply(bad_response.clone());
+            }
+            if prompt.contains("final-review") {
+                if prompt.contains("\"must_correct\":true") {
+                    return ollama_reply(bad_response.clone());
+                }
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    if index == 1 {
+                        json!({ "index": 1, "text": "" })
+                    } else {
+                        json!({ "index": index, "text": format!("第{index}行。") })
+                    }
+                })
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        let outcome = translate(&cues(10), &cfg).unwrap();
+        // The run publishes: the failed cue keeps its current translation.
+        assert_eq!(outcome.cues[0].text, "Line 1\nLine 1");
+        assert_eq!(outcome.cues[1].text, "第2行。\nLine 2");
+        // Every broken review round got exactly one reformat re-ask and no
+        // more: the drill-down splits the mandatory batch one halving per
+        // level (8→4→2→1), each broken round asking one reformat, and the
+        // leaf then downgrades without a second round or a rescue storm.
+        let seen = seen.lock().unwrap();
+        let broken_rounds = seen
+            .iter()
+            .filter(|body| {
+                body["prompt"].as_str().unwrap().contains("final-review")
+                    && body["prompt"]
+                        .as_str()
+                        .unwrap()
+                        .contains("\"must_correct\":true")
+            })
+            .count();
+        let reformats = seen
+            .iter()
+            .filter(|body| {
+                body["prompt"]
+                    .as_str()
+                    .unwrap()
+                    .contains("audit-json-reformat")
+            })
+            .count();
+        assert!(broken_rounds >= 1, "{broken_rounds}");
+        assert_eq!(reformats, broken_rounds);
+        drop(seen);
+        assert_eq!(outcome.quality_log.len(), 1);
+        let record = &outcome.quality_log[0];
+        assert_eq!(record.cue_index, 1);
+        assert_eq!(record.reviewed_translation, "Line 1");
+        assert_eq!(record.candidate_before_review, "Line 1");
+        assert!(
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason == "primary_translation_failed")
+        );
+        assert!(
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason == "review_unparseable_correction_unresolved")
+        );
+        assert!(
+            record
+                .primary_error
+                .as_deref()
+                .is_some_and(|error| error.contains("rescue:"))
+        );
+    }
+
+    #[test]
+    fn empty_review_response_downgrades_mandatory_cue_and_publishes() {
+        mandatory_cue_downgrades_when_review_never_parses(json!(""));
+    }
+
+    #[test]
+    fn garbage_review_response_downgrades_mandatory_cue_and_publishes() {
+        mandatory_cue_downgrades_when_review_never_parses(json!(
+            "I cannot review this line, sorry {corrections:"
+        ));
     }
 }
