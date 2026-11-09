@@ -662,44 +662,102 @@ fn ollama_server(replies: Vec<Reply<'static>>) -> (String, thread::JoinHandle<()
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let handle = thread::spawn(move || {
-        for reply in replies {
-            let (mut stream, _) = listener.accept().unwrap();
-            read_request(&mut stream);
-            match reply {
-                Reply::Translations(lines) => {
-                    let generated = serde_json::json!({
-                        "translations": lines
-                            .into_iter()
-                            .map(|(index, text)| serde_json::json!({"index": index, "text": text}))
-                            .collect::<Vec<_>>()
-                    });
-                    let body = serde_json::json!({"response": generated.to_string()}).to_string();
-                    write_response(&mut stream, 200, &body);
+        let mut replies = replies.into_iter().peekable();
+        let mut idle_polls = 0usize;
+        loop {
+            // Once the script is exhausted keep answering only the rescue
+            // requests for a short idle window, then quit so `server.join()`
+            // cannot block forever waiting for a request that never comes.
+            let drained = replies.peek().is_none();
+            if drained {
+                listener.set_nonblocking(true).unwrap();
+            }
+            let (mut stream, _) = match listener.accept() {
+                Ok(pair) => pair,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    if drained {
+                        idle_polls += 1;
+                        if idle_polls >= 40 {
+                            break;
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                    continue;
                 }
-                Reply::Corrections(lines) => {
-                    let generated = serde_json::json!({
-                        "corrections": lines
-                            .into_iter()
-                            .map(|(index, text)| serde_json::json!({"index": index, "text": text}))
-                            .collect::<Vec<_>>()
-                    });
-                    let body = serde_json::json!({"response": generated.to_string()}).to_string();
-                    write_response(&mut stream, 200, &body);
-                }
-                Reply::Malformed(generated) => {
-                    let body = serde_json::json!({"response": generated}).to_string();
-                    write_response(&mut stream, 200, &body);
-                }
-                Reply::Error(status) => {
-                    write_response(&mut stream, status, "{\"error\":\"injected\"}")
-                }
+                Err(error) => panic!("{error}"),
+            };
+            idle_polls = 0;
+            let request = read_request(&mut stream);
+            // The widened single-cue rescue request must keep failing and
+            // must not consume a scripted reply: the scripted scenarios
+            // below assume the cue reaches the mandatory review queue.
+            if is_rescue_request(&request) {
+                let body =
+                    serde_json::json!({"response": "rescue-window-still-malformed"}).to_string();
+                write_response(&mut stream, 200, &body);
+                continue;
+            }
+            match replies.next() {
+                Some(reply) => match reply {
+                    Reply::Translations(lines) => {
+                        let generated = serde_json::json!({
+                            "translations": lines
+                                .into_iter()
+                                .map(|(index, text)| serde_json::json!({"index": index, "text": text}))
+                                .collect::<Vec<_>>()
+                        });
+                        let body =
+                            serde_json::json!({"response": generated.to_string()}).to_string();
+                        write_response(&mut stream, 200, &body);
+                    }
+                    Reply::Corrections(lines) => {
+                        let generated = serde_json::json!({
+                            "corrections": lines
+                                .into_iter()
+                                .map(|(index, text)| serde_json::json!({"index": index, "text": text}))
+                                .collect::<Vec<_>>()
+                        });
+                        let body =
+                            serde_json::json!({"response": generated.to_string()}).to_string();
+                        write_response(&mut stream, 200, &body);
+                    }
+                    Reply::Malformed(generated) => {
+                        let body = serde_json::json!({"response": generated}).to_string();
+                        write_response(&mut stream, 200, &body);
+                    }
+                    Reply::Error(status) => {
+                        write_response(&mut stream, status, "{\"error\":\"injected\"}")
+                    }
+                },
+                None => break,
             }
         }
     });
     (format!("http://{address}"), handle)
 }
 
-fn read_request(stream: &mut TcpStream) {
+/// True for the single-cue rescue attempt issued with the widened token
+/// window (see `PRIMARY_RESCUE_MAX_OUTPUT_TOKENS` in
+/// `src/subtitles/translation.rs`); no scripted scenario configures that
+/// window for anything else.
+fn is_rescue_request(request: &[u8]) -> bool {
+    const PRIMARY_RESCUE_MAX_OUTPUT_TOKENS: u64 = 8_192;
+    serde_json::from_slice::<serde_json::Value>(request)
+        .ok()
+        .filter(|body| body.get("prompt").is_some())
+        .and_then(|body| body["options"]["num_predict"].as_u64())
+        == Some(PRIMARY_RESCUE_MAX_OUTPUT_TOKENS)
+}
+
+fn read_request(stream: &mut TcpStream) -> Vec<u8> {
+    // Accepted streams inherit the listener's nonblocking mode once the
+    // script is exhausted; body reads need blocking semantics.
+    stream.set_nonblocking(false).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
@@ -726,6 +784,11 @@ fn read_request(stream: &mut TcpStream) {
             }
         }
     }
+    bytes
+        .windows(4)
+        .position(|part| part == b"\r\n\r\n")
+        .map(|header_end| bytes[header_end + 4..].to_vec())
+        .unwrap_or_default()
 }
 
 fn write_response(stream: &mut TcpStream, status: u16, body: &str) {

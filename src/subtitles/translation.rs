@@ -17,6 +17,15 @@ use super::srt::{Cue, single_line};
 
 const PROMPT_VERSION: &str = "subtrans-translation-two-stage-review-json-v7";
 
+/// Token window for the one enlarged single-cue rescue request that runs
+/// after the configured primary-translation retries are exhausted and
+/// before the cue is queued for mandatory review. The observed empty
+/// response cluster (2026-11-09, translategemma:4b) survived the normal
+/// window but not the widened one. The value is deliberately a code
+/// constant: nothing in `[translation]` configuration changes, so cache
+/// keys are unaffected.
+const PRIMARY_RESCUE_MAX_OUTPUT_TOKENS: u32 = 8_192;
+
 #[derive(Debug, Serialize)]
 struct PromptLine<'a> {
     index: u32,
@@ -273,18 +282,55 @@ fn translate_range_adaptive(
             }
             Err(error) => {
                 let cue = &cues[range.start];
-                translated.insert(cue.index, single_line(&cue.text));
-                queue_mandatory_review(
-                    pending_review,
-                    cue,
-                    "primary_translation_failed",
-                    Some(format!("{error:#}")),
-                );
-                eprintln!(
-                    "translation review_required index={} attempts={} reason=primary_translation_failed error={error:#}",
-                    cue.index,
-                    cfg.max_retries.saturating_add(1)
-                );
+                // One widened rescue request before conceding: the empty
+                // response cluster survived every configured retry at the
+                // normal token window, so widen the window exactly once
+                // (a single request, no retry loop) for this one cue.
+                let rescue = request(
+                    client,
+                    cfg,
+                    api_key,
+                    &cfg.model,
+                    &prompt,
+                    PRIMARY_RESCUE_MAX_OUTPUT_TOKENS,
+                )
+                .and_then(|response| {
+                    parse_valid_indices(&response, expected, &ignored_context_indices)
+                        .with_context(|| format!("raw_model_response={}", log_preview(&response)))
+                })
+                .and_then(|values| match values.get(&cue.index) {
+                    Some(text) => Ok(text.clone()),
+                    None => bail!("rescue response omitted cue index {}", cue.index),
+                });
+                match rescue {
+                    Ok(text) => {
+                        println!(
+                            "translation rescue index={} action=primary_retry_enlarged_budget max_tokens={PRIMARY_RESCUE_MAX_OUTPUT_TOKENS} result=ok",
+                            cue.index
+                        );
+                        if translated.insert(cue.index, text).is_some() {
+                            bail!(
+                                "translation batch produced duplicate cue index {}",
+                                cue.index
+                            );
+                        }
+                    }
+                    Err(rescue_error) => {
+                        translated.insert(cue.index, single_line(&cue.text));
+                        let primary_error = format!("{error:#}; rescue: {rescue_error:#}");
+                        queue_mandatory_review(
+                            pending_review,
+                            cue,
+                            "primary_translation_failed",
+                            Some(primary_error.clone()),
+                        );
+                        eprintln!(
+                            "translation review_required index={} attempts={} reason=primary_translation_failed error={primary_error}",
+                            cue.index,
+                            cfg.max_retries.saturating_add(1)
+                        );
+                    }
+                }
             }
         }
     }
@@ -644,10 +690,13 @@ fn audit_alignment(
             &format!("alignment cue indices {expected:?}"),
         );
         match result {
-            Ok(corrections) => {
+            Ok((corrections, empty_unresolved)) => {
+                let empty_unresolved: BTreeSet<u32> = empty_unresolved.into_iter().collect();
                 let required: BTreeSet<u32> = expected
                     .iter()
-                    .filter(|index| pending_review.contains_key(index))
+                    .filter(|index| {
+                        pending_review.contains_key(index) && !empty_unresolved.contains(index)
+                    })
                     .copied()
                     .collect();
                 let missing_required: Vec<u32> = required
@@ -719,6 +768,40 @@ fn audit_alignment(
                         translation_model: cfg.model.clone(),
                         review_model: model.to_owned(),
                     });
+                }
+                // Indices still answering with empty corrections after the
+                // rescue round: keep the current translation and downgrade
+                // them to unresolved instead of aborting the run. Mandatory
+                // cues are recorded in the quality log so the review trail
+                // survives; omission of a correction is still a hard bail.
+                for index in empty_unresolved {
+                    outcome.unresolved = outcome.unresolved.saturating_add(1);
+                    let trigger = pending_review.remove(&index);
+                    if let Some(trigger) = trigger {
+                        let position = cues
+                            .iter()
+                            .position(|cue| cue.index == index)
+                            .with_context(|| format!("alignment returned unknown cue {index}"))?;
+                        let current = translations
+                            .get(&index)
+                            .cloned()
+                            .unwrap_or_else(|| single_line(&cues[position].text));
+                        let mut reasons: Vec<String> = trigger.reasons.iter().cloned().collect();
+                        reasons.push("review_empty_correction_unresolved".to_owned());
+                        outcome.quality_log.push(TranslationQualityRecord {
+                            cue_index: index,
+                            source: single_line(&cues[position].text),
+                            candidate_before_review: trigger.candidate,
+                            reviewed_translation: current,
+                            reasons,
+                            primary_error: trigger.primary_error,
+                            translation_model: cfg.model.clone(),
+                            review_model: model.to_owned(),
+                        });
+                    }
+                    eprintln!(
+                        "translation review_check unresolved_index={index} action=keep_current_translation reason=empty_correction_after_retry"
+                    );
                 }
             }
             Err(_) if task.positions.len() > 1 => {
@@ -802,11 +885,15 @@ fn strip_single_json_fence(response: &str) -> &str {
     inner.strip_suffix("```").map(str::trim).unwrap_or(response)
 }
 
-fn validate_corrections(
+/// Split a corrections envelope into accepted items and the indices whose
+/// text came back empty. Empty-text items are collected rather than bailing
+/// so the caller can run the empty-correction rescue round; every other
+/// violation keeps the strict bail behaviour.
+fn partition_corrections(
     envelope: ConsistencyEnvelope,
     expected: &BTreeSet<u32>,
     max_corrections: usize,
-) -> Result<BTreeMap<u32, String>> {
+) -> Result<(BTreeMap<u32, String>, Vec<u32>)> {
     if envelope.corrections.len() > max_corrections {
         bail!(
             "consistency response contains {} corrections, exceeding configured maximum {max_corrections}",
@@ -814,6 +901,7 @@ fn validate_corrections(
         );
     }
     let mut corrections = BTreeMap::new();
+    let mut empty = Vec::new();
     for item in envelope.corrections {
         if !expected.contains(&item.index) {
             bail!(
@@ -822,12 +910,38 @@ fn validate_corrections(
             );
         }
         let text = single_line(&item.text);
-        if text.is_empty() || corrections.insert(item.index, text).is_some() {
+        if text.is_empty() {
+            if !empty.contains(&item.index) {
+                empty.push(item.index);
+            }
+            continue;
+        }
+        if corrections.insert(item.index, text).is_some() {
             bail!(
                 "consistency response has an empty or duplicate index {}",
                 item.index
             );
         }
+    }
+    Ok((corrections, empty))
+}
+
+/// Strict one-shot validation used by tests and callers that want the
+/// pre-rescue behaviour: any empty correction text is a hard bail. The
+/// production audit path goes through [`partition_corrections`] so the
+/// empty-correction rescue round can run first.
+#[cfg(test)]
+fn validate_corrections(
+    envelope: ConsistencyEnvelope,
+    expected: &BTreeSet<u32>,
+    max_corrections: usize,
+) -> Result<BTreeMap<u32, String>> {
+    let (corrections, empty) = partition_corrections(envelope, expected, max_corrections)?;
+    if let Some(index) = empty.first() {
+        bail!(
+            "consistency response has an empty or duplicate index {}",
+            index
+        );
     }
     Ok(corrections)
 }
@@ -843,7 +957,7 @@ fn request_audit_corrections(
     expected: &BTreeSet<u32>,
     max_corrections: usize,
     audit_name: &str,
-) -> Result<BTreeMap<u32, String>> {
+) -> Result<(BTreeMap<u32, String>, Vec<u32>)> {
     let response = retry(cfg.max_retries, || {
         request(client, cfg, api_key, model, prompt, max_output_tokens)
     })
@@ -885,8 +999,36 @@ fn request_audit_corrections(
             })?
         }
     };
-    validate_corrections(envelope, expected, max_corrections)
-        .with_context(|| format!("translation {audit_name} failed strict correction checks"))
+    let (mut corrections, empty) = partition_corrections(envelope, expected, max_corrections)
+        .with_context(|| format!("translation {audit_name} failed strict correction checks"))?;
+    if empty.is_empty() {
+        return Ok((corrections, Vec::new()));
+    }
+    // Empty-text corrections used to abort entire runs (2026-11-09, item 5
+    // cue 419: a one-word line burned 4h of translation plus 1h of review).
+    // Give the review model exactly one more round with the same prompt
+    // before those indices are handed back for unresolved downgrade; any
+    // valid correction the retry adds is kept.
+    eprintln!("translation {audit_name} empty_correction_retry=true indices={empty:?}");
+    let retry_response = retry(cfg.max_retries, || {
+        request(client, cfg, api_key, model, prompt, max_output_tokens)
+    })
+    .with_context(|| {
+        format!("translation {audit_name} empty-correction retry request failed after {empty:?}")
+    })?;
+    let retry_envelope = parse_consistency_envelope(&retry_response).with_context(|| {
+        format!(
+            "translation {audit_name} empty-correction retry response was structurally invalid after {empty:?}"
+        )
+    })?;
+    let (retry_corrections, retry_empty) =
+        partition_corrections(retry_envelope, expected, max_corrections).with_context(|| {
+            format!(
+                "translation {audit_name} failed strict correction checks after one empty-correction retry"
+            )
+        })?;
+    corrections.extend(retry_corrections);
+    Ok((corrections, retry_empty))
 }
 
 /// Build the repair prompt that asks the model to reformat its previous
@@ -1219,5 +1361,217 @@ target_language_code = "zh-CN"
         assert!(!prompt.contains("corrected target text"));
         assert!(!prompt.contains(r#""text":""#));
         assert!(prompt.contains(r#"{"corrections":[...]}"#));
+    }
+
+    // ----- empty-response mandatory rescue (2026-11-09 item-5 cluster) -----
+
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    fn prompt_items(prompt: &str) -> Vec<Value> {
+        let start = prompt.rfind("\n\n").expect("prompt body separator") + 2;
+        serde_json::from_str(&prompt[start..]).expect("prompt body is a JSON array")
+    }
+
+    fn ollama_reply(content: Value) -> String {
+        json!({ "response": content.to_string() }).to_string()
+    }
+
+    /// Mock Ollama endpoint: every request body is recorded and answered by
+    /// `responder`. The accept loop is intentionally unbounded and detached;
+    /// the test process exits once assertions run.
+    fn llm_server(
+        responder: impl Fn(&Value) -> String + Send + 'static,
+    ) -> (String, Arc<Mutex<Vec<Value>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_thread = Arc::clone(&seen);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut content_length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 {
+                        break;
+                    }
+                    let trimmed = line.trim_end();
+                    if trimmed.is_empty() {
+                        break;
+                    }
+                    if trimmed.to_ascii_lowercase().starts_with("content-length:") {
+                        content_length = trimmed[15..].trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0u8; content_length];
+                reader.read_exact(&mut body).unwrap();
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                seen_thread.lock().unwrap().push(body.clone());
+                let reply = responder(&body);
+                let http = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    reply.len(),
+                    reply
+                );
+                stream.write_all(http.as_bytes()).unwrap();
+                stream.flush().unwrap();
+            }
+        });
+        (base_url, seen)
+    }
+
+    #[test]
+    fn partition_corrections_splits_empty_from_valid_items() {
+        let expected = BTreeSet::from([1, 2, 3]);
+        let envelope = parse_consistency_envelope(
+            r#"{"corrections":[{"index":1,"text":"甲"},{"index":2,"text":"  "},{"index":3,"text":" "}]}"#,
+        )
+        .unwrap();
+        let (corrections, empty) = partition_corrections(envelope, &expected, 3).unwrap();
+        assert_eq!(corrections.get(&1).map(String::as_str), Some("甲"));
+        assert!(!corrections.contains_key(&2));
+        assert_eq!(empty, vec![2, 3]);
+    }
+
+    #[test]
+    fn strict_validate_corrections_still_bails_on_empty_text() {
+        let expected = BTreeSet::from([1]);
+        assert!(
+            parse_consistency(r#"{"corrections":[{"index":1,"text":"  "}]}"#, &expected, 1)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn primary_rescue_retry_widens_token_window_before_mandatory_queue() {
+        // Every normal-window attempt answers with an empty translation (the
+        // item-5 cue-419 cluster); only the widened rescue window succeeds,
+        // so the cue must never reach the mandatory review queue.
+        let (base_url, seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let window = body["options"]["num_predict"].as_u64().unwrap();
+            if window == u64::from(PRIMARY_RESCUE_MAX_OUTPUT_TOKENS) {
+                return ollama_reply(json!({
+                    "translations": [{ "index": 1, "text": "第一行。" }]
+                }));
+            }
+            ollama_reply(json!({ "translations": [{ "index": 1, "text": "" }] }))
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        let outcome = translate(&cues(1), &cfg).unwrap();
+        assert_eq!(outcome.cues[0].text, "第一行。\nLine 1");
+        assert!(outcome.quality_log.is_empty());
+        let windows: Vec<u64> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|body| !body["prompt"].as_str().unwrap().contains("final-review"))
+            .map(|body| body["options"]["num_predict"].as_u64().unwrap())
+            .collect();
+        assert_eq!(
+            windows,
+            vec![
+                u64::from(cfg.max_output_tokens),
+                u64::from(cfg.max_output_tokens),
+                u64::from(PRIMARY_RESCUE_MAX_OUTPUT_TOKENS)
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_review_correction_retries_then_downgrades_mandatory_cue() {
+        // Primary translation fails at every window, so cue 1 is mandatory;
+        // the review model keeps answering with an empty correction text.
+        // Before the rescue this combination aborted the whole run.
+        let review_calls = Arc::new(AtomicUsize::new(0));
+        let review_seen = Arc::clone(&review_calls);
+        let (base_url, _seen) = llm_server(move |body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                review_seen.fetch_add(1, Ordering::SeqCst);
+                if prompt.contains("\"must_correct\":true") {
+                    return ollama_reply(json!({
+                        "corrections": [{ "index": 1, "text": "" }]
+                    }));
+                }
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    if index == 1 {
+                        json!({ "index": 1, "text": "" })
+                    } else {
+                        json!({ "index": index, "text": format!("第{index}行。") })
+                    }
+                })
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        let outcome = translate(&cues(10), &cfg).unwrap();
+        // The failed cue keeps its current text instead of killing the run.
+        assert_eq!(outcome.cues[0].text, "Line 1\nLine 1");
+        assert_eq!(outcome.cues[1].text, "第2行。\nLine 2");
+        // The audit model got exactly one extra round for the empty text
+        // (task containing cue 1) on top of the other alignment task.
+        assert_eq!(review_calls.load(Ordering::SeqCst), 3);
+        assert_eq!(outcome.quality_log.len(), 1);
+        let record = &outcome.quality_log[0];
+        assert_eq!(record.cue_index, 1);
+        assert_eq!(record.reviewed_translation, "Line 1");
+        assert_eq!(record.candidate_before_review, "Line 1");
+        assert!(
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason == "primary_translation_failed")
+        );
+        assert!(
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason == "review_empty_correction_unresolved")
+        );
+        assert!(
+            record
+                .primary_error
+                .as_deref()
+                .is_some_and(|error| error.contains("rescue:"))
+        );
+    }
+
+    #[test]
+    fn omitted_mandatory_correction_still_bails() {
+        // The empty-correction downgrade must not weaken the omission rule:
+        // a review model that never mentions the mandatory cue is still fatal.
+        let (base_url, _seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            ollama_reply(json!({ "translations": [{ "index": 1, "text": "" }] }))
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        let error = translate(&cues(1), &cfg).unwrap_err().to_string();
+        assert!(error.contains("omitted mandatory correction"), "{error}");
     }
 }

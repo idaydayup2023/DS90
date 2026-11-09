@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- 修复单词级字幕（如 `<i>Ping.</i>`）主翻译反复空响应后审校腿又回空 `text` 导致整单 bail、数小时翻译与审校白烧的问题（2026-11-09 件5 cue 419）：主翻译层在重试耗尽、落入强制审校队列之前，先以加宽的 8192 token 窗口对该 cue 补发一次单点救援请求；审校层遇空 `text` 先以同 prompt 补一轮，仍空的索引降级为 unresolved（保留现译文、写入质量日志 `review_empty_correction_unresolved` 记录），不再拖垮整单；同批其余有效修正照常落稿。非强制项行为不变，审校模型对强制项「只漏答不空答」仍然整单硬失败。两处均为代码内常量与流程改动，`[translation]` 配置零变化，缓存键不受影响。
 - 修复 `cargo audit` 报告的依赖安全问题：升级 `quinn-proto`、`rustls`、`rustls-webpki`、`webpki-root-certs`、`tokio` 至各自兼容的已修复版本（含 tokio `AsyncFd` I/O 安全公告 RUSTSEC-2026-0386，程序未直接使用该 API，仍一并升级消除）。
 - TranslateGemma 将一条字幕拆回多条同索引条目时，合并保留全部译文，不再整批判失败。
 - 审校 JSON 重排请求不再携带示例正文字面量，避免小模型把示例原样抄入 `text` 导致中文比例闸门误伤整单。
