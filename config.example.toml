@@ -135,6 +135,15 @@ alignment_max_corrections = 8
 # 只在字幕 manifest 中保留质量现场记录。
 alignment_max_output_tokens = 4096
 
+# 模型应答缓存目录（可选）。设置后每条模型应答按
+# sha256(provider + base_url + model + prompt) 落盘，重跑同一批次直接回放，
+# 进程中途被打断也不必把已译完的字幕重新烧一遍。命中件仍走与实收应答完全相同
+# 的严格 JSON 校验：解析不过的条目不采信、即刻剔除并重新请求；未通过校验的应答
+# 也绝不入缓存。缺省不设置即彻底关闭，行为与没有该功能时逐字一致（不碰磁盘、
+# 不新增日志）。该开关只影响速度，不参与 cache_key 计算：启用它或换目录都不会
+# 让已发布的 manifest 失配。建议写绝对路径，`~` 前缀会展开到主目录。
+# cache_dir = "/data/ds90/resp-cache"
+
 # OpenAI-compatible 示例：
 # provider = "openai_compatible"
 # base_url = "https://example.invalid/v1"

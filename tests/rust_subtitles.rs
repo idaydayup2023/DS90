@@ -47,6 +47,7 @@ fn translation_config() -> TranslationConfig {
         alignment_max_corrections: 32,
         alignment_max_attempts: 3,
         alignment_max_output_tokens: 4_096,
+        cache_dir: None,
     }
 }
 
@@ -161,4 +162,54 @@ fn cache_key_covers_model_language_and_parameters_and_force_bypasses_cache() {
     changed.batch_size = 10;
     assert_ne!(key, cache_key("source-hash", &changed).unwrap());
     assert_ne!(key, cache_key("different-source", &cfg).unwrap());
+}
+
+#[test]
+fn cache_key_is_stable_with_and_without_the_response_cache_directory() {
+    // The response-cache knob is infrastructure, not configuration: it carries
+    // `skip_serializing`, so switching the cache on, off, or pointing it at a
+    // different directory must never rotate the cache_key a published manifest
+    // is bound to (otherwise enabling a speed-up would invalidate every
+    // artifact the way a model bump does). Two full TOML runs, one knob apart;
+    // the model-change assertion alongside keeps this from passing vacuously.
+    let base = r#"
+provider = "ollama"
+base_url = "http://127.0.0.1:11434"
+model = "translategemma:4b"
+source_language = "English"
+source_language_code = "en"
+target_language = "Simplified Chinese"
+target_language_code = "zh-CN"
+"#;
+    let without: TranslationConfig = toml::from_str(base).unwrap();
+    let with: TranslationConfig = toml::from_str(&format!(
+        "{base}cache_dir = \"/tmp/ds90-resp-cache-keycheck\"\n"
+    ))
+    .unwrap();
+    assert_eq!(without.cache_dir, None);
+    assert_eq!(
+        with.cache_dir.as_deref(),
+        Some(std::path::Path::new("/tmp/ds90-resp-cache-keycheck"))
+    );
+    assert_eq!(
+        cache_key("source-hash", &without).unwrap(),
+        cache_key("source-hash", &with).unwrap(),
+        "enabling the response cache must not rotate the manifest cache_key"
+    );
+
+    let mut moved = with.clone();
+    moved.cache_dir = Some(std::path::PathBuf::from("/somewhere/else"));
+    assert_eq!(
+        cache_key("source-hash", &without).unwrap(),
+        cache_key("source-hash", &moved).unwrap(),
+        "moving the cache directory must not rotate the manifest cache_key either"
+    );
+
+    // Vacuity guard: the very same pair, one real setting apart, does rotate.
+    let mut hotter = with.clone();
+    hotter.model = "qwen3:8b".to_owned();
+    assert_ne!(
+        cache_key("source-hash", &with).unwrap(),
+        cache_key("source-hash", &hotter).unwrap()
+    );
 }

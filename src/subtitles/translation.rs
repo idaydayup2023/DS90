@@ -13,6 +13,7 @@ use crate::artifact::TranslationQualityRecord;
 use crate::config::{LlmProvider, TranslationConfig};
 
 use super::quality::{translation_concerns, validate_translation_quality};
+use super::resp_cache::{ResponseCache, summary_line};
 use super::srt::{Cue, single_line};
 
 const PROMPT_VERSION: &str = "subtrans-translation-two-stage-review-json-v7";
@@ -166,6 +167,12 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<TranslationOut
         &cfg.target_language,
         cfg.min_target_script_ratio,
     )?;
+    // Counters are per process, so this line is cumulative across the videos
+    // one run has translated so far; it is only printed when a cache is
+    // configured, leaving the disabled baseline log byte-identical.
+    if let Some(summary) = summary_line(ResponseCache::new(cfg).dir()) {
+        println!("translation {summary}");
+    }
     Ok(TranslationOutcome {
         cues: output,
         quality_log,
@@ -214,6 +221,12 @@ fn translate_range_adaptive(
             .filter(|cue| !expected.iter().any(|item| item.index == cue.index))
             .map(|cue| cue.index)
             .collect();
+        // The response cache only stores what this strict parser accepts, and
+        // a hit is parsed again below exactly like a live response.
+        let accepts = |response: &str| -> bool {
+            parse_valid_indices(response, expected, &ignored_context_indices)
+                .is_ok_and(|values| !values.is_empty())
+        };
         let request_and_validate = || {
             let response = request(
                 client,
@@ -222,6 +235,7 @@ fn translate_range_adaptive(
                 &cfg.model,
                 &prompt,
                 cfg.max_output_tokens,
+                &accepts,
             )?;
             parse_valid_indices(&response, expected, &ignored_context_indices)
                 .with_context(|| format!("raw_model_response={}", log_preview(&response)))
@@ -246,6 +260,7 @@ fn translate_range_adaptive(
                     &cfg.model,
                     &prompt,
                     cfg.max_output_tokens,
+                    &accepts,
                 )
             })
             .and_then(|response| parse_valid_indices(&response, expected, &ignored_context_indices))
@@ -293,6 +308,7 @@ fn translate_range_adaptive(
                     &cfg.model,
                     &prompt,
                     PRIMARY_RESCUE_MAX_OUTPUT_TOKENS,
+                    &accepts,
                 )
                 .and_then(|response| {
                     parse_valid_indices(&response, expected, &ignored_context_indices)
@@ -975,8 +991,9 @@ fn partition_corrections(
 /// Strict one-shot validation used by tests and callers that want the
 /// pre-rescue behaviour: any empty correction text is a hard bail. The
 /// production audit path goes through [`partition_corrections`] so the
-/// empty-correction rescue round can run first.
-#[cfg(test)]
+/// empty-correction rescue round can run first. Also the gate the audit
+/// response cache accepts on: anything with an empty text never enters the
+/// cache, keeping the rescue round a genuine re-ask.
 fn validate_corrections(
     envelope: ConsistencyEnvelope,
     expected: &BTreeSet<u32>,
@@ -1015,8 +1032,28 @@ fn request_audit_corrections(
     max_corrections: usize,
     audit_name: &str,
 ) -> Result<AuditResolution> {
+    // Audit responses are cached on the same terms as translations: stored
+    // only once the strict correction checks accept them, and re-checked on
+    // every replay, so a correction that a cache could smuggle past the
+    // reviewer is not possible. Responses with empty correction texts fail
+    // `validate_corrections`, so they never poison the cache and the
+    // empty-correction rescue round always re-asks the model for real.
+    let accepts = |response: &str| -> bool {
+        match parse_consistency_envelope(response) {
+            Ok(envelope) => validate_corrections(envelope, expected, max_corrections).is_ok(),
+            Err(_) => false,
+        }
+    };
     let response = retry(cfg.max_retries, || {
-        request(client, cfg, api_key, model, prompt, max_output_tokens)
+        request(
+            client,
+            cfg,
+            api_key,
+            model,
+            prompt,
+            max_output_tokens,
+            &accepts,
+        )
     })
     .with_context(|| format!("translation {audit_name} service request failed"))?;
     let envelope = match parse_consistency_envelope(&response) {
@@ -1042,6 +1079,7 @@ fn request_audit_corrections(
                     model,
                     &repair_prompt,
                     max_output_tokens,
+                    &accepts,
                 )
             })
             .with_context(|| {
@@ -1080,7 +1118,15 @@ fn request_audit_corrections(
     // valid correction the retry adds is kept.
     eprintln!("translation {audit_name} empty_correction_retry=true indices={empty:?}");
     let retry_response = retry(cfg.max_retries, || {
-        request(client, cfg, api_key, model, prompt, max_output_tokens)
+        request(
+            client,
+            cfg,
+            api_key,
+            model,
+            prompt,
+            max_output_tokens,
+            &accepts,
+        )
     })
     .with_context(|| {
         format!("translation {audit_name} empty-correction retry request failed after {empty:?}")
@@ -1151,7 +1197,57 @@ fn normalize_known_json_keys(response: &str) -> Cow<'_, str> {
     }
 }
 
+/// Ask the model, through the response cache when one is configured.
+///
+/// `accept` is the same strict check the caller applies to the value it gets
+/// back (translation envelope, corrections envelope, index coverage): an entry
+/// is only stored after it passes, and an entry that no longer passes is
+/// evicted and refetched rather than trusted. That keeps a corrupted,
+/// truncated, or hand-edited file from pinning a batch to a bad answer, and it
+/// means a cache hit never skips the parse a live response would have had to
+/// survive.
 fn request(
+    client: &Client,
+    cfg: &TranslationConfig,
+    api_key: Option<&str>,
+    model: &str,
+    prompt: &str,
+    max_output_tokens: u32,
+    accept: &dyn Fn(&str) -> bool,
+) -> Result<String> {
+    let cache = ResponseCache::new(cfg);
+    let key = cache.key(cfg, model, prompt);
+    cached_response(&cache, key.as_deref(), accept, &|| {
+        request_model(client, cfg, api_key, model, prompt, max_output_tokens)
+    })
+}
+
+/// The caching decision, split out so the "did we call the model again?"
+/// behaviour can be tested without a network: `live` stands in for the HTTP
+/// round trip and counts how often the cache forced it to run.
+fn cached_response(
+    cache: &ResponseCache,
+    key: Option<&str>,
+    accept: &dyn Fn(&str) -> bool,
+    live: &dyn Fn() -> Result<String>,
+) -> Result<String> {
+    let Some(key) = key else {
+        return live();
+    };
+    if let Some(cached) = cache.get(key) {
+        if accept(&cached) {
+            return Ok(cached);
+        }
+        cache.evict(key);
+    }
+    let response = live()?;
+    if accept(&response) {
+        cache.put(key, &response);
+    }
+    Ok(response)
+}
+
+fn request_model(
     client: &Client,
     cfg: &TranslationConfig,
     api_key: Option<&str>,
@@ -1764,5 +1860,159 @@ target_language_code = "zh-CN"
         mandatory_cue_downgrades_when_review_never_parses(json!(
             "I cannot review this line, sorry {corrections:"
         ));
+    }
+
+    fn cached_config(dir: &std::path::Path) -> TranslationConfig {
+        toml::from_str(&format!(
+            r#"
+provider = "ollama"
+base_url = "http://127.0.0.1:11434"
+model = "translategemma:4b"
+source_language = "English"
+source_language_code = "en"
+target_language = "Simplified Chinese"
+target_language_code = "zh-CN"
+cache_dir = "{}"
+"#,
+            dir.display()
+        ))
+        .unwrap()
+    }
+
+    fn accepted(response: &str) -> bool {
+        parse_aligned(response, &cues(1)).is_ok()
+    }
+
+    const GOOD: &str = r#"{"translations":[{"index":1,"text":"你好"}]}"#;
+
+    #[test]
+    fn a_stored_response_is_replayed_without_calling_the_model() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = cached_config(root.path());
+        let cache = ResponseCache::new(&cfg);
+        let key = cache.key(&cfg, &cfg.model, "PROMPT").unwrap();
+        let calls = std::cell::Cell::new(0u32);
+        let live = || {
+            calls.set(calls.get() + 1);
+            Ok(GOOD.to_owned())
+        };
+        for _ in 0..3 {
+            assert_eq!(
+                cached_response(&cache, Some(&key), &accepted, &live).unwrap(),
+                GOOD
+            );
+        }
+        assert_eq!(calls.get(), 1, "a hit must not reach the model");
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_different_endpoint_model_or_prompt_is_never_a_hit() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = cached_config(root.path());
+        let cache = ResponseCache::new(&cfg);
+        let accept = |response: &str| response.starts_with('{');
+        let calls = std::cell::Cell::new(0u32);
+        let live = || {
+            calls.set(calls.get() + 1);
+            Ok("{\"corrections\":[]}".to_owned())
+        };
+        let stored = cache.key(&cfg, &cfg.model, "PROMPT").unwrap();
+        cached_response(&cache, Some(&stored), &accept, &live).unwrap();
+        cached_response(&cache, Some(&stored), &accept, &live).unwrap();
+        assert_eq!(
+            live_count(&calls),
+            1,
+            "identical request replays from cache"
+        );
+        // Each part of the key alone must be able to force a fresh request.
+        let mut other_url = cfg.clone();
+        other_url.base_url = "http://127.0.0.1:8888/v1".into();
+        let key = cache.key(&other_url, &cfg.model, "PROMPT");
+        cached_response(&cache, key.as_deref(), &accept, &live).unwrap();
+        assert_eq!(
+            live_count(&calls),
+            2,
+            "repointing the endpoint replays nothing"
+        );
+
+        let key = cache.key(&cfg, "qwen3:8b", "PROMPT");
+        cached_response(&cache, key.as_deref(), &accept, &live).unwrap();
+        assert_eq!(live_count(&calls), 3, "another model replays nothing");
+
+        let key = cache.key(&cfg, &cfg.model, "ANOTHER PROMPT");
+        cached_response(&cache, key.as_deref(), &accept, &live).unwrap();
+        assert_eq!(live_count(&calls), 4, "another prompt replays nothing");
+
+        let mut other_provider = cfg.clone();
+        other_provider.provider = crate::config::LlmProvider::OpenaiCompatible;
+        let key = cache.key(&other_provider, &cfg.model, "PROMPT");
+        cached_response(&cache, key.as_deref(), &accept, &live).unwrap();
+        assert_eq!(live_count(&calls), 5, "another provider replays nothing");
+    }
+
+    fn live_count(calls: &std::cell::Cell<u32>) -> u32 {
+        calls.get()
+    }
+
+    #[test]
+    fn a_cached_payload_that_no_longer_parses_is_evicted_not_trusted() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = cached_config(root.path());
+        let cache = ResponseCache::new(&cfg);
+        let key = cache.key(&cfg, &cfg.model, "PROMPT").unwrap();
+        // Poison the entry: something that is not a translation envelope is
+        // sitting where a good answer used to be (truncated write, hand edit).
+        std::fs::write(cache.path_for(&key).unwrap(), "not json at all").unwrap();
+        let calls = std::cell::Cell::new(0u32);
+        let live = || {
+            calls.set(calls.get() + 1);
+            Ok(GOOD.to_owned())
+        };
+        let replayed = cached_response(&cache, Some(&key), &accepted, &live).unwrap();
+        assert_eq!(live_count(&calls), 1, "a poisoned entry is not trusted");
+        assert_eq!(replayed, GOOD);
+        // It has been replaced by the accepted answer, so the next run hits.
+        cached_response(&cache, Some(&key), &accepted, &live).unwrap();
+        assert_eq!(live_count(&calls), 1, "the repaired entry replays");
+    }
+
+    #[test]
+    fn a_response_that_never_parses_is_never_cached() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = cached_config(root.path());
+        let cache = ResponseCache::new(&cfg);
+        let key = cache.key(&cfg, &cfg.model, "PROMPT").unwrap();
+        let calls = std::cell::Cell::new(0u32);
+        let live = || {
+            calls.set(calls.get() + 1);
+            Ok("garbage".to_owned())
+        };
+        // The caller still receives the raw text to report on, but nothing is
+        // stored, so a bad answer can never mask the model on the next try.
+        assert_eq!(
+            cached_response(&cache, Some(&key), &accepted, &live).unwrap(),
+            "garbage"
+        );
+        assert!(cache.get(&key).is_none());
+        cached_response(&cache, Some(&key), &accepted, &live).unwrap();
+        assert_eq!(live_count(&calls), 2);
+    }
+
+    #[test]
+    fn without_cache_dir_every_request_reaches_the_model() {
+        let cfg = config();
+        let cache = ResponseCache::new(&cfg);
+        assert!(cache.disabled());
+        assert!(cache.key(&cfg, &cfg.model, "PROMPT").is_none());
+        let calls = std::cell::Cell::new(0u32);
+        let live = || {
+            calls.set(calls.get() + 1);
+            Ok(GOOD.to_owned())
+        };
+        for _ in 0..2 {
+            cached_response(&cache, None, &accepted, &live).unwrap();
+        }
+        assert_eq!(live_count(&calls), 2, "the default stays exactly as before");
     }
 }
