@@ -738,3 +738,118 @@ fn write_response(stream: &mut TcpStream, status: u16, body: &str) {
     .unwrap();
     stream.flush().unwrap();
 }
+
+/// End-to-end proof of the response cache: a finished translation replayed
+/// from disk without a single model round trip.
+///
+/// The provider endpoint is deliberately kept identical between the two runs;
+/// changing it would legitimately miss (the endpoint is part of the key), so
+/// the witness has to be the same address the first run answered from. It
+/// counts every connection and, once its scripted queue runs dry, answers
+/// loudly: a cache that silently falls through fails here instead of quietly
+/// burning the model.
+#[test]
+fn response_cache_replays_a_finished_translation_without_calling_the_model() {
+    let root = tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("destination");
+    let cache = root.path().join("resp-cache");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&destination).unwrap();
+    let stem = "Cached.Replay.Movie.2026.WEB-DL";
+    fs::write(source.join(format!("{stem}.mkv")), b"video").unwrap();
+    let srt =
+        "1\n00:00:01,000 --> 00:00:02,000\nFine.\n\n2\n00:00:03,000 --> 00:00:04,000\nWell.\n\n";
+    fs::write(source.join(format!("{stem}.en.srt")), srt).unwrap();
+    fs::write(source.join(format!("{stem}.emb.srt")), srt).unwrap();
+
+    let (base_url, witness) = witness_server(vec![
+        r#"{"translations":[{"index":1,"text":"好吧，就这么定了。"},{"index":2,"text":"行，我们出发。"}]}"#,
+    ]);
+    let mut cfg = support::config(root.path(), &source, &destination);
+    cfg.translation.base_url = base_url;
+    cfg.translation.alignment_check = false;
+    cfg.translation.consistency_check = false;
+    cfg.translation.cache_dir = Some(cache.clone());
+
+    subtrans::subtitles::run(&cfg, false, false, None).unwrap();
+    assert_eq!(witness.hits(), 1, "the first run asks the model once");
+    assert_eq!(
+        fs::read_dir(&cache).unwrap().count(),
+        1,
+        "the accepted response is stored"
+    );
+
+    // Same endpoint, same prompt: everything must come off the disk.
+    let output = source.join(format!("{stem}.ai.srt"));
+    fs::remove_file(&output).unwrap();
+    subtrans::subtitles::run(&cfg, false, true, None).unwrap();
+    assert_eq!(witness.hits(), 1, "a cache hit must not reach the model");
+    witness.stop();
+
+    let rendered = fs::read_to_string(&output).unwrap();
+    assert!(rendered.contains("好吧，就这么定了。\nFine."));
+    assert!(rendered.contains("行，我们出发。\nWell."));
+}
+
+struct Witness {
+    hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Witness {
+    fn hits(&self) -> usize {
+        self.hits.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn stop(&self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// A provider stand-in that keeps its address for the whole test, serves a
+/// scripted queue of raw responses, and counts every connection it receives.
+fn witness_server(queue: Vec<&'static str>) -> (String, Witness) {
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let pending = Arc::new(Mutex::new(VecDeque::from(queue)));
+    let (counter, halted, queue) = (Arc::clone(&hits), Arc::clone(&stop), Arc::clone(&pending));
+    thread::spawn(move || {
+        while !halted.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    counter.fetch_add(1, Ordering::Relaxed);
+                    // Accepted sockets inherit the non-blocking flag on macOS;
+                    // the request reader below relies on its read timeout.
+                    stream.set_nonblocking(false).unwrap();
+                    read_request(&mut stream);
+                    let body = match queue.lock().unwrap().pop_front() {
+                        Some(generated) => format!(r#"{{"response":{}}}"#, json_escape(generated)),
+                        None => {
+                            r#"{"error":"the response cache should have answered this"}"#.to_owned()
+                        }
+                    };
+                    write_response(&mut stream, 200, &body);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    (format!("http://{address}"), Witness { hits, stop })
+}
+
+/// Embed an already-JSON-encoded generated string as the `response` value of
+/// an Ollama reply.
+fn json_escape(generated: &str) -> String {
+    serde_json::Value::String(generated.to_owned()).to_string()
+}

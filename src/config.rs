@@ -345,6 +345,14 @@ pub struct TranslationConfig {
     pub alignment_max_attempts: u32,
     #[serde(default = "default_alignment_max_output_tokens")]
     pub alignment_max_output_tokens: u32,
+    /// Directory for the cache of raw model responses
+    /// (`[subtitles]`-independent, translation stage only). Unset by default,
+    /// which disables the cache entirely. `skip_serializing` is deliberate:
+    /// `cache_key` hashes this very section, and an infrastructure knob must
+    /// not invalidate every published manifest just because a cache was
+    /// switched on or pointed somewhere else.
+    #[serde(default, skip_serializing)]
+    pub cache_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

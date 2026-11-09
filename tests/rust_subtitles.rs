@@ -47,6 +47,7 @@ fn translation_config() -> TranslationConfig {
         alignment_max_corrections: 32,
         alignment_max_attempts: 3,
         alignment_max_output_tokens: 4_096,
+        cache_dir: None,
     }
 }
 
