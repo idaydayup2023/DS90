@@ -130,11 +130,28 @@ impl ResponseCache {
     }
 
     /// Key for one request, or `None` when no cache is configured.
+    /// Test-only convenience over [`ResponseCache::key_engine`]; production
+    /// callers go through `request()` which always names the engine.
+    #[cfg(test)]
     pub fn key(&self, cfg: &TranslationConfig, model: &str, prompt: &str) -> Option<String> {
+        self.key_engine(&cfg.provider, &cfg.base_url, model, prompt)
+    }
+
+    /// Key for one request issued against an engine other than the primary
+    /// `[translation]` endpoint (the stubborn-cue fallback). Keys stay apart
+    /// because provider, base_url, and model all enter the hash, so both
+    /// engines may share one cache directory without ever colliding.
+    pub fn key_engine(
+        &self,
+        provider: &LlmProvider,
+        base_url: &str,
+        model: &str,
+        prompt: &str,
+    ) -> Option<String> {
         if self.disabled() {
             return None;
         }
-        Some(response_key(&cfg.provider, &cfg.base_url, model, prompt))
+        Some(response_key(provider, base_url, model, prompt))
     }
 
     pub fn path_for(&self, key: &str) -> Option<PathBuf> {

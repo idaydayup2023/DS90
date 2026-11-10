@@ -10,7 +10,7 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Value, json};
 
 use crate::artifact::TranslationQualityRecord;
-use crate::config::{LlmProvider, TranslationConfig};
+use crate::config::{FallbackEngine, LlmProvider, TranslationConfig};
 
 use super::quality::{translation_concerns, validate_translation_quality};
 use super::resp_cache::{ResponseCache, summary_line};
@@ -26,6 +26,131 @@ const PROMPT_VERSION: &str = "subtrans-translation-two-stage-review-json-v7";
 /// constant: nothing in `[translation]` configuration changes, so cache
 /// keys are unaffected.
 const PRIMARY_RESCUE_MAX_OUTPUT_TOKENS: u32 = 8_192;
+
+/// Upper bound on the tag-stripped length of a cue that still counts as a
+/// "short line" for the stubborn-cue profile. The three confirmed death
+/// cases (station 2026-11-10, item-5 cue 527 family) are far below this.
+const STUBBORN_PROFILE_MAX_STRIPPED_CHARS: usize = 120;
+
+/// One request endpoint: either the primary `[translation]` engine or the
+/// stubborn-cue fallback. `max_output_tokens` deliberately stays a
+/// per-request argument (the rescue arm widens it for a single cue); the
+/// endpoint identity and its budget limits belong to the engine.
+#[derive(Debug)]
+struct Engine<'a> {
+    provider: &'a LlmProvider,
+    base_url: &'a str,
+    model: &'a str,
+    api_key: Option<&'a str>,
+    max_retries: u32,
+    max_response_bytes: usize,
+}
+
+impl<'a> Engine<'a> {
+    fn primary(cfg: &'a TranslationConfig, api_key: Option<&'a str>) -> Self {
+        Self {
+            provider: &cfg.provider,
+            base_url: &cfg.base_url,
+            model: &cfg.model,
+            api_key,
+            max_retries: cfg.max_retries,
+            max_response_bytes: cfg.max_response_bytes,
+        }
+    }
+
+    /// Primary endpoint with an explicit model, for the review legs that may
+    /// name their own `alignment_model` / `consistency_model`.
+    fn primary_with_model(
+        cfg: &'a TranslationConfig,
+        api_key: Option<&'a str>,
+        model: &'a str,
+    ) -> Self {
+        let mut engine = Self::primary(cfg, api_key);
+        engine.model = model;
+        engine
+    }
+
+    fn fallback(fallback: &'a FallbackEngine, api_key: Option<&'a str>) -> Self {
+        Self {
+            provider: &fallback.provider,
+            base_url: &fallback.base_url,
+            model: &fallback.model,
+            api_key,
+            max_retries: fallback.max_retries,
+            max_response_bytes: fallback.max_response_bytes,
+        }
+    }
+}
+
+/// The fallback endpoint resolved once per run: its own HTTP client (own
+/// timeout budget, so a slow fallback never borrows the primary one) and
+/// its API key (resolved eagerly: a missing key must fail at start, not
+/// halfway through a burn).
+#[derive(Debug)]
+struct FallbackRoute {
+    client: Client,
+    api_key: Option<String>,
+}
+
+/// Everything a translation request needs beyond prompt and parser: the
+/// primary client and credentials, the configuration, the shared response
+/// cache, and the optional stubborn-cue fallback route. Bundled so the
+/// batch loop passes one context instead of a nine-argument signature.
+#[derive(Debug)]
+struct RequestCtx<'a> {
+    client: &'a Client,
+    api_key: Option<&'a str>,
+    cfg: &'a TranslationConfig,
+    cache: &'a ResponseCache,
+    fallback: Option<(&'a FallbackEngine, &'a FallbackRoute)>,
+}
+
+/// Pure-rule pre-check for the stubborn empty-response profile (station
+/// 2026-11-10 death-case family: Qwen answers these with a reasoning loop
+/// that burns the whole token window, while translategemma:4b answers 3/3
+/// correctly). A cue matches when ALL of the following hold, no model call
+/// involved:
+/// * it contains at least one complete `<i>…</i>` italic span,
+/// * after stripping markup it has at least two `- ` speaker lines,
+/// * the stripped text is a short line (see [`STUBBORN_PROFILE_MAX_STRIPPED_CHARS`]).
+///
+/// The pins `matches_stubborn_profile_rejects_item5_cue_419_and_429` keep
+/// the two cues the primary engine rescued correctly on the primary route.
+fn matches_stubborn_profile(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let opens = lower.matches("<i>").count();
+    if opens == 0 || opens != lower.matches("</i>").count() {
+        return false;
+    }
+    let stripped = strip_markup(text);
+    let lines: Vec<&str> = stripped
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.len() < 2 {
+        return false;
+    }
+    lines.iter().filter(|line| line.starts_with('-')).count() >= 2
+        && stripped.chars().count() <= STUBBORN_PROFILE_MAX_STRIPPED_CHARS
+}
+
+/// Drop `<…>` tags and `{…}` override blocks so the profile can measure the
+/// spoken text itself. Deliberately forgiving: unbalanced brackets just stop
+/// suppressing characters.
+fn strip_markup(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut inside = false;
+    for ch in text.chars() {
+        match ch {
+            '<' | '{' => inside = true,
+            '>' | '}' => inside = false,
+            _ if !inside => output.push(ch),
+            _ => {}
+        }
+    }
+    output
+}
 
 #[derive(Debug, Serialize)]
 struct PromptLine<'a> {
@@ -117,19 +242,41 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<TranslationOut
         .timeout(Duration::from_secs(cfg.timeout_seconds))
         .build()?;
     let api_key = cfg.api_key()?;
+    let cache = ResponseCache::new(cfg);
+    // Resolve the fallback route once per run so a missing key or a broken
+    // client fails at start instead of halfway through a burn. `None`
+    // (the default when `[translation].fallback` is absent) keeps every
+    // request on the primary engine, exactly like before this feature.
+    let fallback_route = cfg
+        .fallback
+        .as_ref()
+        .map(|fallback| -> Result<FallbackRoute> {
+            Ok(FallbackRoute {
+                client: Client::builder()
+                    .timeout(Duration::from_secs(fallback.timeout_seconds))
+                    .build()?,
+                api_key: fallback.api_key()?,
+            })
+        })
+        .transpose()?;
+    if let Some(fallback) = &cfg.fallback {
+        println!(
+            "translation fallback_route armed model={:?} at {} (stubborn-cue profile)",
+            fallback.model, fallback.base_url
+        );
+    }
+    let ctx = RequestCtx {
+        client: &client,
+        api_key: api_key.as_deref(),
+        cfg,
+        cache: &cache,
+        fallback: cfg.fallback.as_ref().zip(fallback_route.as_ref()),
+    };
     let mut translated = BTreeMap::new();
     let mut pending_review = BTreeMap::new();
 
     for range in batch_ranges(cues, cfg.batch_size, cfg.max_batch_chars) {
-        translate_range_adaptive(
-            &client,
-            api_key.as_deref(),
-            cues,
-            range,
-            cfg,
-            &mut translated,
-            &mut pending_review,
-        )?;
+        translate_range_adaptive(&ctx, cues, range, &mut translated, &mut pending_review)?;
         println!(
             "translation progress translated={}/{}",
             translated.len(),
@@ -170,7 +317,7 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<TranslationOut
     // Counters are per process, so this line is cumulative across the videos
     // one run has translated so far; it is only printed when a cache is
     // configured, leaving the disabled baseline log byte-identical.
-    if let Some(summary) = summary_line(ResponseCache::new(cfg).dir()) {
+    if let Some(summary) = summary_line(cache.dir()) {
         println!("translation {summary}");
     }
     Ok(TranslationOutcome {
@@ -203,41 +350,85 @@ fn batch_ranges(cues: &[Cue], max_count: usize, max_chars: usize) -> Vec<Range<u
 }
 
 fn translate_range_adaptive(
-    client: &Client,
-    api_key: Option<&str>,
+    ctx: &RequestCtx,
     cues: &[Cue],
     initial: Range<usize>,
-    cfg: &TranslationConfig,
     translated: &mut BTreeMap<u32, String>,
     pending_review: &mut BTreeMap<u32, PendingReview>,
 ) -> Result<()> {
+    let cfg = ctx.cfg;
     let mut pending = VecDeque::from([initial]);
     while let Some(range) = pending.pop_front() {
-        let prompt = build_prompt(cues, range.clone(), cfg)?;
-        let expected = &cues[range.clone()];
+        // Cue-level routing (station 2026-11-10 engine-swap landing order):
+        // positions matching the stubborn empty-response profile leave the
+        // batch BEFORE any primary request is issued; each gets one dedicated
+        // fallback-engine request instead. Positions already translated (an
+        // earlier leg of this loop, or an earlier half of a re-queued split)
+        // drop out of the want set, so nothing is ever requested or inserted
+        // twice. Without a `[translation].fallback` section the want set is
+        // the open range and every prompt is byte-identical to the pre-
+        // feature behaviour, keeping existing response caches warm.
+        let open: Vec<usize> = range
+            .clone()
+            .filter(|position| !translated.contains_key(&cues[*position].index))
+            .collect();
+        if open.is_empty() {
+            continue;
+        }
+        let stubborn: BTreeSet<usize> = if ctx.fallback.is_some() {
+            open.iter()
+                .copied()
+                .filter(|position| matches_stubborn_profile(&cues[*position].text))
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
+        if ctx.fallback.is_some() {
+            for position in &stubborn {
+                translate_stubborn_cue(ctx, cues, *position, translated, pending_review)?;
+            }
+        }
+        let want: Vec<usize> = open
+            .iter()
+            .copied()
+            .filter(|position| !stubborn.contains(position))
+            .collect();
+        if want.is_empty() {
+            continue;
+        }
+        let want_set: BTreeSet<usize> = want.iter().copied().collect();
+        let prompt = build_prompt_wanting(cues, range.clone(), cfg, &want_set)?;
+        let expected: Vec<Cue> = want
+            .iter()
+            .map(|position| cues[*position].clone())
+            .collect();
         let context = prompt_context_range(range.clone(), cfg.context_cues);
         let ignored_context_indices: BTreeSet<u32> = cues[context]
             .iter()
-            .filter(|cue| !expected.iter().any(|item| item.index == cue.index))
+            .filter(|cue| {
+                !want_set
+                    .iter()
+                    .any(|position| cues[*position].index == cue.index)
+            })
             .map(|cue| cue.index)
             .collect();
         // The response cache only stores what this strict parser accepts, and
         // a hit is parsed again below exactly like a live response.
         let accepts = |response: &str| -> bool {
-            parse_valid_indices(response, expected, &ignored_context_indices)
+            parse_valid_indices(response, &expected, &ignored_context_indices)
                 .is_ok_and(|values| !values.is_empty())
         };
+        let engine = Engine::primary(cfg, ctx.api_key);
         let request_and_validate = || {
             let response = request(
-                client,
-                cfg,
-                api_key,
-                &cfg.model,
+                ctx.client,
+                ctx.cache,
+                &engine,
                 &prompt,
                 cfg.max_output_tokens,
                 &accepts,
             )?;
-            parse_valid_indices(&response, expected, &ignored_context_indices)
+            parse_valid_indices(&response, &expected, &ignored_context_indices)
                 .with_context(|| format!("raw_model_response={}", log_preview(&response)))
                 .and_then(|values| {
                     if values.is_empty() {
@@ -249,21 +440,22 @@ fn translate_range_adaptive(
         // Malformed multi-cue responses are split immediately. A single cue
         // retries the complete request and strict parse before it is preserved
         // in English, so one bad model response cannot discard an entire film.
-        let result = if range.len() == 1 {
-            retry(cfg.max_retries, request_and_validate)
+        let result = if want.len() == 1 {
+            retry(engine.max_retries, request_and_validate)
         } else {
-            retry(cfg.max_retries, || {
+            retry(engine.max_retries, || {
                 request(
-                    client,
-                    cfg,
-                    api_key,
-                    &cfg.model,
+                    ctx.client,
+                    ctx.cache,
+                    &engine,
                     &prompt,
                     cfg.max_output_tokens,
                     &accepts,
                 )
             })
-            .and_then(|response| parse_valid_indices(&response, expected, &ignored_context_indices))
+            .and_then(|response| {
+                parse_valid_indices(&response, &expected, &ignored_context_indices)
+            })
             .and_then(|values| {
                 if values.is_empty() {
                     bail!("translation response contains no requested cue indices");
@@ -273,8 +465,9 @@ fn translate_range_adaptive(
         };
         match result {
             Ok(values) => {
-                let missing: Vec<Range<usize>> = range
-                    .clone()
+                let missing: Vec<Range<usize>> = want
+                    .iter()
+                    .copied()
                     .filter(|position| !values.contains_key(&cues[*position].index))
                     .map(|position| position..position + 1)
                     .collect();
@@ -290,28 +483,27 @@ fn translate_range_adaptive(
                     pending.push_front(missing_range);
                 }
             }
-            Err(_) if range.len() > 1 => {
+            Err(_) if want.len() > 1 => {
                 let midpoint = range.start + range.len() / 2;
                 pending.push_front(midpoint..range.end);
                 pending.push_front(range.start..midpoint);
             }
             Err(error) => {
-                let cue = &cues[range.start];
+                let cue = &cues[want[0]];
                 // One widened rescue request before conceding: the empty
                 // response cluster survived every configured retry at the
                 // normal token window, so widen the window exactly once
                 // (a single request, no retry loop) for this one cue.
                 let rescue = request(
-                    client,
-                    cfg,
-                    api_key,
-                    &cfg.model,
+                    ctx.client,
+                    ctx.cache,
+                    &engine,
                     &prompt,
                     PRIMARY_RESCUE_MAX_OUTPUT_TOKENS,
                     &accepts,
                 )
                 .and_then(|response| {
-                    parse_valid_indices(&response, expected, &ignored_context_indices)
+                    parse_valid_indices(&response, &expected, &ignored_context_indices)
                         .with_context(|| format!("raw_model_response={}", log_preview(&response)))
                 })
                 .and_then(|values| match values.get(&cue.index) {
@@ -348,6 +540,89 @@ fn translate_range_adaptive(
                     }
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// The fallback leg for one profile-matched cue: same prompt shape and the
+/// same strict parser as the primary single-cue path, but the endpoint, key,
+/// retries and token window come from `[translation.fallback]`. Deliberately
+/// no primary-engine rescue afterwards — the 2026-11-10 direct probes showed
+/// the primary answers these cues only with a window-consuming reasoning
+/// loop, so re-asking it after a failed fallback would burn minutes to fail
+/// the same way. A failed fallback cue keeps its original text and joins the
+/// mandatory review queue, exactly like a failed primary single.
+fn translate_stubborn_cue(
+    ctx: &RequestCtx,
+    cues: &[Cue],
+    position: usize,
+    translated: &mut BTreeMap<u32, String>,
+    pending_review: &mut BTreeMap<u32, PendingReview>,
+) -> Result<()> {
+    let (fallback, route) = ctx
+        .fallback
+        .expect("the stubborn route is only entered with a configured fallback");
+    let cfg = ctx.cfg;
+    let cue = &cues[position];
+    let index = cue.index;
+    let prompt = build_prompt(cues, position..position + 1, cfg)?;
+    let expected = [cue.clone()];
+    let context = prompt_context_range(position..position + 1, cfg.context_cues);
+    let ignored_context_indices: BTreeSet<u32> = cues[context]
+        .iter()
+        .filter(|item| item.index != index)
+        .map(|item| item.index)
+        .collect();
+    let accepts = |response: &str| -> bool {
+        parse_valid_indices(response, &expected, &ignored_context_indices)
+            .is_ok_and(|values| values.contains_key(&index))
+    };
+    let engine = Engine::fallback(fallback, route.api_key.as_deref());
+    println!(
+        "translation fallback_route index={} action=fallback_request model={:?} base_url={} max_tokens={}",
+        index, fallback.model, fallback.base_url, fallback.max_output_tokens
+    );
+    let result = retry(engine.max_retries, || {
+        let response = request(
+            &route.client,
+            ctx.cache,
+            &engine,
+            &prompt,
+            fallback.max_output_tokens,
+            &accepts,
+        )?;
+        parse_valid_indices(&response, &expected, &ignored_context_indices)
+            .with_context(|| format!("raw_model_response={}", log_preview(&response)))
+            .and_then(|values| match values.get(&index) {
+                Some(text) => Ok(text.clone()),
+                None => bail!("fallback response omitted cue index {index}"),
+            })
+    });
+    match result {
+        Ok(text) => {
+            println!(
+                "translation fallback_route index={} action=fallback_request result=ok",
+                index
+            );
+            if translated.insert(index, text).is_some() {
+                bail!("translation batch produced duplicate cue index {index}");
+            }
+        }
+        Err(error) => {
+            translated.insert(index, single_line(&cue.text));
+            let primary_error = format!("{error:#}");
+            queue_mandatory_review(
+                pending_review,
+                cue,
+                "fallback_translation_failed",
+                Some(primary_error.clone()),
+            );
+            eprintln!(
+                "translation review_required index={} attempts={} reason=fallback_translation_failed error={primary_error}",
+                index,
+                fallback.max_retries.saturating_add(1)
+            );
         }
     }
     Ok(())
@@ -568,6 +843,21 @@ pub fn prompt_version() -> &'static str {
 }
 
 fn build_prompt(cues: &[Cue], core: Range<usize>, cfg: &TranslationConfig) -> Result<String> {
+    let want: BTreeSet<usize> = core.clone().collect();
+    build_prompt_wanting(cues, core, cfg, &want)
+}
+
+/// [`build_prompt`] with an explicit set of positions to ask for inside
+/// `core`. The stubborn-cue route drops profile-matched cues from a batch's
+/// want set while keeping them as read-only context lines. When `want`
+/// equals `core` the prompt is byte-identical to the plain form, so the
+/// primary response cache of every existing batch stays warm.
+fn build_prompt_wanting(
+    cues: &[Cue],
+    core: Range<usize>,
+    cfg: &TranslationConfig,
+    want: &BTreeSet<usize>,
+) -> Result<String> {
     let example_index = cues
         .get(core.start)
         .context("translation prompt core range starts outside source cues")?
@@ -581,8 +871,7 @@ fn build_prompt(cues: &[Cue], core: Range<usize>, cfg: &TranslationConfig) -> Re
         .map(|(offset, cue)| PromptLine {
             index: cue.index,
             text: &cue.text,
-            translate: (context_start + offset) >= core.start
-                && (context_start + offset) < core.end,
+            translate: want.contains(&(context_start + offset)),
         })
         .collect();
     Ok(format!(
@@ -1090,16 +1379,13 @@ fn request_audit_corrections(
     let accepts = |response: &str| -> bool {
         audit_response_is_cachable(response, expected, mandatory, max_corrections)
     };
+    // The review legs always run on the primary engine (station 2026-11-10
+    // landing order: the second-opinion surface stays untouched); they only
+    // name their own model, never a different endpoint.
+    let engine = Engine::primary_with_model(cfg, api_key, model);
+    let cache = ResponseCache::new(cfg);
     let response = retry(cfg.max_retries, || {
-        request(
-            client,
-            cfg,
-            api_key,
-            model,
-            prompt,
-            max_output_tokens,
-            &accepts,
-        )
+        request(client, &cache, &engine, prompt, max_output_tokens, &accepts)
     })
     .with_context(|| format!("translation {audit_name} service request failed"))?;
     let envelope = match parse_consistency_envelope(&response) {
@@ -1120,9 +1406,8 @@ fn request_audit_corrections(
             let repaired = retry(cfg.max_retries, || {
                 request(
                     client,
-                    cfg,
-                    api_key,
-                    model,
+                    &cache,
+                    &engine,
                     &repair_prompt,
                     max_output_tokens,
                     &accepts,
@@ -1164,15 +1449,7 @@ fn request_audit_corrections(
     // valid correction the retry adds is kept.
     eprintln!("translation {audit_name} empty_correction_retry=true indices={empty:?}");
     let retry_response = retry(cfg.max_retries, || {
-        request(
-            client,
-            cfg,
-            api_key,
-            model,
-            prompt,
-            max_output_tokens,
-            &accepts,
-        )
+        request(client, &cache, &engine, prompt, max_output_tokens, &accepts)
     })
     .with_context(|| {
         format!("translation {audit_name} empty-correction retry request failed after {empty:?}")
@@ -1254,17 +1531,18 @@ fn normalize_known_json_keys(response: &str) -> Cow<'_, str> {
 /// survive.
 fn request(
     client: &Client,
-    cfg: &TranslationConfig,
-    api_key: Option<&str>,
-    model: &str,
+    cache: &ResponseCache,
+    engine: &Engine,
     prompt: &str,
     max_output_tokens: u32,
     accept: &dyn Fn(&str) -> bool,
 ) -> Result<String> {
-    let cache = ResponseCache::new(cfg);
-    let key = cache.key(cfg, model, prompt);
-    cached_response(&cache, key.as_deref(), accept, &|| {
-        request_model(client, cfg, api_key, model, prompt, max_output_tokens)
+    // Engine identity (provider + base_url + model) enters the key, so the
+    // primary and the fallback route share one cache directory without ever
+    // colliding (station 2026-11-10 landing order, point 2).
+    let key = cache.key_engine(engine.provider, engine.base_url, engine.model, prompt);
+    cached_response(cache, key.as_deref(), accept, &|| {
+        request_model(client, engine, prompt, max_output_tokens)
     })
 }
 
@@ -1295,15 +1573,14 @@ fn cached_response(
 
 fn request_model(
     client: &Client,
-    cfg: &TranslationConfig,
-    api_key: Option<&str>,
-    model: &str,
+    engine: &Engine,
     prompt: &str,
     max_output_tokens: u32,
 ) -> Result<String> {
-    let (url, body, response_path): (String, Value, &[&str]) = match &cfg.provider {
+    let model = engine.model;
+    let (url, body, response_path): (String, Value, &[&str]) = match engine.provider {
         LlmProvider::Ollama => (
-            endpoint(&cfg.base_url, "api/generate"),
+            endpoint(engine.base_url, "api/generate"),
             json!({
                 "model": model,
                 "prompt": prompt,
@@ -1319,7 +1596,7 @@ fn request_model(
             &["response"],
         ),
         LlmProvider::OpenaiCompatible => (
-            endpoint(&cfg.base_url, "chat/completions"),
+            endpoint(engine.base_url, "chat/completions"),
             json!({
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
@@ -1331,7 +1608,7 @@ fn request_model(
         ),
     };
     let mut request = client.post(url).json(&body);
-    if let Some(key) = api_key {
+    if let Some(key) = engine.api_key {
         request = request.bearer_auth(key);
     }
     let response = request
@@ -1339,7 +1616,7 @@ fn request_model(
         .with_context(|| {
             format!(
                 "translation model request failed for model {model:?} at {}. Start/verify the configured service and model, check network/API-key settings, then run `subtrans doctor --config <CONFIG>`",
-                cfg.base_url
+                engine.base_url
             )
         })?
         .error_for_status()
@@ -1350,9 +1627,9 @@ fn request_model(
         })?;
     let mut bytes = Vec::new();
     response
-        .take(cfg.max_response_bytes as u64 + 1)
+        .take(engine.max_response_bytes as u64 + 1)
         .read_to_end(&mut bytes)?;
-    if bytes.len() > cfg.max_response_bytes {
+    if bytes.len() > engine.max_response_bytes {
         bail!("translation service response exceeds configured size limit");
     }
     let response: Value =
@@ -2277,5 +2554,212 @@ cache_dir = "{}"
             review_rounds(&second_run, false) > 0,
             "empty shells must keep re-rolling live, never replayed as truth"
         );
+    }
+
+    // ----- stubborn-cue fallback route (2026-11-10 engine-swap landing order) -----
+
+    /// Station dossier death case, item-5 cue 527: the primary engine answers
+    /// this one only with a window-consuming reasoning loop (direct probes
+    /// E5/E6, 4096 and 16384 both empty), while translategemma:4b answers it
+    /// correctly. The profile must route it to the fallback engine.
+    const DEATH_CASE_527: &str = "- <i>Dragon?</i>\n- This is unacceptable!";
+
+    #[test]
+    fn stubborn_profile_pins_the_item5_cue527_death_case() {
+        assert!(matches_stubborn_profile(DEATH_CASE_527));
+    }
+
+    #[test]
+    fn stubborn_profile_rejects_the_two_primary_rescued_cues() {
+        // item-5 cues 419 and 429 translated correctly on the primary engine
+        // (station landing order point 1: no regression), so they must stay.
+        assert!(!matches_stubborn_profile("<i>Ping.</i>"));
+        assert!(!matches_stubborn_profile(
+            "the 335th Regiment of the 38th's 3rd Company."
+        ));
+        // every profile clause must hold together:
+        assert!(!matches_stubborn_profile("- Alpha line\n- Beta line")); // no italic
+        assert!(!matches_stubborn_profile("<i>Alpha</i>")); // italic, single line
+        assert!(!matches_stubborn_profile(
+            "<i>Alpha</i>\nsecond speaker has no dash"
+        )); // one speaker only
+        let long = format!("- <i>{}</i>\n- second speaker rambles on", "x".repeat(200));
+        assert!(!matches_stubborn_profile(&long)); // not a short line
+        assert!(!matches_stubborn_profile(
+            "- <i>unclosed italic\n- second line"
+        )); // unpaired tag
+    }
+
+    #[test]
+    fn want_set_prompt_is_byte_identical_when_it_equals_the_core() {
+        // primary-engine batch prompts must stay byte-identical so existing
+        // response caches of the 30 bound videos never go stale (landing
+        // order point 4: old tomls keep the old behaviour, zero drift).
+        let values = cues(8);
+        let cfg = config();
+        let plain = build_prompt(&values, 2..6, &cfg).unwrap();
+        let want: BTreeSet<usize> = (2..6).collect();
+        assert_eq!(
+            plain,
+            build_prompt_wanting(&values, 2..6, &cfg, &want).unwrap()
+        );
+    }
+
+    #[test]
+    fn want_set_keeps_a_dropped_cue_visible_as_read_only_context() {
+        let mut values = cues(4);
+        values[1].text = DEATH_CASE_527.to_owned();
+        let cfg = config();
+        let want: BTreeSet<usize> = [0usize, 2, 3].into_iter().collect();
+        let prompt = build_prompt_wanting(&values, 0..4, &cfg, &want).unwrap();
+        let items = prompt_items(&prompt);
+        let dropped = items.iter().find(|item| item["index"] == 2).unwrap();
+        assert_eq!(dropped["translate"], false);
+        assert_eq!(dropped["text"], DEATH_CASE_527);
+        for index in [1, 3, 4] {
+            assert!(
+                items
+                    .iter()
+                    .any(|item| item["index"] == index && item["translate"] == true),
+                "index {index} must stay in the want set"
+            );
+        }
+    }
+
+    #[test]
+    fn stubborn_cue_is_answered_by_the_fallback_engine_and_never_by_the_primary() {
+        // In-process pin of landing-order point 2 (the smoke test repeats it
+        // against the real services): the profile cue goes to the fallback
+        // engine, everything else stays on the primary, and each answer is
+        // cached under its own engine-specific key.
+        let (primary_url, primary_seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == true)
+                .map(|item| json!({ "index": item["index"], "text": "正常行。" }))
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let (fallback_url, fallback_seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == true)
+                .map(|item| json!({ "index": item["index"], "text": "斜体说话行。" }))
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let cache_root = tempfile::tempdir().unwrap();
+        let mut values = cues(3);
+        values[1].text = DEATH_CASE_527.to_owned();
+        let mut cfg: TranslationConfig = toml::from_str(&format!(
+            r#"
+provider = "ollama"
+base_url = "{primary_url}"
+model = "translategemma:4b"
+source_language = "English"
+source_language_code = "en"
+target_language = "Simplified Chinese"
+target_language_code = "zh-CN"
+timeout_seconds = 10
+max_retries = 0
+batch_size = 3
+consistency_check = false
+alignment_check = false
+cache_dir = "{}"
+
+[fallback]
+provider = "ollama"
+base_url = "{fallback_url}"
+model = "translategemma:4b"
+timeout_seconds = 10
+max_retries = 0
+"#,
+            cache_root.path().display()
+        ))
+        .unwrap();
+        cfg.fallback.as_mut().unwrap().base_url = fallback_url;
+        let outcome = translate(&values, &cfg).unwrap();
+        // cue 2 came back from the fallback engine …
+        assert!(outcome.cues[1].text.starts_with("斜体说话行。"));
+        // … cues 1 and 3 from the primary engine.
+        assert!(outcome.cues[0].text.starts_with("正常行。"));
+        assert!(outcome.cues[2].text.starts_with("正常行。"));
+        // the primary saw exactly one batch asking only the two healthy cues;
+        // the death case survived only as read-only context.
+        let primary = primary_seen.lock().unwrap();
+        assert_eq!(primary.len(), 1, "primary must serve exactly one batch");
+        let asked: Vec<u32> = prompt_items(primary[0]["prompt"].as_str().unwrap())
+            .iter()
+            .filter(|item| item["translate"] == true)
+            .map(|item| item["index"].as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(asked, vec![1, 3]);
+        // the fallback engine was asked exactly once, for exactly the death case.
+        let fallback = fallback_seen.lock().unwrap();
+        assert_eq!(
+            fallback.len(),
+            1,
+            "fallback engine must serve exactly the stubborn cue"
+        );
+        let asked: Vec<u32> = prompt_items(fallback[0]["prompt"].as_str().unwrap())
+            .iter()
+            .filter(|item| item["translate"] == true)
+            .map(|item| item["index"].as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(asked, vec![2]);
+        // each engine wrote its own cache entry under its own key: two files,
+        // never one overwriting the other (landing order point 2).
+        let entries: Vec<_> = std::fs::read_dir(cache_root.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .collect();
+        assert_eq!(
+            entries.len(),
+            2,
+            "both engines must leave one distinct cache entry each"
+        );
+    }
+
+    #[test]
+    fn absent_fallback_section_keeps_every_cue_on_the_primary_engine() {
+        // Old tomls (landing order point 4): without `[translation.fallback]`
+        // even a profile-matched death case goes through the primary route
+        // with the pre-feature request count, so bound videos keep the exact
+        // behaviour their cache_key was computed under.
+        let (primary_url, primary_seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == true)
+                .map(|item| json!({ "index": item["index"], "text": "正常行。" }))
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut values = cues(2);
+        values[1].text = DEATH_CASE_527.to_owned();
+        let mut cfg = config();
+        cfg.base_url = primary_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 0;
+        cfg.batch_size = 2;
+        cfg.consistency_check = false;
+        cfg.alignment_check = false;
+        let outcome = translate(&values, &cfg).unwrap();
+        assert!(outcome.cues[1].text.starts_with("正常行。"));
+        let primary = primary_seen.lock().unwrap();
+        assert_eq!(primary.len(), 1);
+        assert_eq!(primary[0]["model"], "translategemma:4b");
     }
 }
