@@ -694,6 +694,14 @@ fn audit_alignment(
             .iter()
             .map(|position| cues[*position].index)
             .collect();
+        // The indices this batch must receive a correction for: the strict
+        // `missing_required_corrections` check below treats anything less as
+        // a failed round, so the cache gate must demand the same coverage.
+        let mandatory: BTreeSet<u32> = expected
+            .iter()
+            .filter(|index| pending_review.contains_key(index))
+            .copied()
+            .collect();
         let result = request_audit_corrections(
             client,
             cfg,
@@ -702,6 +710,7 @@ fn audit_alignment(
             &prompt,
             cfg.alignment_max_output_tokens,
             &expected,
+            &mandatory,
             cfg.alignment_max_corrections,
             &format!("alignment cue indices {expected:?}"),
         );
@@ -991,9 +1000,8 @@ fn partition_corrections(
 /// Strict one-shot validation used by tests and callers that want the
 /// pre-rescue behaviour: any empty correction text is a hard bail. The
 /// production audit path goes through [`partition_corrections`] so the
-/// empty-correction rescue round can run first. Also the gate the audit
-/// response cache accepts on: anything with an empty text never enters the
-/// cache, keeping the rescue round a genuine re-ask.
+/// empty-correction rescue round can run first. The audit response cache
+/// gate builds on it — see [`audit_response_is_cachable`].
 fn validate_corrections(
     envelope: ConsistencyEnvelope,
     expected: &BTreeSet<u32>,
@@ -1007,6 +1015,46 @@ fn validate_corrections(
         );
     }
     Ok(corrections)
+}
+
+/// The audit response cache gate: an answer may reach disk only if this call
+/// site would treat it as a success, not merely as a shape that parses.
+///
+/// Two classes of response fail here although `parse_consistency_envelope`
+/// and even `validate_corrections` pass them:
+///
+/// * a structurally valid **zero-item envelope** (`{"corrections":[]}`, `[]`,
+///   `{}`). For a batch holding a mandatory cue this is a failed round —
+///   `audit_alignment`'s own `missing_required_corrections` check re-splits
+///   it and eventually bails — so freezing one random empty answer into the
+///   cache replays that death deterministically on every later burn
+///   (2026-11-10, item-4 cue 429: 12+ consecutive empty answers, one shell
+///   into the cache and no binary could save the file). Per the station
+///   order an empty shell counts as a failed response and is never cached,
+///   even for a batch without mandatory cues, so the next burn re-rolls it.
+/// * a non-empty envelope that **omits a mandatory index**: the caller
+///   treats it as the same failure as above, so it must not be frozen either.
+///
+/// Responses with empty-text items keep failing `validate_corrections` as
+/// before, which keeps the empty-correction rescue round a genuine re-ask.
+fn audit_response_is_cachable(
+    response: &str,
+    expected: &BTreeSet<u32>,
+    mandatory: &BTreeSet<u32>,
+    max_corrections: usize,
+) -> bool {
+    let Ok(envelope) = parse_consistency_envelope(response) else {
+        return false;
+    };
+    if envelope.corrections.is_empty() {
+        return false;
+    }
+    match validate_corrections(envelope, expected, max_corrections) {
+        Ok(corrections) => mandatory
+            .iter()
+            .all(|index| corrections.contains_key(index)),
+        Err(_) => false,
+    }
 }
 
 /// Outcome of one audit request round: the accepted corrections plus the
@@ -1029,20 +1077,18 @@ fn request_audit_corrections(
     prompt: &str,
     max_output_tokens: u32,
     expected: &BTreeSet<u32>,
+    mandatory: &BTreeSet<u32>,
     max_corrections: usize,
     audit_name: &str,
 ) -> Result<AuditResolution> {
-    // Audit responses are cached on the same terms as translations: stored
-    // only once the strict correction checks accept them, and re-checked on
-    // every replay, so a correction that a cache could smuggle past the
-    // reviewer is not possible. Responses with empty correction texts fail
-    // `validate_corrections`, so they never poison the cache and the
-    // empty-correction rescue round always re-asks the model for real.
+    // Audit responses are cached only when `audit_response_is_cachable`
+    // accepts them — the strict success test of this very call site, not
+    // just a parseable shape — and re-checked on every replay, so a cache
+    // can never freeze a failed round (empty corrections shell, or a shell
+    // missing a mandatory correction) into a deterministic death across
+    // burns; those rounds always re-ask the model for real.
     let accepts = |response: &str| -> bool {
-        match parse_consistency_envelope(response) {
-            Ok(envelope) => validate_corrections(envelope, expected, max_corrections).is_ok(),
-            Err(_) => false,
-        }
+        audit_response_is_cachable(response, expected, mandatory, max_corrections)
     };
     let response = retry(cfg.max_retries, || {
         request(
@@ -2014,5 +2060,222 @@ cache_dir = "{}"
             cached_response(&cache, None, &accepted, &live).unwrap();
         }
         assert_eq!(live_count(&calls), 2, "the default stays exactly as before");
+    }
+
+    // ----- audit cache gate: no frozen empty answers (2026-11-10 item-4) -----
+
+    #[test]
+    fn cache_gate_rejects_empty_corrections_shells() {
+        // The item-4 cue-429 poison: a structurally valid zero-item audit
+        // envelope passes parse and validate_corrections, yet it is a
+        // failed round whenever the batch holds a mandatory cue — so the
+        // station order treats every empty shell as a failed response and
+        // keeps it out of the cache, mandatory batch or not.
+        let expected = BTreeSet::from([1, 2]);
+        let mandatory = BTreeSet::from([1]);
+        for shell in [r#"{"corrections":[]}"#, "[]", "{}"] {
+            assert!(
+                !audit_response_is_cachable(shell, &expected, &mandatory, 2),
+                "{shell} must never be cached"
+            );
+            assert!(
+                !audit_response_is_cachable(shell, &expected, &BTreeSet::new(), 2),
+                "{shell} must never be cached without mandatory cues either"
+            );
+        }
+        // Empty-text items keep failing validate_corrections on the way.
+        assert!(!audit_response_is_cachable(
+            r#"{"corrections":[{"index":1,"text":"  "}]}"#,
+            &expected,
+            &mandatory,
+            2
+        ));
+    }
+
+    #[test]
+    fn cache_gate_requires_full_mandatory_coverage() {
+        let expected = BTreeSet::from([1, 2]);
+        let mandatory = BTreeSet::from([1]);
+        // The success shape: covers the mandatory index with a real text.
+        assert!(audit_response_is_cachable(
+            r#"{"corrections":[{"index":1,"text":"甲"}]}"#,
+            &expected,
+            &mandatory,
+            2
+        ));
+        // Omits the mandatory index: `audit_alignment` would re-split this
+        // and eventually bail, so freezing it is exactly the deterministic
+        // death the gate exists to prevent.
+        assert!(!audit_response_is_cachable(
+            r#"{"corrections":[{"index":2,"text":"乙"}]}"#,
+            &expected,
+            &mandatory,
+            2
+        ));
+        // Without mandatory cues, any strict-valid corrections envelope is
+        // the answer the caller would have accepted, cache included.
+        assert!(audit_response_is_cachable(
+            r#"{"corrections":[{"index":2,"text":"乙"}]}"#,
+            &expected,
+            &BTreeSet::new(),
+            2
+        ));
+        // The strict checks keep their veto as well.
+        assert!(!audit_response_is_cachable(
+            r#"{"corrections":[{"index":7,"text":"庚"}]}"#,
+            &expected,
+            &mandatory,
+            2
+        ));
+        assert!(!audit_response_is_cachable(
+            r#"{"corrections":[{"index":1,"text":"甲"},{"index":2,"text":"乙"}]}"#,
+            &expected,
+            &mandatory,
+            1
+        ));
+    }
+
+    /// The cue-429 review leg answered every round with `{"corrections":[]}`.
+    /// Used to be cached (shape-valid) and replayed forever: one random
+    /// empty answer frozen into a deterministic bail across all burns.
+    #[test]
+    fn an_empty_corrections_shell_never_freezes_a_mandatory_death() {
+        let root = tempfile::tempdir().unwrap();
+        let (base_url, seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    if index == 1 {
+                        json!({ "index": 1, "text": "" })
+                    } else {
+                        json!({ "index": index, "text": format!("第{index}行。") })
+                    }
+                })
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut cfg = cached_config(root.path());
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        let review_requests = || -> usize {
+            seen.lock()
+                .unwrap()
+                .iter()
+                .filter(|body| body["prompt"].as_str().unwrap().contains("final-review"))
+                .count()
+        };
+        let error = translate(&cues(10), &cfg).unwrap_err().to_string();
+        assert!(error.contains("omitted mandatory correction"), "{error}");
+        let first = review_requests();
+        assert!(first > 0, "the review leg must have asked the model");
+        // Every audit round this run answered was a shell, so the cache may
+        // hold translation responses only — not one audit envelope on disk.
+        for entry in std::fs::read_dir(root.path()).unwrap() {
+            let path = entry.unwrap().path();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let parsed: Value = serde_json::from_str(&text).unwrap_or_else(|error| {
+                panic!("cache entry {} is not JSON: {error}", path.display())
+            });
+            assert!(
+                parsed.get("corrections").is_none(),
+                "audit envelope frozen into the cache: {text}"
+            );
+        }
+        // The next burn re-asks for real. Before the gate fix this second
+        // run replayed the whole review leg from disk, reached the model
+        // zero times, and died at the identical byte.
+        let error = translate(&cues(10), &cfg).unwrap_err().to_string();
+        assert!(error.contains("omitted mandatory correction"), "{error}");
+        assert!(
+            review_requests() > first,
+            "the review leg replayed its death from the cache instead of re-asking"
+        );
+    }
+
+    /// The gate must still let genuine successes in — that is what the
+    /// cache was built for — while empty shells keep re-rolling live.
+    #[test]
+    fn a_covered_mandatory_audit_answer_replays_from_cache() {
+        let root = tempfile::tempdir().unwrap();
+        let (base_url, seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                if prompt.contains("\"must_correct\":true") {
+                    return ollama_reply(json!({
+                        "corrections": [{ "index": 1, "text": "第一行修正。" }]
+                    }));
+                }
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    if index == 1 {
+                        json!({ "index": 1, "text": "" })
+                    } else {
+                        json!({ "index": index, "text": format!("第{index}行。") })
+                    }
+                })
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut cfg = cached_config(root.path());
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        let outcome = translate(&cues(10), &cfg).unwrap();
+        assert_eq!(outcome.cues[0].text, "第一行修正。\nLine 1");
+        let review_rounds = |bodies: &[Value], mandatory_only: bool| -> usize {
+            bodies
+                .iter()
+                .filter(|body| {
+                    let prompt = body["prompt"].as_str().unwrap();
+                    prompt.contains("final-review")
+                        && (!mandatory_only || prompt.contains("\"must_correct\":true"))
+                })
+                .count()
+        };
+        let first_run = seen.lock().unwrap().clone();
+        assert!(review_rounds(&first_run, true) >= 1);
+        // Exactly one audit envelope on disk: the covered mandatory answer.
+        let audit_entries: Vec<String> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .filter(|text| {
+                serde_json::from_str::<Value>(text)
+                    .is_ok_and(|value| value.get("corrections").is_some())
+            })
+            .collect();
+        assert_eq!(
+            audit_entries,
+            vec![r#"{"corrections":[{"index":1,"text":"第一行修正。"}]}"#.to_owned()]
+        );
+        // Re-burn on the same cache: the mandatory round replays without
+        // reaching the model, while the empty shells of the mandatory-free
+        // batches are asked again (failed responses are never frozen).
+        let outcome = translate(&cues(10), &cfg).unwrap();
+        assert_eq!(outcome.cues[0].text, "第一行修正。\nLine 1");
+        let second_run = {
+            let all = seen.lock().unwrap();
+            all[first_run.len()..].to_vec()
+        };
+        assert_eq!(
+            review_rounds(&second_run, true),
+            0,
+            "the covered mandatory corrections envelope must replay from the cache"
+        );
+        assert!(
+            review_rounds(&second_run, false) > 0,
+            "empty shells must keep re-rolling live, never replayed as truth"
+        );
     }
 }

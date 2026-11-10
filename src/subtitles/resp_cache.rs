@@ -20,6 +20,11 @@
 //! through the same strict parser as a live response (the caller supplies the
 //! `accept` predicate); a payload that no longer satisfies it is dropped
 //! instead of trusted, and nothing is written before it satisfies it too.
+//! The predicate is the caller's own success test, not merely a parse: a
+//! structurally valid but empty or incomplete answer (an empty corrections
+//! or translations envelope, or corrections missing a mandatory index) is a
+//! failed response and never reaches disk, so one random empty model answer
+//! cannot be frozen into a replayable death (2026-11-10, item-4 cue-429).
 //! With `cache_dir` unset (the default) this module performs no filesystem
 //! access at all and the engine behaves exactly as the version-3 baseline.
 
