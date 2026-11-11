@@ -36,6 +36,7 @@ fn translation_config() -> TranslationConfig {
         max_batch_chars: 8_000,
         max_response_bytes: 1024 * 1024,
         max_output_tokens: 4_096,
+        disable_thinking: false,
         min_target_script_ratio: 0.15,
         consistency_check: false,
         consistency_max_chars: 120_000,
@@ -163,6 +164,43 @@ fn cache_key_covers_model_language_and_parameters_and_force_bypasses_cache() {
     changed.batch_size = 10;
     assert_ne!(key, cache_key("source-hash", &changed).unwrap());
     assert_ne!(key, cache_key("different-source", &cfg).unwrap());
+}
+
+#[test]
+fn cache_key_covers_disable_thinking_and_absent_field_defaults_off() {
+    // The thinking pin changes what the model produces, so it is serialized
+    // into the cache_key on purpose (unlike the skip_serializing cache_dir
+    // knob): flipping it MUST rotate the key and put artifacts up for
+    // review, exactly like a model bump. And an existing version-3 TOML
+    // without the field must keep the pre-knob key, so the upgrade itself
+    // stays hash-neutral until someone flips the switch.
+    let base = translation_config();
+    let key = cache_key("source-hash", &base).unwrap();
+    assert!(
+        !base.disable_thinking,
+        "default must preserve current behavior"
+    );
+
+    let mut flipped = translation_config();
+    flipped.disable_thinking = true;
+    assert_ne!(
+        key,
+        cache_key("source-hash", &flipped).unwrap(),
+        "flipping the thinking pin must rotate the cache_key"
+    );
+
+    let parsed: TranslationConfig = toml::from_str(
+        r#"
+provider = "ollama"
+base_url = "http://127.0.0.1:11434"
+model = "model-a"
+"#,
+    )
+    .unwrap();
+    assert!(
+        !parsed.disable_thinking,
+        "configs written before the knob existed keep loading with it off"
+    );
 }
 
 #[test]

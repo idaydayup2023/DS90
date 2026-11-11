@@ -1,0 +1,191 @@
+version = 3
+
+# ============================================================
+# 全站跑批基准 toml · 定版（代码运维 定稿 · 2026-11-11 · 站长 11-11 19:2x 两令②批准入仓）
+# 本文件是「将来一切 subtitles 跑批与 manifest 重绑的唯一依据」。
+# 定版口径：16384/16384 + 本机 litellm 8888/Qwen3.8-Flash-Next + cache_dir +
+# disable_thinking = true（随 PR #25 同批入仓，cache_key 只漂这一次）。
+#
+# 依据链：
+#   · 模型硬规则（用户 2026-10-20）：翻译/审校仅 translategemma:4b 与
+#     Qwen3.8-Flash-Next；本基准线上初译+审校均走 litellm 的 Qwen3.8-Flash-Next。
+#   · 审校通道改道（用户 2026-11-08）：本机 litellm http://127.0.0.1:8888/v1
+#     （192.168.1.9 已整机下线，11-09 终局；11436 B 线代理旧案作废）。
+#   · litellm batch 定性（交卷_litellm_batch定性_2026-11-10.md E3/E4）：
+#     32-cue 批实测需 ~5k–10k 输出预算，max_output_tokens=4096 会被思考链
+#     烧穿回空 content；mt=16384 finish=stop 出合法译文 ⇒ 定版 16384/16384。
+#   · retrans14 全批 + 件4/件8 复跑实形（retrans14r_06.toml，2026-11-11 过闸
+#     落库）；alignment_check=true 为全批实际执行口径（manifest 带
+#     translation_quality_log，件4 cue429 死单即审校腿点名）。
+#   · thinking A/B 对拍终局（站长 11-11 18:35:56 直读 score.json，paired_n=38，
+#     positive_control 6/6 fired）：off_ok_default_empty=18 / default_ok_off_empty=0
+#     / both_ok=19（sim_p50 0.609）/ both_empty=1；default 臂生产批 9/9 全灭
+#     （P2-4-b13 finish=length、reasoning_tokens=4096 烧穿 max_tokens、正文 0 字），
+#     off 臂 37/38 良好、reasoning_tokens 恒 0 ⇒ 「thinking 开 ⇒ 生产批级停产
+#     失效」批量成象 ⇒ disable_thinking=true 定版（PR #25 代码侧开关同批入仓）。
+#
+# ★ cache_key 纪律（团队口径 babf + 站长 11-11 裁定）：
+#   cache_key = sha256(schema × prompt_version × source_sha256 × [translation]
+#   struct 的 serde_json 序列化)（subtitles/mod.rs:517；cache_dir 为
+#   skip_serializing 纯加速器不入哈希）。disable_thinking 刻意参与序列化
+#   （改变模型产出＝等同换模型）。本定版使 [translation] 相对 2026-11-06 基准
+#   （sha256 e563bd3d…）发生漂移 ⇒ 既有已交付 manifest 的 cache_key 一律不救
+#   旧值；今后绑/重绑一律按本文件（将来跑批真正使用的那份）现算，禁抄旧值、
+#   禁硬编码历史 toml。复核器具：tools/vk_manifest_cachekey.py selfcheck。
+# ============================================================
+
+[scan]
+exclude_paths = []
+exclude_globs = []
+
+# ---- 以下为批次覆盖位（每件/每批 run toml 在此覆写，不入哈希）----
+[state]
+database = "./state/site_baseline.sqlite3"   # 批次自定名覆盖
+lease_seconds = 7200
+
+[source]
+kind = "ftp"
+host = "172.19.60.90"
+port = 10021                                   # 明文 FTP 正入口（60021 假入口勿用）
+username_env = "SUBTRANS_FTP_USERNAME"
+password_env = "SUBTRANS_FTP_PASSWORD"
+root = "/X-Movie"                              # 批次覆写至片目录
+timeout_seconds = 300
+allow_plaintext = true
+
+[destination]
+kind = "local"
+root = "staging/site_baseline"                 # 批次自定名覆盖
+
+[metadata]
+enabled = false
+base_url = "https://api.themoviedb.org/3"
+image_base_url = "https://image.tmdb.org/t/p/original"
+api_token_env = "SUBTRANS_TMDB_READ_TOKEN"
+language = "zh-CN"
+fallback_language = "en-US"
+timeout_seconds = 30
+max_retries = 2
+max_response_bytes = 4194304
+max_image_bytes = 33554432
+match_threshold = 0.85
+ambiguity_gap = 0.08
+refresh_after_days = 180
+
+# ------------------------------------------------------------------
+# [subtitles] 参与 acquisition_key（mod.rs:518-540）——
+#   这几项一改，全库 acquisition_key 全变 ⇒ 一律锁死，改动须站长令。
+# ------------------------------------------------------------------
+[subtitles]
+video_extensions = ["mkv", "mp4", "avi", "mov", "m4v", "ts"]
+min_video_bytes = 1048576
+ffmpeg = "tools/ffmpeg/node_modules/ffmpeg-static/ffmpeg"
+ffprobe = "tools/ffmpeg/node_modules/@ffprobe-installer/darwin-arm64/ffprobe"
+external_process_timeout_seconds = 7200
+
+[subtitles.external_srt_validation]
+min_timing_match_ratio = 0.70
+min_text_similarity = 0.45
+external_quality_margin = 5.0
+
+# 基准**不启用** asr / pgs_ocr worker（保持 None）：一旦 enabled，全库
+# acquisition_key 与所有 worker=None 入库的既有 manifest 全失配。
+# PGS 位图片需 OCR 时走 per-batch 覆盖配置，跑完按该配置现算 cache_key 再绑。
+
+# ------------------------------------------------------------------
+# [translation] 参与 cache_key（subtitles/mod.rs:517）——
+# 字段全量进哈希（cache_dir 除外：skip_serializing 纯加速器）；逐字段固定，
+# 改动须站长令并走「基准 toml 现算重绑、禁抄旧值」规矩（团队口径 babf）。
+# ------------------------------------------------------------------
+[translation]
+cache_dir = "scratch/tresp_cache"              # skip_serializing 不入哈希；批次可覆写本机绝对路径
+provider = "openai_compatible"
+api_key_env = "LITELLM_MASTER_KEY"
+base_url = "http://127.0.0.1:8888/v1"
+model = "Qwen3.8-Flash-Next"
+alignment_model = "Qwen3.8-Flash-Next" # 审校（白名单）
+source_language = "English"
+source_language_code = "en"
+target_language = "Simplified Chinese"
+target_language_code = "zh-CN"
+bilingual = true
+batch_size = 32
+min_batch_size = 1
+context_cues = 6
+timeout_seconds = 600
+max_retries = 2
+max_batch_chars = 8000
+max_response_bytes = 4194304
+max_output_tokens = 16384
+min_target_script_ratio = 0.15
+consistency_check = false
+alignment_check = true
+alignment_batch_size = 8
+alignment_context_cues = 6
+alignment_max_corrections = 8
+alignment_max_attempts = 3
+alignment_max_output_tokens = 16384
+disable_thinking = true                        # A/B 定案（站长 11-11 两令②）：钉死思考链，入 cache_key 序列化
+
+[migration]
+auto_apply_confidence = 0.95
+sidecar_extensions = ["srt", "ass", "ssa", "vtt", "nfo", "json", "jpg", "png"]
+incomplete_marker_extensions = ["aria2", "part", "crdownload"]
+require_translated_subtitle = true
+generic_source_directories = ["incoming", "low_imdb"]
+
+# 迁移布局沿用 DS90/config.example.toml 全站布局（基准只管跑批口径，
+# 真正的迁移仍须用户逐项批准，本文件不构成迁移授权）。
+[migration.layouts.movie_4k]
+root = "MOVIE"
+directory_template = "{year_bucket}/{release_dir}"
+filename_template = "{source_file_dot}"
+recent_year_from = 1900
+
+[migration.layouts.movie_other]
+root = "X-Movie"
+directory_template = "{year_bucket}/{release_dir}"
+filename_template = "{source_file_dot}"
+recent_year_from = 2024
+
+[migration.layouts.tv_4k]
+root = "TV"
+directory_template = "{alpha_group}/{title_dot}/S{season_padded}"
+filename_template = "{source_file_dot}"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "ABC"
+directory = "[A.B.C]"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "DEF"
+directory = "[D.E.F]"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "GHIJK"
+directory = "[G.H.I.J.K]"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "LMN"
+directory = "[L.M.N]"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "OPQR"
+directory = "[O.P.Q.R]"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "S"
+directory = "[S]"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "T"
+directory = "[T]"
+
+[[migration.layouts.tv_4k.alphabet_groups]]
+letters = "UVWXYZ"
+directory = "[U.V.W.Y.Z]"
+
+[migration.layouts.tv_other]
+root = "X-TV"
+directory_template = "{title_dot}/S{season_padded}"
+filename_template = "{source_file_dot}"

@@ -61,6 +61,7 @@ pub fn config(root: &Path, source: &Path, destination: &Path) -> Config {
             max_batch_chars: 8_000,
             max_response_bytes: 1024 * 1024,
             max_output_tokens: 4_096,
+            disable_thinking: false,
             min_target_script_ratio: 0.15,
             consistency_check: false,
             consistency_max_chars: 120_000,

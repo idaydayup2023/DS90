@@ -8,6 +8,8 @@
 
 ### Added
 
+- 新增 `config/site_baseline.toml`：全站字幕跑批与 manifest 重绑的唯一基准配置（2026-11-11 站长两令定版，与 `translation.disable_thinking` 同批入仓）。定版口径 `16384/16384` + 本机 litellm `Qwen3.8-Flash-Next` + `disable_thinking = true` + `alignment_check = true`，A/B 对拍终局依据见文件头注释。相对 2026-11-06 基准的 `[translation]` 漂移即最后一次：今后一切绑/重绑按本文件现算 `cache_key`，禁抄旧值（团队口径 babf）。
+- 字幕翻译新增 `translation.disable_thinking`（缺省 `false`，行为与旧版逐字节一致）：litellm 类 OpenAI 兼容网关服务端默认开 thinking，思考链会烧穿 `max_tokens` 预算并回空 `content`（2026-11-11 全库普查 10 起空正文事件同根因）。开启后 `chat/completions` 请求体附带 `chat_template_kwargs: {"thinking": false}`（探针实证一发即通）；Ollama 端点已无条件 `"think": false`，不变。与 `cache_dir` 相反，该开关改变模型产出，**刻意参与 `cache_key` 序列化**：翻转等同换模型，已发布 manifest 一并进入重审——批量翻转须按将来跑批的基准 toml 现算重绑，禁抄旧值。
 - 字幕翻译新增可选模型应答缓存 `translation.cache_dir`：每条模型应答按 `sha256(provider + base_url + model + prompt)` 落盘，重跑同一批次直接回放已答部分，进程中途被打断只损失当时在途的请求（一次 14 件批的断档实测白烧约 1,300 条字幕）。端点与模型名一并入键，litellm 后端换版本不会误回放旧译文；命中件仍走与实收应答相同的严格 JSON 复验，解析不过的条目不采信、即刻剔除后重新请求，未通过校验的应答绝不入缓存。缺省不设置即彻底关闭（不碰磁盘、不新增日志），且该开关不参与 `cache_key` 计算，启用或换目录不会让已发布的 manifest 失配。
 - 新增可选 `[scan]` 配置节（`exclude_paths`、`exclude_globs`）：命中的源相对路径在资料、字幕与迁移扫描中一律跳过、保持原样，不再计入视频数、失败数或待处理项。
 - 终稿防误覆盖闸：字幕发布前若目录内已存在 `.ai.srt` 终稿而其 manifest 缺失或不匹配（缓存早退未命中、即将重译覆盖），先把现件归档为 `<stem>.ai.srt.<team>.predel.<ts>.bak` 并回读校验哈希，归档不一致即中止发布——已人工完成的终稿不再被静默覆盖。新增可选 `subtitles.output_backup_root` 把归档集中到指定根目录（保留相对路径与 team 标记），未配置则归档落在终稿旁边。
