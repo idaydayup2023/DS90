@@ -44,6 +44,7 @@ struct Engine<'a> {
     api_key: Option<&'a str>,
     max_retries: u32,
     max_response_bytes: usize,
+    disable_thinking: bool,
 }
 
 impl<'a> Engine<'a> {
@@ -55,6 +56,7 @@ impl<'a> Engine<'a> {
             api_key,
             max_retries: cfg.max_retries,
             max_response_bytes: cfg.max_response_bytes,
+            disable_thinking: cfg.disable_thinking,
         }
     }
 
@@ -78,6 +80,13 @@ impl<'a> Engine<'a> {
             api_key,
             max_retries: fallback.max_retries,
             max_response_bytes: fallback.max_response_bytes,
+            // The rescue route is provisioned as an Ollama translategemma,
+            // whose branch pins `"think": false` unconditionally, and
+            // `FallbackEngine` deliberately carries no knob of its own: the
+            // rescue behavior must stay frozen while the primary route is
+            // tuned. Revisit if a fallback is ever pointed at an
+            // OpenAI-compatible endpoint.
+            disable_thinking: false,
         }
     }
 }
@@ -1571,6 +1580,32 @@ fn cached_response(
     Ok(response)
 }
 
+/// Chat-completions request body for OpenAI-compatible endpoints, extracted
+/// pure so the thinking-pin contract is asserted without a live server.
+/// With `disable_thinking` set, the vLLM/SGLang-style `chat_template_kwargs`
+/// switch pins server-side reasoning off: litellm gateways default it *on*,
+/// and the chain-of-thought then consumes the whole `max_tokens` budget and
+/// answers with an empty `content` (2026-11-11 full-library sweep, ten
+/// empty-content events on one root cause; probe-verified one-shot fix).
+fn chat_completions_body(
+    model: &str,
+    prompt: &str,
+    max_output_tokens: u32,
+    disable_thinking: bool,
+) -> Value {
+    let mut body = json!({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "max_tokens": max_output_tokens,
+        "response_format": {"type": "json_object"}
+    });
+    if disable_thinking {
+        body["chat_template_kwargs"] = json!({"thinking": false});
+    }
+    body
+}
+
 fn request_model(
     client: &Client,
     engine: &Engine,
@@ -1597,13 +1632,7 @@ fn request_model(
         ),
         LlmProvider::OpenaiCompatible => (
             endpoint(engine.base_url, "chat/completions"),
-            json!({
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.0,
-                "max_tokens": max_output_tokens,
-                "response_format": {"type": "json_object"}
-            }),
+            chat_completions_body(model, prompt, max_output_tokens, engine.disable_thinking),
             &["choices", "0", "message", "content"],
         ),
     };
@@ -2272,6 +2301,28 @@ cache_dir = "{}"
         let key = cache.key(&other_provider, &cfg.model, "PROMPT");
         cached_response(&cache, key.as_deref(), &accept, &live).unwrap();
         assert_eq!(live_count(&calls), 5, "another provider replays nothing");
+    }
+
+    #[test]
+    fn chat_completions_body_pins_thinking_off_only_when_disable_thinking_is_set() {
+        // The empty-content death family (2026-11-11): litellm defaults
+        // thinking on, the chain-of-thought burns max_tokens, content comes
+        // back empty. The contract is exactly one key, and only when asked.
+        let off = chat_completions_body("m", "PROMPT", 4096, false);
+        assert!(
+            off.get("chat_template_kwargs").is_none(),
+            "default config must keep requests byte-identical to before the knob existed"
+        );
+        let on = chat_completions_body("m", "PROMPT", 4096, true);
+        assert_eq!(
+            on["chat_template_kwargs"],
+            serde_json::json!({"thinking": false}),
+            "the probe-verified vLLM/SGLang switch must be sent verbatim"
+        );
+        // Everything else the endpoint needs stays untouched by the switch.
+        for key in ["model", "messages", "temperature", "max_tokens", "response_format"] {
+            assert_eq!(on[key], off[key], "{key} must not drift with the switch");
+        }
     }
 
     fn live_count(calls: &std::cell::Cell<u32>) -> u32 {

@@ -320,6 +320,18 @@ pub struct TranslationConfig {
     pub max_response_bytes: usize,
     #[serde(default = "default_max_output_tokens")]
     pub max_output_tokens: u32,
+    /// Pin off model-side thinking/reasoning for request bodies.
+    /// litellm-style gateways enable thinking server-side by default, and
+    /// the chain-of-thought burns the whole `max_tokens` budget, leaving
+    /// `content` empty (station 2026-11-11 full-library sweep: ten
+    /// empty-content events, one root cause). On OpenAI-compatible endpoints
+    /// this adds `chat_template_kwargs: {"thinking": false}` to the request;
+    /// Ollama requests already pin `"think": false` unconditionally.
+    /// Unlike `cache_dir` this knob changes what the model produces, so it
+    /// deliberately *is* serialized into the `cache_key` hash: flipping it
+    /// must put artifacts up for review, exactly like a model bump.
+    #[serde(default)]
+    pub disable_thinking: bool,
     #[serde(default = "default_min_target_script_ratio")]
     pub min_target_script_ratio: f32,
     #[serde(default = "default_true")]
