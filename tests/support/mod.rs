@@ -72,6 +72,8 @@ pub fn config(root: &Path, source: &Path, destination: &Path) -> Config {
             alignment_max_corrections: 32,
             alignment_max_attempts: 3,
             alignment_max_output_tokens: 4_096,
+            cache_dir: None,
+            fallback: None,
         },
         migration: migration_config(true),
     }

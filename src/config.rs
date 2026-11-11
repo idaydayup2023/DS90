@@ -345,6 +345,58 @@ pub struct TranslationConfig {
     pub alignment_max_attempts: u32,
     #[serde(default = "default_alignment_max_output_tokens")]
     pub alignment_max_output_tokens: u32,
+    /// Directory for the cache of raw model responses
+    /// (`[subtitles]`-independent, translation stage only). Unset by default,
+    /// which disables the cache entirely. `skip_serializing` is deliberate:
+    /// `cache_key` hashes this very section, and an infrastructure knob must
+    /// not invalidate every published manifest just because a cache was
+    /// switched on or pointed somewhere else.
+    #[serde(default, skip_serializing)]
+    pub cache_dir: Option<PathBuf>,
+    /// Optional second engine for cues whose text matches the stubborn
+    /// empty-response profile (short tag-stripped lines wrapped in `<i>`
+    /// italics inside multi-speaker dialogue, station 2026-11-10 death-case
+    /// family). Matching cues are routed there; everything else keeps the
+    /// primary engine above. `skip_serializing_if` is deliberate: absent in
+    /// existing configurations, so published `cache_key` values do not drift.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<FallbackEngine>,
+}
+
+/// Engine parameters for the stubborn-cue fallback route. Deliberately a
+/// narrow engine-only subset of `[translation]`: language, batching and
+/// review knobs always stay on the primary configuration so both engines
+/// translate from the same prompt; only the endpoint and its budget differ.
+/// The response cache keys both engines apart by provider/base_url/model,
+/// so both may share one `cache_dir` without collisions.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FallbackEngine {
+    pub provider: LlmProvider,
+    pub base_url: String,
+    pub model: String,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default = "default_timeout")]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_retries")]
+    pub max_retries: u32,
+    #[serde(default = "default_max_response_bytes")]
+    pub max_response_bytes: usize,
+    #[serde(default = "default_max_output_tokens")]
+    pub max_output_tokens: u32,
+}
+
+impl FallbackEngine {
+    pub fn api_key(&self) -> Result<Option<String>> {
+        self.api_key_env
+            .as_ref()
+            .map(|name| {
+                env::var(name)
+                    .with_context(|| format!("missing API key environment variable {name}"))
+            })
+            .transpose()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

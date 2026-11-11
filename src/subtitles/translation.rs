@@ -10,12 +10,147 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Value, json};
 
 use crate::artifact::TranslationQualityRecord;
-use crate::config::{LlmProvider, TranslationConfig};
+use crate::config::{FallbackEngine, LlmProvider, TranslationConfig};
 
 use super::quality::{translation_concerns, validate_translation_quality};
+use super::resp_cache::{ResponseCache, summary_line};
 use super::srt::{Cue, single_line};
 
 const PROMPT_VERSION: &str = "subtrans-translation-two-stage-review-json-v7";
+
+/// Token window for the one enlarged single-cue rescue request that runs
+/// after the configured primary-translation retries are exhausted and
+/// before the cue is queued for mandatory review. The observed empty
+/// response cluster (2026-11-09, translategemma:4b) survived the normal
+/// window but not the widened one. The value is deliberately a code
+/// constant: nothing in `[translation]` configuration changes, so cache
+/// keys are unaffected.
+const PRIMARY_RESCUE_MAX_OUTPUT_TOKENS: u32 = 8_192;
+
+/// Upper bound on the tag-stripped length of a cue that still counts as a
+/// "short line" for the stubborn-cue profile. The three confirmed death
+/// cases (station 2026-11-10, item-5 cue 527 family) are far below this.
+const STUBBORN_PROFILE_MAX_STRIPPED_CHARS: usize = 120;
+
+/// One request endpoint: either the primary `[translation]` engine or the
+/// stubborn-cue fallback. `max_output_tokens` deliberately stays a
+/// per-request argument (the rescue arm widens it for a single cue); the
+/// endpoint identity and its budget limits belong to the engine.
+#[derive(Debug)]
+struct Engine<'a> {
+    provider: &'a LlmProvider,
+    base_url: &'a str,
+    model: &'a str,
+    api_key: Option<&'a str>,
+    max_retries: u32,
+    max_response_bytes: usize,
+}
+
+impl<'a> Engine<'a> {
+    fn primary(cfg: &'a TranslationConfig, api_key: Option<&'a str>) -> Self {
+        Self {
+            provider: &cfg.provider,
+            base_url: &cfg.base_url,
+            model: &cfg.model,
+            api_key,
+            max_retries: cfg.max_retries,
+            max_response_bytes: cfg.max_response_bytes,
+        }
+    }
+
+    /// Primary endpoint with an explicit model, for the review legs that may
+    /// name their own `alignment_model` / `consistency_model`.
+    fn primary_with_model(
+        cfg: &'a TranslationConfig,
+        api_key: Option<&'a str>,
+        model: &'a str,
+    ) -> Self {
+        let mut engine = Self::primary(cfg, api_key);
+        engine.model = model;
+        engine
+    }
+
+    fn fallback(fallback: &'a FallbackEngine, api_key: Option<&'a str>) -> Self {
+        Self {
+            provider: &fallback.provider,
+            base_url: &fallback.base_url,
+            model: &fallback.model,
+            api_key,
+            max_retries: fallback.max_retries,
+            max_response_bytes: fallback.max_response_bytes,
+        }
+    }
+}
+
+/// The fallback endpoint resolved once per run: its own HTTP client (own
+/// timeout budget, so a slow fallback never borrows the primary one) and
+/// its API key (resolved eagerly: a missing key must fail at start, not
+/// halfway through a burn).
+#[derive(Debug)]
+struct FallbackRoute {
+    client: Client,
+    api_key: Option<String>,
+}
+
+/// Everything a translation request needs beyond prompt and parser: the
+/// primary client and credentials, the configuration, the shared response
+/// cache, and the optional stubborn-cue fallback route. Bundled so the
+/// batch loop passes one context instead of a nine-argument signature.
+#[derive(Debug)]
+struct RequestCtx<'a> {
+    client: &'a Client,
+    api_key: Option<&'a str>,
+    cfg: &'a TranslationConfig,
+    cache: &'a ResponseCache,
+    fallback: Option<(&'a FallbackEngine, &'a FallbackRoute)>,
+}
+
+/// Pure-rule pre-check for the stubborn empty-response profile (station
+/// 2026-11-10 death-case family: Qwen answers these with a reasoning loop
+/// that burns the whole token window, while translategemma:4b answers 3/3
+/// correctly). A cue matches when ALL of the following hold, no model call
+/// involved:
+/// * it contains at least one complete `<i>…</i>` italic span,
+/// * after stripping markup it has at least two `- ` speaker lines,
+/// * the stripped text is a short line (see [`STUBBORN_PROFILE_MAX_STRIPPED_CHARS`]).
+///
+/// The pins `matches_stubborn_profile_rejects_item5_cue_419_and_429` keep
+/// the two cues the primary engine rescued correctly on the primary route.
+fn matches_stubborn_profile(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let opens = lower.matches("<i>").count();
+    if opens == 0 || opens != lower.matches("</i>").count() {
+        return false;
+    }
+    let stripped = strip_markup(text);
+    let lines: Vec<&str> = stripped
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.len() < 2 {
+        return false;
+    }
+    lines.iter().filter(|line| line.starts_with('-')).count() >= 2
+        && stripped.chars().count() <= STUBBORN_PROFILE_MAX_STRIPPED_CHARS
+}
+
+/// Drop `<…>` tags and `{…}` override blocks so the profile can measure the
+/// spoken text itself. Deliberately forgiving: unbalanced brackets just stop
+/// suppressing characters.
+fn strip_markup(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut inside = false;
+    for ch in text.chars() {
+        match ch {
+            '<' | '{' => inside = true,
+            '>' | '}' => inside = false,
+            _ if !inside => output.push(ch),
+            _ => {}
+        }
+    }
+    output
+}
 
 #[derive(Debug, Serialize)]
 struct PromptLine<'a> {
@@ -107,19 +242,41 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<TranslationOut
         .timeout(Duration::from_secs(cfg.timeout_seconds))
         .build()?;
     let api_key = cfg.api_key()?;
+    let cache = ResponseCache::new(cfg);
+    // Resolve the fallback route once per run so a missing key or a broken
+    // client fails at start instead of halfway through a burn. `None`
+    // (the default when `[translation].fallback` is absent) keeps every
+    // request on the primary engine, exactly like before this feature.
+    let fallback_route = cfg
+        .fallback
+        .as_ref()
+        .map(|fallback| -> Result<FallbackRoute> {
+            Ok(FallbackRoute {
+                client: Client::builder()
+                    .timeout(Duration::from_secs(fallback.timeout_seconds))
+                    .build()?,
+                api_key: fallback.api_key()?,
+            })
+        })
+        .transpose()?;
+    if let Some(fallback) = &cfg.fallback {
+        println!(
+            "translation fallback_route armed model={:?} at {} (stubborn-cue profile)",
+            fallback.model, fallback.base_url
+        );
+    }
+    let ctx = RequestCtx {
+        client: &client,
+        api_key: api_key.as_deref(),
+        cfg,
+        cache: &cache,
+        fallback: cfg.fallback.as_ref().zip(fallback_route.as_ref()),
+    };
     let mut translated = BTreeMap::new();
     let mut pending_review = BTreeMap::new();
 
     for range in batch_ranges(cues, cfg.batch_size, cfg.max_batch_chars) {
-        translate_range_adaptive(
-            &client,
-            api_key.as_deref(),
-            cues,
-            range,
-            cfg,
-            &mut translated,
-            &mut pending_review,
-        )?;
+        translate_range_adaptive(&ctx, cues, range, &mut translated, &mut pending_review)?;
         println!(
             "translation progress translated={}/{}",
             translated.len(),
@@ -157,6 +314,12 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<TranslationOut
         &cfg.target_language,
         cfg.min_target_script_ratio,
     )?;
+    // Counters are per process, so this line is cumulative across the videos
+    // one run has translated so far; it is only printed when a cache is
+    // configured, leaving the disabled baseline log byte-identical.
+    if let Some(summary) = summary_line(cache.dir()) {
+        println!("translation {summary}");
+    }
     Ok(TranslationOutcome {
         cues: output,
         quality_log,
@@ -187,34 +350,85 @@ fn batch_ranges(cues: &[Cue], max_count: usize, max_chars: usize) -> Vec<Range<u
 }
 
 fn translate_range_adaptive(
-    client: &Client,
-    api_key: Option<&str>,
+    ctx: &RequestCtx,
     cues: &[Cue],
     initial: Range<usize>,
-    cfg: &TranslationConfig,
     translated: &mut BTreeMap<u32, String>,
     pending_review: &mut BTreeMap<u32, PendingReview>,
 ) -> Result<()> {
+    let cfg = ctx.cfg;
     let mut pending = VecDeque::from([initial]);
     while let Some(range) = pending.pop_front() {
-        let prompt = build_prompt(cues, range.clone(), cfg)?;
-        let expected = &cues[range.clone()];
+        // Cue-level routing (station 2026-11-10 engine-swap landing order):
+        // positions matching the stubborn empty-response profile leave the
+        // batch BEFORE any primary request is issued; each gets one dedicated
+        // fallback-engine request instead. Positions already translated (an
+        // earlier leg of this loop, or an earlier half of a re-queued split)
+        // drop out of the want set, so nothing is ever requested or inserted
+        // twice. Without a `[translation].fallback` section the want set is
+        // the open range and every prompt is byte-identical to the pre-
+        // feature behaviour, keeping existing response caches warm.
+        let open: Vec<usize> = range
+            .clone()
+            .filter(|position| !translated.contains_key(&cues[*position].index))
+            .collect();
+        if open.is_empty() {
+            continue;
+        }
+        let stubborn: BTreeSet<usize> = if ctx.fallback.is_some() {
+            open.iter()
+                .copied()
+                .filter(|position| matches_stubborn_profile(&cues[*position].text))
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
+        if ctx.fallback.is_some() {
+            for position in &stubborn {
+                translate_stubborn_cue(ctx, cues, *position, translated, pending_review)?;
+            }
+        }
+        let want: Vec<usize> = open
+            .iter()
+            .copied()
+            .filter(|position| !stubborn.contains(position))
+            .collect();
+        if want.is_empty() {
+            continue;
+        }
+        let want_set: BTreeSet<usize> = want.iter().copied().collect();
+        let prompt = build_prompt_wanting(cues, range.clone(), cfg, &want_set)?;
+        let expected: Vec<Cue> = want
+            .iter()
+            .map(|position| cues[*position].clone())
+            .collect();
         let context = prompt_context_range(range.clone(), cfg.context_cues);
         let ignored_context_indices: BTreeSet<u32> = cues[context]
             .iter()
-            .filter(|cue| !expected.iter().any(|item| item.index == cue.index))
+            .filter(|cue| {
+                !want_set
+                    .iter()
+                    .any(|position| cues[*position].index == cue.index)
+            })
             .map(|cue| cue.index)
             .collect();
+        // The response cache only stores what this strict parser accepts, and
+        // a hit is parsed again below exactly like a live response.
+        let accepts = |response: &str| -> bool {
+            parse_valid_indices(response, &expected, &ignored_context_indices)
+                .is_ok_and(|values| !values.is_empty())
+        };
+        let engine = Engine::primary(cfg, ctx.api_key);
         let request_and_validate = || {
             let response = request(
-                client,
-                cfg,
-                api_key,
-                &cfg.model,
+                ctx.client,
+                ctx.cache,
+                &engine,
                 &prompt,
                 cfg.max_output_tokens,
+                &accepts,
             )?;
-            parse_valid_indices(&response, expected, &ignored_context_indices)
+            parse_valid_indices(&response, &expected, &ignored_context_indices)
                 .with_context(|| format!("raw_model_response={}", log_preview(&response)))
                 .and_then(|values| {
                     if values.is_empty() {
@@ -226,20 +440,22 @@ fn translate_range_adaptive(
         // Malformed multi-cue responses are split immediately. A single cue
         // retries the complete request and strict parse before it is preserved
         // in English, so one bad model response cannot discard an entire film.
-        let result = if range.len() == 1 {
-            retry(cfg.max_retries, request_and_validate)
+        let result = if want.len() == 1 {
+            retry(engine.max_retries, request_and_validate)
         } else {
-            retry(cfg.max_retries, || {
+            retry(engine.max_retries, || {
                 request(
-                    client,
-                    cfg,
-                    api_key,
-                    &cfg.model,
+                    ctx.client,
+                    ctx.cache,
+                    &engine,
                     &prompt,
                     cfg.max_output_tokens,
+                    &accepts,
                 )
             })
-            .and_then(|response| parse_valid_indices(&response, expected, &ignored_context_indices))
+            .and_then(|response| {
+                parse_valid_indices(&response, &expected, &ignored_context_indices)
+            })
             .and_then(|values| {
                 if values.is_empty() {
                     bail!("translation response contains no requested cue indices");
@@ -249,8 +465,9 @@ fn translate_range_adaptive(
         };
         match result {
             Ok(values) => {
-                let missing: Vec<Range<usize>> = range
-                    .clone()
+                let missing: Vec<Range<usize>> = want
+                    .iter()
+                    .copied()
                     .filter(|position| !values.contains_key(&cues[*position].index))
                     .map(|position| position..position + 1)
                     .collect();
@@ -266,26 +483,146 @@ fn translate_range_adaptive(
                     pending.push_front(missing_range);
                 }
             }
-            Err(_) if range.len() > 1 => {
+            Err(_) if want.len() > 1 => {
                 let midpoint = range.start + range.len() / 2;
                 pending.push_front(midpoint..range.end);
                 pending.push_front(range.start..midpoint);
             }
             Err(error) => {
-                let cue = &cues[range.start];
-                translated.insert(cue.index, single_line(&cue.text));
-                queue_mandatory_review(
-                    pending_review,
-                    cue,
-                    "primary_translation_failed",
-                    Some(format!("{error:#}")),
-                );
-                eprintln!(
-                    "translation review_required index={} attempts={} reason=primary_translation_failed error={error:#}",
-                    cue.index,
-                    cfg.max_retries.saturating_add(1)
-                );
+                let cue = &cues[want[0]];
+                // One widened rescue request before conceding: the empty
+                // response cluster survived every configured retry at the
+                // normal token window, so widen the window exactly once
+                // (a single request, no retry loop) for this one cue.
+                let rescue = request(
+                    ctx.client,
+                    ctx.cache,
+                    &engine,
+                    &prompt,
+                    PRIMARY_RESCUE_MAX_OUTPUT_TOKENS,
+                    &accepts,
+                )
+                .and_then(|response| {
+                    parse_valid_indices(&response, &expected, &ignored_context_indices)
+                        .with_context(|| format!("raw_model_response={}", log_preview(&response)))
+                })
+                .and_then(|values| match values.get(&cue.index) {
+                    Some(text) => Ok(text.clone()),
+                    None => bail!("rescue response omitted cue index {}", cue.index),
+                });
+                match rescue {
+                    Ok(text) => {
+                        println!(
+                            "translation rescue index={} action=primary_retry_enlarged_budget max_tokens={PRIMARY_RESCUE_MAX_OUTPUT_TOKENS} result=ok",
+                            cue.index
+                        );
+                        if translated.insert(cue.index, text).is_some() {
+                            bail!(
+                                "translation batch produced duplicate cue index {}",
+                                cue.index
+                            );
+                        }
+                    }
+                    Err(rescue_error) => {
+                        translated.insert(cue.index, single_line(&cue.text));
+                        let primary_error = format!("{error:#}; rescue: {rescue_error:#}");
+                        queue_mandatory_review(
+                            pending_review,
+                            cue,
+                            "primary_translation_failed",
+                            Some(primary_error.clone()),
+                        );
+                        eprintln!(
+                            "translation review_required index={} attempts={} reason=primary_translation_failed error={primary_error}",
+                            cue.index,
+                            cfg.max_retries.saturating_add(1)
+                        );
+                    }
+                }
             }
+        }
+    }
+    Ok(())
+}
+
+/// The fallback leg for one profile-matched cue: same prompt shape and the
+/// same strict parser as the primary single-cue path, but the endpoint, key,
+/// retries and token window come from `[translation.fallback]`. Deliberately
+/// no primary-engine rescue afterwards — the 2026-11-10 direct probes showed
+/// the primary answers these cues only with a window-consuming reasoning
+/// loop, so re-asking it after a failed fallback would burn minutes to fail
+/// the same way. A failed fallback cue keeps its original text and joins the
+/// mandatory review queue, exactly like a failed primary single.
+fn translate_stubborn_cue(
+    ctx: &RequestCtx,
+    cues: &[Cue],
+    position: usize,
+    translated: &mut BTreeMap<u32, String>,
+    pending_review: &mut BTreeMap<u32, PendingReview>,
+) -> Result<()> {
+    let (fallback, route) = ctx
+        .fallback
+        .expect("the stubborn route is only entered with a configured fallback");
+    let cfg = ctx.cfg;
+    let cue = &cues[position];
+    let index = cue.index;
+    let prompt = build_prompt(cues, position..position + 1, cfg)?;
+    let expected = [cue.clone()];
+    let context = prompt_context_range(position..position + 1, cfg.context_cues);
+    let ignored_context_indices: BTreeSet<u32> = cues[context]
+        .iter()
+        .filter(|item| item.index != index)
+        .map(|item| item.index)
+        .collect();
+    let accepts = |response: &str| -> bool {
+        parse_valid_indices(response, &expected, &ignored_context_indices)
+            .is_ok_and(|values| values.contains_key(&index))
+    };
+    let engine = Engine::fallback(fallback, route.api_key.as_deref());
+    println!(
+        "translation fallback_route index={} action=fallback_request model={:?} base_url={} max_tokens={}",
+        index, fallback.model, fallback.base_url, fallback.max_output_tokens
+    );
+    let result = retry(engine.max_retries, || {
+        let response = request(
+            &route.client,
+            ctx.cache,
+            &engine,
+            &prompt,
+            fallback.max_output_tokens,
+            &accepts,
+        )?;
+        parse_valid_indices(&response, &expected, &ignored_context_indices)
+            .with_context(|| format!("raw_model_response={}", log_preview(&response)))
+            .and_then(|values| match values.get(&index) {
+                Some(text) => Ok(text.clone()),
+                None => bail!("fallback response omitted cue index {index}"),
+            })
+    });
+    match result {
+        Ok(text) => {
+            println!(
+                "translation fallback_route index={} action=fallback_request result=ok",
+                index
+            );
+            if translated.insert(index, text).is_some() {
+                bail!("translation batch produced duplicate cue index {index}");
+            }
+        }
+        Err(error) => {
+            translated.insert(index, single_line(&cue.text));
+            let primary_error = format!("{error:#}");
+            queue_mandatory_review(
+                pending_review,
+                cue,
+                "fallback_translation_failed",
+                Some(primary_error.clone()),
+            );
+            eprintln!(
+                "translation review_required index={} attempts={} reason=fallback_translation_failed error={primary_error}",
+                index,
+                fallback.max_retries.saturating_add(1)
+            );
         }
     }
     Ok(())
@@ -506,6 +843,21 @@ pub fn prompt_version() -> &'static str {
 }
 
 fn build_prompt(cues: &[Cue], core: Range<usize>, cfg: &TranslationConfig) -> Result<String> {
+    let want: BTreeSet<usize> = core.clone().collect();
+    build_prompt_wanting(cues, core, cfg, &want)
+}
+
+/// [`build_prompt`] with an explicit set of positions to ask for inside
+/// `core`. The stubborn-cue route drops profile-matched cues from a batch's
+/// want set while keeping them as read-only context lines. When `want`
+/// equals `core` the prompt is byte-identical to the plain form, so the
+/// primary response cache of every existing batch stays warm.
+fn build_prompt_wanting(
+    cues: &[Cue],
+    core: Range<usize>,
+    cfg: &TranslationConfig,
+    want: &BTreeSet<usize>,
+) -> Result<String> {
     let example_index = cues
         .get(core.start)
         .context("translation prompt core range starts outside source cues")?
@@ -519,8 +871,7 @@ fn build_prompt(cues: &[Cue], core: Range<usize>, cfg: &TranslationConfig) -> Re
         .map(|(offset, cue)| PromptLine {
             index: cue.index,
             text: &cue.text,
-            translate: (context_start + offset) >= core.start
-                && (context_start + offset) < core.end,
+            translate: want.contains(&(context_start + offset)),
         })
         .collect();
     Ok(format!(
@@ -632,6 +983,14 @@ fn audit_alignment(
             .iter()
             .map(|position| cues[*position].index)
             .collect();
+        // The indices this batch must receive a correction for: the strict
+        // `missing_required_corrections` check below treats anything less as
+        // a failed round, so the cache gate must demand the same coverage.
+        let mandatory: BTreeSet<u32> = expected
+            .iter()
+            .filter(|index| pending_review.contains_key(index))
+            .copied()
+            .collect();
         let result = request_audit_corrections(
             client,
             cfg,
@@ -640,14 +999,26 @@ fn audit_alignment(
             &prompt,
             cfg.alignment_max_output_tokens,
             &expected,
+            &mandatory,
             cfg.alignment_max_corrections,
             &format!("alignment cue indices {expected:?}"),
         );
         match result {
-            Ok(corrections) => {
+            Ok(AuditResolution {
+                corrections,
+                unresolved_empty,
+                unresolved_unparseable,
+            }) => {
+                let unresolved_empty: BTreeSet<u32> = unresolved_empty.into_iter().collect();
+                let unresolved_unparseable: BTreeSet<u32> =
+                    unresolved_unparseable.into_iter().collect();
                 let required: BTreeSet<u32> = expected
                     .iter()
-                    .filter(|index| pending_review.contains_key(index))
+                    .filter(|index| {
+                        pending_review.contains_key(index)
+                            && !unresolved_empty.contains(index)
+                            && !unresolved_unparseable.contains(index)
+                    })
                     .copied()
                     .collect();
                 let missing_required: Vec<u32> = required
@@ -720,6 +1091,50 @@ fn audit_alignment(
                         review_model: model.to_owned(),
                     });
                 }
+                // Indices still answering with empty corrections after the
+                // rescue round, and indices whose consistency/rescue response
+                // never parsed at all (model outage), both keep the current
+                // translation and downgrade to unresolved instead of aborting
+                // the run. Mandatory cues are recorded in the quality log so
+                // the review trail survives; a parsed response that simply
+                // omits a mandatory correction is still a hard bail.
+                let downgrades = unresolved_empty
+                    .iter()
+                    .map(|index| (*index, "review_empty_correction_unresolved"))
+                    .chain(
+                        unresolved_unparseable
+                            .iter()
+                            .map(|index| (*index, "review_unparseable_correction_unresolved")),
+                    );
+                for (index, downgrade_reason) in downgrades {
+                    outcome.unresolved = outcome.unresolved.saturating_add(1);
+                    let trigger = pending_review.remove(&index);
+                    if let Some(trigger) = trigger {
+                        let position = cues
+                            .iter()
+                            .position(|cue| cue.index == index)
+                            .with_context(|| format!("alignment returned unknown cue {index}"))?;
+                        let current = translations
+                            .get(&index)
+                            .cloned()
+                            .unwrap_or_else(|| single_line(&cues[position].text));
+                        let mut reasons: Vec<String> = trigger.reasons.iter().cloned().collect();
+                        reasons.push(downgrade_reason.to_owned());
+                        outcome.quality_log.push(TranslationQualityRecord {
+                            cue_index: index,
+                            source: single_line(&cues[position].text),
+                            candidate_before_review: trigger.candidate,
+                            reviewed_translation: current,
+                            reasons,
+                            primary_error: trigger.primary_error,
+                            translation_model: cfg.model.clone(),
+                            review_model: model.to_owned(),
+                        });
+                    }
+                    eprintln!(
+                        "translation review_check unresolved_index={index} action=keep_current_translation reason={downgrade_reason}"
+                    );
+                }
             }
             Err(_) if task.positions.len() > 1 => {
                 let midpoint = task.positions.len() / 2;
@@ -735,18 +1150,46 @@ fn audit_alignment(
                 });
             }
             Err(error) => {
-                outcome.unresolved = outcome.unresolved.saturating_add(1);
-                if pending_review.contains_key(&cues[first].index) {
+                // Leaf task (a single cue): a review response that never
+                // parsed even after the one reformat re-ask is a model
+                // outage, not a refusal (2026-11-10, item-5 cue-419 rerun:
+                // the drill-down reached the exact cue and the model kept
+                // answering with an empty body). The cue keeps its current
+                // translation and downgrades to unresolved so the file
+                // still publishes. A parsed-but-refused response (strict
+                // correction checks, omitted mandatory corrections) keeps
+                // its hard bail: outage must not launder a real refusal.
+                let index = cues[first].index;
+                let trigger = pending_review.remove(&index);
+                let outage = error.to_string().contains("remained structurally invalid");
+                if trigger.is_some() && !outage {
                     return Err(error).with_context(|| {
                         format!(
-                            "review failed for mandatory cue {}; refusing to publish questionable text",
-                            cues[first].index
+                            "review failed for mandatory cue {index}; refusing to publish questionable text"
                         )
                     });
                 }
+                outcome.unresolved = outcome.unresolved.saturating_add(1);
+                if let Some(trigger) = trigger {
+                    let current = translations
+                        .get(&index)
+                        .cloned()
+                        .unwrap_or_else(|| single_line(&cues[first].text));
+                    let mut reasons: Vec<String> = trigger.reasons.iter().cloned().collect();
+                    reasons.push("review_unparseable_correction_unresolved".to_owned());
+                    outcome.quality_log.push(TranslationQualityRecord {
+                        cue_index: index,
+                        source: single_line(&cues[first].text),
+                        candidate_before_review: trigger.candidate,
+                        reviewed_translation: current,
+                        reasons,
+                        primary_error: trigger.primary_error,
+                        translation_model: cfg.model.clone(),
+                        review_model: model.to_owned(),
+                    });
+                }
                 eprintln!(
-                    "translation review_check unresolved_index={} action=keep_current_translation error={error:#}",
-                    cues[first].index
+                    "translation review_check unresolved_index={index} action=keep_current_translation error={error:#}"
                 );
             }
         }
@@ -802,11 +1245,15 @@ fn strip_single_json_fence(response: &str) -> &str {
     inner.strip_suffix("```").map(str::trim).unwrap_or(response)
 }
 
-fn validate_corrections(
+/// Split a corrections envelope into accepted items and the indices whose
+/// text came back empty. Empty-text items are collected rather than bailing
+/// so the caller can run the empty-correction rescue round; every other
+/// violation keeps the strict bail behaviour.
+fn partition_corrections(
     envelope: ConsistencyEnvelope,
     expected: &BTreeSet<u32>,
     max_corrections: usize,
-) -> Result<BTreeMap<u32, String>> {
+) -> Result<(BTreeMap<u32, String>, Vec<u32>)> {
     if envelope.corrections.len() > max_corrections {
         bail!(
             "consistency response contains {} corrections, exceeding configured maximum {max_corrections}",
@@ -814,6 +1261,7 @@ fn validate_corrections(
         );
     }
     let mut corrections = BTreeMap::new();
+    let mut empty = Vec::new();
     for item in envelope.corrections {
         if !expected.contains(&item.index) {
             bail!(
@@ -822,14 +1270,91 @@ fn validate_corrections(
             );
         }
         let text = single_line(&item.text);
-        if text.is_empty() || corrections.insert(item.index, text).is_some() {
+        if text.is_empty() {
+            if !empty.contains(&item.index) {
+                empty.push(item.index);
+            }
+            continue;
+        }
+        if corrections.insert(item.index, text).is_some() {
             bail!(
                 "consistency response has an empty or duplicate index {}",
                 item.index
             );
         }
     }
+    Ok((corrections, empty))
+}
+
+/// Strict one-shot validation used by tests and callers that want the
+/// pre-rescue behaviour: any empty correction text is a hard bail. The
+/// production audit path goes through [`partition_corrections`] so the
+/// empty-correction rescue round can run first. The audit response cache
+/// gate builds on it — see [`audit_response_is_cachable`].
+fn validate_corrections(
+    envelope: ConsistencyEnvelope,
+    expected: &BTreeSet<u32>,
+    max_corrections: usize,
+) -> Result<BTreeMap<u32, String>> {
+    let (corrections, empty) = partition_corrections(envelope, expected, max_corrections)?;
+    if let Some(index) = empty.first() {
+        bail!(
+            "consistency response has an empty or duplicate index {}",
+            index
+        );
+    }
     Ok(corrections)
+}
+
+/// The audit response cache gate: an answer may reach disk only if this call
+/// site would treat it as a success, not merely as a shape that parses.
+///
+/// Two classes of response fail here although `parse_consistency_envelope`
+/// and even `validate_corrections` pass them:
+///
+/// * a structurally valid **zero-item envelope** (`{"corrections":[]}`, `[]`,
+///   `{}`). For a batch holding a mandatory cue this is a failed round —
+///   `audit_alignment`'s own `missing_required_corrections` check re-splits
+///   it and eventually bails — so freezing one random empty answer into the
+///   cache replays that death deterministically on every later burn
+///   (2026-11-10, item-4 cue 429: 12+ consecutive empty answers, one shell
+///   into the cache and no binary could save the file). Per the station
+///   order an empty shell counts as a failed response and is never cached,
+///   even for a batch without mandatory cues, so the next burn re-rolls it.
+/// * a non-empty envelope that **omits a mandatory index**: the caller
+///   treats it as the same failure as above, so it must not be frozen either.
+///
+/// Responses with empty-text items keep failing `validate_corrections` as
+/// before, which keeps the empty-correction rescue round a genuine re-ask.
+fn audit_response_is_cachable(
+    response: &str,
+    expected: &BTreeSet<u32>,
+    mandatory: &BTreeSet<u32>,
+    max_corrections: usize,
+) -> bool {
+    let Ok(envelope) = parse_consistency_envelope(response) else {
+        return false;
+    };
+    if envelope.corrections.is_empty() {
+        return false;
+    }
+    match validate_corrections(envelope, expected, max_corrections) {
+        Ok(corrections) => mandatory
+            .iter()
+            .all(|index| corrections.contains_key(index)),
+        Err(_) => false,
+    }
+}
+
+/// Outcome of one audit request round: the accepted corrections plus the
+/// two unresolved-downgrade lists — indices answered with an empty `text`
+/// even after the empty-correction rescue round, and indices whose response
+/// never parsed at all (model outage). Both lists keep the current
+/// translation and downgrade to unresolved; neither aborts the run.
+struct AuditResolution {
+    corrections: BTreeMap<u32, String>,
+    unresolved_empty: Vec<u32>,
+    unresolved_unparseable: Vec<u32>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -841,11 +1366,26 @@ fn request_audit_corrections(
     prompt: &str,
     max_output_tokens: u32,
     expected: &BTreeSet<u32>,
+    mandatory: &BTreeSet<u32>,
     max_corrections: usize,
     audit_name: &str,
-) -> Result<BTreeMap<u32, String>> {
+) -> Result<AuditResolution> {
+    // Audit responses are cached only when `audit_response_is_cachable`
+    // accepts them — the strict success test of this very call site, not
+    // just a parseable shape — and re-checked on every replay, so a cache
+    // can never freeze a failed round (empty corrections shell, or a shell
+    // missing a mandatory correction) into a deterministic death across
+    // burns; those rounds always re-ask the model for real.
+    let accepts = |response: &str| -> bool {
+        audit_response_is_cachable(response, expected, mandatory, max_corrections)
+    };
+    // The review legs always run on the primary engine (station 2026-11-10
+    // landing order: the second-opinion surface stays untouched); they only
+    // name their own model, never a different endpoint.
+    let engine = Engine::primary_with_model(cfg, api_key, model);
+    let cache = ResponseCache::new(cfg);
     let response = retry(cfg.max_retries, || {
-        request(client, cfg, api_key, model, prompt, max_output_tokens)
+        request(client, &cache, &engine, prompt, max_output_tokens, &accepts)
     })
     .with_context(|| format!("translation {audit_name} service request failed"))?;
     let envelope = match parse_consistency_envelope(&response) {
@@ -866,11 +1406,11 @@ fn request_audit_corrections(
             let repaired = retry(cfg.max_retries, || {
                 request(
                     client,
-                    cfg,
-                    api_key,
-                    model,
+                    &cache,
+                    &engine,
                     &repair_prompt,
                     max_output_tokens,
+                    &accepts,
                 )
             })
             .with_context(|| {
@@ -878,6 +1418,14 @@ fn request_audit_corrections(
                     "translation {audit_name} response reformat request failed after: {first_error:#}"
                 )
             })?;
+            // An initial (or reformat-repaired) audit response that never
+            // parses must keep hard-failing: `audit_alignment` uses this
+            // error to binary-split the batch until the exact offending
+            // indices are auditable (see the split-until-auditable pin).
+            // Downgrading here would silently kill the splitter. The
+            // model-outage downgrade instead lives in the leaf handling of
+            // `audit_alignment` and in the empty-correction rescue round
+            // below (2026-11-10, item-5 cue-419 rerun death site).
             parse_consistency_envelope(&repaired).with_context(|| {
                 format!(
                     "translation {audit_name} response remained structurally invalid after one reformat attempt; first error: {first_error:#}"
@@ -885,8 +1433,58 @@ fn request_audit_corrections(
             })?
         }
     };
-    validate_corrections(envelope, expected, max_corrections)
-        .with_context(|| format!("translation {audit_name} failed strict correction checks"))
+    let (mut corrections, empty) = partition_corrections(envelope, expected, max_corrections)
+        .with_context(|| format!("translation {audit_name} failed strict correction checks"))?;
+    if empty.is_empty() {
+        return Ok(AuditResolution {
+            corrections,
+            unresolved_empty: Vec::new(),
+            unresolved_unparseable: Vec::new(),
+        });
+    }
+    // Empty-text corrections used to abort entire runs (2026-11-09, item 5
+    // cue 419: a one-word line burned 4h of translation plus 1h of review).
+    // Give the review model exactly one more round with the same prompt
+    // before those indices are handed back for unresolved downgrade; any
+    // valid correction the retry adds is kept.
+    eprintln!("translation {audit_name} empty_correction_retry=true indices={empty:?}");
+    let retry_response = retry(cfg.max_retries, || {
+        request(client, &cache, &engine, prompt, max_output_tokens, &accepts)
+    })
+    .with_context(|| {
+        format!("translation {audit_name} empty-correction retry request failed after {empty:?}")
+    })?;
+    let (retry_corrections, retry_empty, retry_unparseable) = match parse_consistency_envelope(
+        &retry_response,
+    ) {
+        Ok(envelope) => {
+            let (retry_corrections, retry_empty) =
+                    partition_corrections(envelope, expected, max_corrections).with_context(
+                        || {
+                            format!(
+                                "translation {audit_name} failed strict correction checks after one empty-correction retry"
+                            )
+                        },
+                    )?;
+            (retry_corrections, retry_empty, Vec::new())
+        }
+        Err(error) => {
+            // The stubborn-empty model answers this round with an empty
+            // body (EOF) or garbage too: still a model outage, so every
+            // index still waiting keeps its current translation and is
+            // downgraded instead of bailing the whole file.
+            eprintln!(
+                "translation {audit_name} empty_correction_retry_unparseable=true indices={empty:?} error={error:#}"
+            );
+            (BTreeMap::new(), Vec::new(), empty.clone())
+        }
+    };
+    corrections.extend(retry_corrections);
+    Ok(AuditResolution {
+        corrections,
+        unresolved_empty: retry_empty,
+        unresolved_unparseable: retry_unparseable,
+    })
 }
 
 /// Build the repair prompt that asks the model to reformat its previous
@@ -922,17 +1520,67 @@ fn normalize_known_json_keys(response: &str) -> Cow<'_, str> {
     }
 }
 
+/// Ask the model, through the response cache when one is configured.
+///
+/// `accept` is the same strict check the caller applies to the value it gets
+/// back (translation envelope, corrections envelope, index coverage): an entry
+/// is only stored after it passes, and an entry that no longer passes is
+/// evicted and refetched rather than trusted. That keeps a corrupted,
+/// truncated, or hand-edited file from pinning a batch to a bad answer, and it
+/// means a cache hit never skips the parse a live response would have had to
+/// survive.
 fn request(
     client: &Client,
-    cfg: &TranslationConfig,
-    api_key: Option<&str>,
-    model: &str,
+    cache: &ResponseCache,
+    engine: &Engine,
+    prompt: &str,
+    max_output_tokens: u32,
+    accept: &dyn Fn(&str) -> bool,
+) -> Result<String> {
+    // Engine identity (provider + base_url + model) enters the key, so the
+    // primary and the fallback route share one cache directory without ever
+    // colliding (station 2026-11-10 landing order, point 2).
+    let key = cache.key_engine(engine.provider, engine.base_url, engine.model, prompt);
+    cached_response(cache, key.as_deref(), accept, &|| {
+        request_model(client, engine, prompt, max_output_tokens)
+    })
+}
+
+/// The caching decision, split out so the "did we call the model again?"
+/// behaviour can be tested without a network: `live` stands in for the HTTP
+/// round trip and counts how often the cache forced it to run.
+fn cached_response(
+    cache: &ResponseCache,
+    key: Option<&str>,
+    accept: &dyn Fn(&str) -> bool,
+    live: &dyn Fn() -> Result<String>,
+) -> Result<String> {
+    let Some(key) = key else {
+        return live();
+    };
+    if let Some(cached) = cache.get(key) {
+        if accept(&cached) {
+            return Ok(cached);
+        }
+        cache.evict(key);
+    }
+    let response = live()?;
+    if accept(&response) {
+        cache.put(key, &response);
+    }
+    Ok(response)
+}
+
+fn request_model(
+    client: &Client,
+    engine: &Engine,
     prompt: &str,
     max_output_tokens: u32,
 ) -> Result<String> {
-    let (url, body, response_path): (String, Value, &[&str]) = match &cfg.provider {
+    let model = engine.model;
+    let (url, body, response_path): (String, Value, &[&str]) = match engine.provider {
         LlmProvider::Ollama => (
-            endpoint(&cfg.base_url, "api/generate"),
+            endpoint(engine.base_url, "api/generate"),
             json!({
                 "model": model,
                 "prompt": prompt,
@@ -948,7 +1596,7 @@ fn request(
             &["response"],
         ),
         LlmProvider::OpenaiCompatible => (
-            endpoint(&cfg.base_url, "chat/completions"),
+            endpoint(engine.base_url, "chat/completions"),
             json!({
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
@@ -960,7 +1608,7 @@ fn request(
         ),
     };
     let mut request = client.post(url).json(&body);
-    if let Some(key) = api_key {
+    if let Some(key) = engine.api_key {
         request = request.bearer_auth(key);
     }
     let response = request
@@ -968,7 +1616,7 @@ fn request(
         .with_context(|| {
             format!(
                 "translation model request failed for model {model:?} at {}. Start/verify the configured service and model, check network/API-key settings, then run `subtrans doctor --config <CONFIG>`",
-                cfg.base_url
+                engine.base_url
             )
         })?
         .error_for_status()
@@ -979,9 +1627,9 @@ fn request(
         })?;
     let mut bytes = Vec::new();
     response
-        .take(cfg.max_response_bytes as u64 + 1)
+        .take(engine.max_response_bytes as u64 + 1)
         .read_to_end(&mut bytes)?;
-    if bytes.len() > cfg.max_response_bytes {
+    if bytes.len() > engine.max_response_bytes {
         bail!("translation service response exceeds configured size limit");
     }
     let response: Value =
@@ -1219,5 +1867,899 @@ target_language_code = "zh-CN"
         assert!(!prompt.contains("corrected target text"));
         assert!(!prompt.contains(r#""text":""#));
         assert!(prompt.contains(r#"{"corrections":[...]}"#));
+    }
+
+    // ----- empty-response mandatory rescue (2026-11-09 item-5 cluster) -----
+
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    fn prompt_items(prompt: &str) -> Vec<Value> {
+        let start = prompt.rfind("\n\n").expect("prompt body separator") + 2;
+        serde_json::from_str(&prompt[start..]).expect("prompt body is a JSON array")
+    }
+
+    fn ollama_reply(content: Value) -> String {
+        json!({ "response": content.to_string() }).to_string()
+    }
+
+    /// Mock Ollama endpoint: every request body is recorded and answered by
+    /// `responder`. The accept loop is intentionally unbounded and detached;
+    /// the test process exits once assertions run.
+    fn llm_server(
+        responder: impl Fn(&Value) -> String + Send + 'static,
+    ) -> (String, Arc<Mutex<Vec<Value>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_thread = Arc::clone(&seen);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut content_length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 {
+                        break;
+                    }
+                    let trimmed = line.trim_end();
+                    if trimmed.is_empty() {
+                        break;
+                    }
+                    if trimmed.to_ascii_lowercase().starts_with("content-length:") {
+                        content_length = trimmed[15..].trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0u8; content_length];
+                reader.read_exact(&mut body).unwrap();
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                seen_thread.lock().unwrap().push(body.clone());
+                let reply = responder(&body);
+                let http = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    reply.len(),
+                    reply
+                );
+                stream.write_all(http.as_bytes()).unwrap();
+                stream.flush().unwrap();
+            }
+        });
+        (base_url, seen)
+    }
+
+    #[test]
+    fn partition_corrections_splits_empty_from_valid_items() {
+        let expected = BTreeSet::from([1, 2, 3]);
+        let envelope = parse_consistency_envelope(
+            r#"{"corrections":[{"index":1,"text":"甲"},{"index":2,"text":"  "},{"index":3,"text":" "}]}"#,
+        )
+        .unwrap();
+        let (corrections, empty) = partition_corrections(envelope, &expected, 3).unwrap();
+        assert_eq!(corrections.get(&1).map(String::as_str), Some("甲"));
+        assert!(!corrections.contains_key(&2));
+        assert_eq!(empty, vec![2, 3]);
+    }
+
+    #[test]
+    fn strict_validate_corrections_still_bails_on_empty_text() {
+        let expected = BTreeSet::from([1]);
+        assert!(
+            parse_consistency(r#"{"corrections":[{"index":1,"text":"  "}]}"#, &expected, 1)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn primary_rescue_retry_widens_token_window_before_mandatory_queue() {
+        // Every normal-window attempt answers with an empty translation (the
+        // item-5 cue-419 cluster); only the widened rescue window succeeds,
+        // so the cue must never reach the mandatory review queue.
+        let (base_url, seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let window = body["options"]["num_predict"].as_u64().unwrap();
+            if window == u64::from(PRIMARY_RESCUE_MAX_OUTPUT_TOKENS) {
+                return ollama_reply(json!({
+                    "translations": [{ "index": 1, "text": "第一行。" }]
+                }));
+            }
+            ollama_reply(json!({ "translations": [{ "index": 1, "text": "" }] }))
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        let outcome = translate(&cues(1), &cfg).unwrap();
+        assert_eq!(outcome.cues[0].text, "第一行。\nLine 1");
+        assert!(outcome.quality_log.is_empty());
+        let windows: Vec<u64> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|body| !body["prompt"].as_str().unwrap().contains("final-review"))
+            .map(|body| body["options"]["num_predict"].as_u64().unwrap())
+            .collect();
+        assert_eq!(
+            windows,
+            vec![
+                u64::from(cfg.max_output_tokens),
+                u64::from(cfg.max_output_tokens),
+                u64::from(PRIMARY_RESCUE_MAX_OUTPUT_TOKENS)
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_review_correction_retries_then_downgrades_mandatory_cue() {
+        // Primary translation fails at every window, so cue 1 is mandatory;
+        // the review model keeps answering with an empty correction text.
+        // Before the rescue this combination aborted the whole run.
+        let review_calls = Arc::new(AtomicUsize::new(0));
+        let review_seen = Arc::clone(&review_calls);
+        let (base_url, _seen) = llm_server(move |body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                review_seen.fetch_add(1, Ordering::SeqCst);
+                if prompt.contains("\"must_correct\":true") {
+                    return ollama_reply(json!({
+                        "corrections": [{ "index": 1, "text": "" }]
+                    }));
+                }
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    if index == 1 {
+                        json!({ "index": 1, "text": "" })
+                    } else {
+                        json!({ "index": index, "text": format!("第{index}行。") })
+                    }
+                })
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        let outcome = translate(&cues(10), &cfg).unwrap();
+        // The failed cue keeps its current text instead of killing the run.
+        assert_eq!(outcome.cues[0].text, "Line 1\nLine 1");
+        assert_eq!(outcome.cues[1].text, "第2行。\nLine 2");
+        // The audit model got exactly one extra round for the empty text
+        // (task containing cue 1) on top of the other alignment task.
+        assert_eq!(review_calls.load(Ordering::SeqCst), 3);
+        assert_eq!(outcome.quality_log.len(), 1);
+        let record = &outcome.quality_log[0];
+        assert_eq!(record.cue_index, 1);
+        assert_eq!(record.reviewed_translation, "Line 1");
+        assert_eq!(record.candidate_before_review, "Line 1");
+        assert!(
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason == "primary_translation_failed")
+        );
+        assert!(
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason == "review_empty_correction_unresolved")
+        );
+        assert!(
+            record
+                .primary_error
+                .as_deref()
+                .is_some_and(|error| error.contains("rescue:"))
+        );
+    }
+
+    #[test]
+    fn omitted_mandatory_correction_still_bails() {
+        // The empty-correction downgrade must not weaken the omission rule:
+        // a review model that never mentions the mandatory cue is still fatal.
+        let (base_url, _seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            ollama_reply(json!({ "translations": [{ "index": 1, "text": "" }] }))
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        let error = translate(&cues(1), &cfg).unwrap_err().to_string();
+        assert!(error.contains("omitted mandatory correction"), "{error}");
+    }
+
+    /// 2026-11-10 item-5 rerun: the review leg answers the mandatory-cue
+    /// consistency request (and its reformat + empty-correction rescue
+    /// rounds) with a response that never parses — an entirely empty body
+    /// (EOF) or plain garbage. That is a model outage, not a refusal: the
+    /// cue must keep its current translation, downgrade to unresolved with
+    /// `review_unparseable_correction_unresolved`, and the file must publish.
+    fn mandatory_cue_downgrades_when_review_never_parses(bad_response: Value) {
+        let (base_url, seen) = llm_server(move |body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("audit-json-reformat") {
+                return ollama_reply(bad_response.clone());
+            }
+            if prompt.contains("final-review") {
+                if prompt.contains("\"must_correct\":true") {
+                    return ollama_reply(bad_response.clone());
+                }
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    if index == 1 {
+                        json!({ "index": 1, "text": "" })
+                    } else {
+                        json!({ "index": index, "text": format!("第{index}行。") })
+                    }
+                })
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        let outcome = translate(&cues(10), &cfg).unwrap();
+        // The run publishes: the failed cue keeps its current translation.
+        assert_eq!(outcome.cues[0].text, "Line 1\nLine 1");
+        assert_eq!(outcome.cues[1].text, "第2行。\nLine 2");
+        // Every broken review round got exactly one reformat re-ask and no
+        // more: the drill-down splits the mandatory batch one halving per
+        // level (8→4→2→1), each broken round asking one reformat, and the
+        // leaf then downgrades without a second round or a rescue storm.
+        let seen = seen.lock().unwrap();
+        let broken_rounds = seen
+            .iter()
+            .filter(|body| {
+                body["prompt"].as_str().unwrap().contains("final-review")
+                    && body["prompt"]
+                        .as_str()
+                        .unwrap()
+                        .contains("\"must_correct\":true")
+            })
+            .count();
+        let reformats = seen
+            .iter()
+            .filter(|body| {
+                body["prompt"]
+                    .as_str()
+                    .unwrap()
+                    .contains("audit-json-reformat")
+            })
+            .count();
+        assert!(broken_rounds >= 1, "{broken_rounds}");
+        assert_eq!(reformats, broken_rounds);
+        drop(seen);
+        assert_eq!(outcome.quality_log.len(), 1);
+        let record = &outcome.quality_log[0];
+        assert_eq!(record.cue_index, 1);
+        assert_eq!(record.reviewed_translation, "Line 1");
+        assert_eq!(record.candidate_before_review, "Line 1");
+        assert!(
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason == "primary_translation_failed")
+        );
+        assert!(
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason == "review_unparseable_correction_unresolved")
+        );
+        assert!(
+            record
+                .primary_error
+                .as_deref()
+                .is_some_and(|error| error.contains("rescue:"))
+        );
+    }
+
+    #[test]
+    fn empty_review_response_downgrades_mandatory_cue_and_publishes() {
+        mandatory_cue_downgrades_when_review_never_parses(json!(""));
+    }
+
+    #[test]
+    fn garbage_review_response_downgrades_mandatory_cue_and_publishes() {
+        mandatory_cue_downgrades_when_review_never_parses(json!(
+            "I cannot review this line, sorry {corrections:"
+        ));
+    }
+
+    fn cached_config(dir: &std::path::Path) -> TranslationConfig {
+        toml::from_str(&format!(
+            r#"
+provider = "ollama"
+base_url = "http://127.0.0.1:11434"
+model = "translategemma:4b"
+source_language = "English"
+source_language_code = "en"
+target_language = "Simplified Chinese"
+target_language_code = "zh-CN"
+cache_dir = "{}"
+"#,
+            dir.display()
+        ))
+        .unwrap()
+    }
+
+    fn accepted(response: &str) -> bool {
+        parse_aligned(response, &cues(1)).is_ok()
+    }
+
+    const GOOD: &str = r#"{"translations":[{"index":1,"text":"你好"}]}"#;
+
+    #[test]
+    fn a_stored_response_is_replayed_without_calling_the_model() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = cached_config(root.path());
+        let cache = ResponseCache::new(&cfg);
+        let key = cache.key(&cfg, &cfg.model, "PROMPT").unwrap();
+        let calls = std::cell::Cell::new(0u32);
+        let live = || {
+            calls.set(calls.get() + 1);
+            Ok(GOOD.to_owned())
+        };
+        for _ in 0..3 {
+            assert_eq!(
+                cached_response(&cache, Some(&key), &accepted, &live).unwrap(),
+                GOOD
+            );
+        }
+        assert_eq!(calls.get(), 1, "a hit must not reach the model");
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_different_endpoint_model_or_prompt_is_never_a_hit() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = cached_config(root.path());
+        let cache = ResponseCache::new(&cfg);
+        let accept = |response: &str| response.starts_with('{');
+        let calls = std::cell::Cell::new(0u32);
+        let live = || {
+            calls.set(calls.get() + 1);
+            Ok("{\"corrections\":[]}".to_owned())
+        };
+        let stored = cache.key(&cfg, &cfg.model, "PROMPT").unwrap();
+        cached_response(&cache, Some(&stored), &accept, &live).unwrap();
+        cached_response(&cache, Some(&stored), &accept, &live).unwrap();
+        assert_eq!(
+            live_count(&calls),
+            1,
+            "identical request replays from cache"
+        );
+        // Each part of the key alone must be able to force a fresh request.
+        let mut other_url = cfg.clone();
+        other_url.base_url = "http://127.0.0.1:8888/v1".into();
+        let key = cache.key(&other_url, &cfg.model, "PROMPT");
+        cached_response(&cache, key.as_deref(), &accept, &live).unwrap();
+        assert_eq!(
+            live_count(&calls),
+            2,
+            "repointing the endpoint replays nothing"
+        );
+
+        let key = cache.key(&cfg, "qwen3:8b", "PROMPT");
+        cached_response(&cache, key.as_deref(), &accept, &live).unwrap();
+        assert_eq!(live_count(&calls), 3, "another model replays nothing");
+
+        let key = cache.key(&cfg, &cfg.model, "ANOTHER PROMPT");
+        cached_response(&cache, key.as_deref(), &accept, &live).unwrap();
+        assert_eq!(live_count(&calls), 4, "another prompt replays nothing");
+
+        let mut other_provider = cfg.clone();
+        other_provider.provider = crate::config::LlmProvider::OpenaiCompatible;
+        let key = cache.key(&other_provider, &cfg.model, "PROMPT");
+        cached_response(&cache, key.as_deref(), &accept, &live).unwrap();
+        assert_eq!(live_count(&calls), 5, "another provider replays nothing");
+    }
+
+    fn live_count(calls: &std::cell::Cell<u32>) -> u32 {
+        calls.get()
+    }
+
+    #[test]
+    fn a_cached_payload_that_no_longer_parses_is_evicted_not_trusted() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = cached_config(root.path());
+        let cache = ResponseCache::new(&cfg);
+        let key = cache.key(&cfg, &cfg.model, "PROMPT").unwrap();
+        // Poison the entry: something that is not a translation envelope is
+        // sitting where a good answer used to be (truncated write, hand edit).
+        std::fs::write(cache.path_for(&key).unwrap(), "not json at all").unwrap();
+        let calls = std::cell::Cell::new(0u32);
+        let live = || {
+            calls.set(calls.get() + 1);
+            Ok(GOOD.to_owned())
+        };
+        let replayed = cached_response(&cache, Some(&key), &accepted, &live).unwrap();
+        assert_eq!(live_count(&calls), 1, "a poisoned entry is not trusted");
+        assert_eq!(replayed, GOOD);
+        // It has been replaced by the accepted answer, so the next run hits.
+        cached_response(&cache, Some(&key), &accepted, &live).unwrap();
+        assert_eq!(live_count(&calls), 1, "the repaired entry replays");
+    }
+
+    #[test]
+    fn a_response_that_never_parses_is_never_cached() {
+        let root = tempfile::tempdir().unwrap();
+        let cfg = cached_config(root.path());
+        let cache = ResponseCache::new(&cfg);
+        let key = cache.key(&cfg, &cfg.model, "PROMPT").unwrap();
+        let calls = std::cell::Cell::new(0u32);
+        let live = || {
+            calls.set(calls.get() + 1);
+            Ok("garbage".to_owned())
+        };
+        // The caller still receives the raw text to report on, but nothing is
+        // stored, so a bad answer can never mask the model on the next try.
+        assert_eq!(
+            cached_response(&cache, Some(&key), &accepted, &live).unwrap(),
+            "garbage"
+        );
+        assert!(cache.get(&key).is_none());
+        cached_response(&cache, Some(&key), &accepted, &live).unwrap();
+        assert_eq!(live_count(&calls), 2);
+    }
+
+    #[test]
+    fn without_cache_dir_every_request_reaches_the_model() {
+        let cfg = config();
+        let cache = ResponseCache::new(&cfg);
+        assert!(cache.disabled());
+        assert!(cache.key(&cfg, &cfg.model, "PROMPT").is_none());
+        let calls = std::cell::Cell::new(0u32);
+        let live = || {
+            calls.set(calls.get() + 1);
+            Ok(GOOD.to_owned())
+        };
+        for _ in 0..2 {
+            cached_response(&cache, None, &accepted, &live).unwrap();
+        }
+        assert_eq!(live_count(&calls), 2, "the default stays exactly as before");
+    }
+
+    // ----- audit cache gate: no frozen empty answers (2026-11-10 item-4) -----
+
+    #[test]
+    fn cache_gate_rejects_empty_corrections_shells() {
+        // The item-4 cue-429 poison: a structurally valid zero-item audit
+        // envelope passes parse and validate_corrections, yet it is a
+        // failed round whenever the batch holds a mandatory cue — so the
+        // station order treats every empty shell as a failed response and
+        // keeps it out of the cache, mandatory batch or not.
+        let expected = BTreeSet::from([1, 2]);
+        let mandatory = BTreeSet::from([1]);
+        for shell in [r#"{"corrections":[]}"#, "[]", "{}"] {
+            assert!(
+                !audit_response_is_cachable(shell, &expected, &mandatory, 2),
+                "{shell} must never be cached"
+            );
+            assert!(
+                !audit_response_is_cachable(shell, &expected, &BTreeSet::new(), 2),
+                "{shell} must never be cached without mandatory cues either"
+            );
+        }
+        // Empty-text items keep failing validate_corrections on the way.
+        assert!(!audit_response_is_cachable(
+            r#"{"corrections":[{"index":1,"text":"  "}]}"#,
+            &expected,
+            &mandatory,
+            2
+        ));
+    }
+
+    #[test]
+    fn cache_gate_requires_full_mandatory_coverage() {
+        let expected = BTreeSet::from([1, 2]);
+        let mandatory = BTreeSet::from([1]);
+        // The success shape: covers the mandatory index with a real text.
+        assert!(audit_response_is_cachable(
+            r#"{"corrections":[{"index":1,"text":"甲"}]}"#,
+            &expected,
+            &mandatory,
+            2
+        ));
+        // Omits the mandatory index: `audit_alignment` would re-split this
+        // and eventually bail, so freezing it is exactly the deterministic
+        // death the gate exists to prevent.
+        assert!(!audit_response_is_cachable(
+            r#"{"corrections":[{"index":2,"text":"乙"}]}"#,
+            &expected,
+            &mandatory,
+            2
+        ));
+        // Without mandatory cues, any strict-valid corrections envelope is
+        // the answer the caller would have accepted, cache included.
+        assert!(audit_response_is_cachable(
+            r#"{"corrections":[{"index":2,"text":"乙"}]}"#,
+            &expected,
+            &BTreeSet::new(),
+            2
+        ));
+        // The strict checks keep their veto as well.
+        assert!(!audit_response_is_cachable(
+            r#"{"corrections":[{"index":7,"text":"庚"}]}"#,
+            &expected,
+            &mandatory,
+            2
+        ));
+        assert!(!audit_response_is_cachable(
+            r#"{"corrections":[{"index":1,"text":"甲"},{"index":2,"text":"乙"}]}"#,
+            &expected,
+            &mandatory,
+            1
+        ));
+    }
+
+    /// The cue-429 review leg answered every round with `{"corrections":[]}`.
+    /// Used to be cached (shape-valid) and replayed forever: one random
+    /// empty answer frozen into a deterministic bail across all burns.
+    #[test]
+    fn an_empty_corrections_shell_never_freezes_a_mandatory_death() {
+        let root = tempfile::tempdir().unwrap();
+        let (base_url, seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    if index == 1 {
+                        json!({ "index": 1, "text": "" })
+                    } else {
+                        json!({ "index": index, "text": format!("第{index}行。") })
+                    }
+                })
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut cfg = cached_config(root.path());
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        let review_requests = || -> usize {
+            seen.lock()
+                .unwrap()
+                .iter()
+                .filter(|body| body["prompt"].as_str().unwrap().contains("final-review"))
+                .count()
+        };
+        let error = translate(&cues(10), &cfg).unwrap_err().to_string();
+        assert!(error.contains("omitted mandatory correction"), "{error}");
+        let first = review_requests();
+        assert!(first > 0, "the review leg must have asked the model");
+        // Every audit round this run answered was a shell, so the cache may
+        // hold translation responses only — not one audit envelope on disk.
+        for entry in std::fs::read_dir(root.path()).unwrap() {
+            let path = entry.unwrap().path();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let parsed: Value = serde_json::from_str(&text).unwrap_or_else(|error| {
+                panic!("cache entry {} is not JSON: {error}", path.display())
+            });
+            assert!(
+                parsed.get("corrections").is_none(),
+                "audit envelope frozen into the cache: {text}"
+            );
+        }
+        // The next burn re-asks for real. Before the gate fix this second
+        // run replayed the whole review leg from disk, reached the model
+        // zero times, and died at the identical byte.
+        let error = translate(&cues(10), &cfg).unwrap_err().to_string();
+        assert!(error.contains("omitted mandatory correction"), "{error}");
+        assert!(
+            review_requests() > first,
+            "the review leg replayed its death from the cache instead of re-asking"
+        );
+    }
+
+    /// The gate must still let genuine successes in — that is what the
+    /// cache was built for — while empty shells keep re-rolling live.
+    #[test]
+    fn a_covered_mandatory_audit_answer_replays_from_cache() {
+        let root = tempfile::tempdir().unwrap();
+        let (base_url, seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                if prompt.contains("\"must_correct\":true") {
+                    return ollama_reply(json!({
+                        "corrections": [{ "index": 1, "text": "第一行修正。" }]
+                    }));
+                }
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    if index == 1 {
+                        json!({ "index": 1, "text": "" })
+                    } else {
+                        json!({ "index": index, "text": format!("第{index}行。") })
+                    }
+                })
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut cfg = cached_config(root.path());
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        let outcome = translate(&cues(10), &cfg).unwrap();
+        assert_eq!(outcome.cues[0].text, "第一行修正。\nLine 1");
+        let review_rounds = |bodies: &[Value], mandatory_only: bool| -> usize {
+            bodies
+                .iter()
+                .filter(|body| {
+                    let prompt = body["prompt"].as_str().unwrap();
+                    prompt.contains("final-review")
+                        && (!mandatory_only || prompt.contains("\"must_correct\":true"))
+                })
+                .count()
+        };
+        let first_run = seen.lock().unwrap().clone();
+        assert!(review_rounds(&first_run, true) >= 1);
+        // Exactly one audit envelope on disk: the covered mandatory answer.
+        let audit_entries: Vec<String> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .filter(|text| {
+                serde_json::from_str::<Value>(text)
+                    .is_ok_and(|value| value.get("corrections").is_some())
+            })
+            .collect();
+        assert_eq!(
+            audit_entries,
+            vec![r#"{"corrections":[{"index":1,"text":"第一行修正。"}]}"#.to_owned()]
+        );
+        // Re-burn on the same cache: the mandatory round replays without
+        // reaching the model, while the empty shells of the mandatory-free
+        // batches are asked again (failed responses are never frozen).
+        let outcome = translate(&cues(10), &cfg).unwrap();
+        assert_eq!(outcome.cues[0].text, "第一行修正。\nLine 1");
+        let second_run = {
+            let all = seen.lock().unwrap();
+            all[first_run.len()..].to_vec()
+        };
+        assert_eq!(
+            review_rounds(&second_run, true),
+            0,
+            "the covered mandatory corrections envelope must replay from the cache"
+        );
+        assert!(
+            review_rounds(&second_run, false) > 0,
+            "empty shells must keep re-rolling live, never replayed as truth"
+        );
+    }
+
+    // ----- stubborn-cue fallback route (2026-11-10 engine-swap landing order) -----
+
+    /// Station dossier death case, item-5 cue 527: the primary engine answers
+    /// this one only with a window-consuming reasoning loop (direct probes
+    /// E5/E6, 4096 and 16384 both empty), while translategemma:4b answers it
+    /// correctly. The profile must route it to the fallback engine.
+    const DEATH_CASE_527: &str = "- <i>Dragon?</i>\n- This is unacceptable!";
+
+    #[test]
+    fn stubborn_profile_pins_the_item5_cue527_death_case() {
+        assert!(matches_stubborn_profile(DEATH_CASE_527));
+    }
+
+    #[test]
+    fn stubborn_profile_rejects_the_two_primary_rescued_cues() {
+        // item-5 cues 419 and 429 translated correctly on the primary engine
+        // (station landing order point 1: no regression), so they must stay.
+        assert!(!matches_stubborn_profile("<i>Ping.</i>"));
+        assert!(!matches_stubborn_profile(
+            "the 335th Regiment of the 38th's 3rd Company."
+        ));
+        // every profile clause must hold together:
+        assert!(!matches_stubborn_profile("- Alpha line\n- Beta line")); // no italic
+        assert!(!matches_stubborn_profile("<i>Alpha</i>")); // italic, single line
+        assert!(!matches_stubborn_profile(
+            "<i>Alpha</i>\nsecond speaker has no dash"
+        )); // one speaker only
+        let long = format!("- <i>{}</i>\n- second speaker rambles on", "x".repeat(200));
+        assert!(!matches_stubborn_profile(&long)); // not a short line
+        assert!(!matches_stubborn_profile(
+            "- <i>unclosed italic\n- second line"
+        )); // unpaired tag
+    }
+
+    #[test]
+    fn want_set_prompt_is_byte_identical_when_it_equals_the_core() {
+        // primary-engine batch prompts must stay byte-identical so existing
+        // response caches of the 30 bound videos never go stale (landing
+        // order point 4: old tomls keep the old behaviour, zero drift).
+        let values = cues(8);
+        let cfg = config();
+        let plain = build_prompt(&values, 2..6, &cfg).unwrap();
+        let want: BTreeSet<usize> = (2..6).collect();
+        assert_eq!(
+            plain,
+            build_prompt_wanting(&values, 2..6, &cfg, &want).unwrap()
+        );
+    }
+
+    #[test]
+    fn want_set_keeps_a_dropped_cue_visible_as_read_only_context() {
+        let mut values = cues(4);
+        values[1].text = DEATH_CASE_527.to_owned();
+        let cfg = config();
+        let want: BTreeSet<usize> = [0usize, 2, 3].into_iter().collect();
+        let prompt = build_prompt_wanting(&values, 0..4, &cfg, &want).unwrap();
+        let items = prompt_items(&prompt);
+        let dropped = items.iter().find(|item| item["index"] == 2).unwrap();
+        assert_eq!(dropped["translate"], false);
+        assert_eq!(dropped["text"], DEATH_CASE_527);
+        for index in [1, 3, 4] {
+            assert!(
+                items
+                    .iter()
+                    .any(|item| item["index"] == index && item["translate"] == true),
+                "index {index} must stay in the want set"
+            );
+        }
+    }
+
+    #[test]
+    fn stubborn_cue_is_answered_by_the_fallback_engine_and_never_by_the_primary() {
+        // In-process pin of landing-order point 2 (the smoke test repeats it
+        // against the real services): the profile cue goes to the fallback
+        // engine, everything else stays on the primary, and each answer is
+        // cached under its own engine-specific key.
+        let (primary_url, primary_seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == true)
+                .map(|item| json!({ "index": item["index"], "text": "正常行。" }))
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let (fallback_url, fallback_seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == true)
+                .map(|item| json!({ "index": item["index"], "text": "斜体说话行。" }))
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let cache_root = tempfile::tempdir().unwrap();
+        let mut values = cues(3);
+        values[1].text = DEATH_CASE_527.to_owned();
+        let mut cfg: TranslationConfig = toml::from_str(&format!(
+            r#"
+provider = "ollama"
+base_url = "{primary_url}"
+model = "translategemma:4b"
+source_language = "English"
+source_language_code = "en"
+target_language = "Simplified Chinese"
+target_language_code = "zh-CN"
+timeout_seconds = 10
+max_retries = 0
+batch_size = 3
+consistency_check = false
+alignment_check = false
+cache_dir = "{}"
+
+[fallback]
+provider = "ollama"
+base_url = "{fallback_url}"
+model = "translategemma:4b"
+timeout_seconds = 10
+max_retries = 0
+"#,
+            cache_root.path().display()
+        ))
+        .unwrap();
+        cfg.fallback.as_mut().unwrap().base_url = fallback_url;
+        let outcome = translate(&values, &cfg).unwrap();
+        // cue 2 came back from the fallback engine …
+        assert!(outcome.cues[1].text.starts_with("斜体说话行。"));
+        // … cues 1 and 3 from the primary engine.
+        assert!(outcome.cues[0].text.starts_with("正常行。"));
+        assert!(outcome.cues[2].text.starts_with("正常行。"));
+        // the primary saw exactly one batch asking only the two healthy cues;
+        // the death case survived only as read-only context.
+        let primary = primary_seen.lock().unwrap();
+        assert_eq!(primary.len(), 1, "primary must serve exactly one batch");
+        let asked: Vec<u32> = prompt_items(primary[0]["prompt"].as_str().unwrap())
+            .iter()
+            .filter(|item| item["translate"] == true)
+            .map(|item| item["index"].as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(asked, vec![1, 3]);
+        // the fallback engine was asked exactly once, for exactly the death case.
+        let fallback = fallback_seen.lock().unwrap();
+        assert_eq!(
+            fallback.len(),
+            1,
+            "fallback engine must serve exactly the stubborn cue"
+        );
+        let asked: Vec<u32> = prompt_items(fallback[0]["prompt"].as_str().unwrap())
+            .iter()
+            .filter(|item| item["translate"] == true)
+            .map(|item| item["index"].as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(asked, vec![2]);
+        // each engine wrote its own cache entry under its own key: two files,
+        // never one overwriting the other (landing order point 2).
+        let entries: Vec<_> = std::fs::read_dir(cache_root.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .collect();
+        assert_eq!(
+            entries.len(),
+            2,
+            "both engines must leave one distinct cache entry each"
+        );
+    }
+
+    #[test]
+    fn absent_fallback_section_keeps_every_cue_on_the_primary_engine() {
+        // Old tomls (landing order point 4): without `[translation.fallback]`
+        // even a profile-matched death case goes through the primary route
+        // with the pre-feature request count, so bound videos keep the exact
+        // behaviour their cache_key was computed under.
+        let (primary_url, primary_seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == true)
+                .map(|item| json!({ "index": item["index"], "text": "正常行。" }))
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut values = cues(2);
+        values[1].text = DEATH_CASE_527.to_owned();
+        let mut cfg = config();
+        cfg.base_url = primary_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 0;
+        cfg.batch_size = 2;
+        cfg.consistency_check = false;
+        cfg.alignment_check = false;
+        let outcome = translate(&values, &cfg).unwrap();
+        assert!(outcome.cues[1].text.starts_with("正常行。"));
+        let primary = primary_seen.lock().unwrap();
+        assert_eq!(primary.len(), 1);
+        assert_eq!(primary[0]["model"], "translategemma:4b");
     }
 }
