@@ -1282,6 +1282,29 @@ mod tests {
     }
 
     #[test]
+    fn distributed_site_baseline_is_valid_and_pinned() {
+        let cfg: Config = toml::from_str(include_str!("../config/site_baseline.toml")).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.state.lease_seconds, 7_200);
+        assert!(!cfg.metadata.enabled);
+        assert!(matches!(&cfg.source, StorageConfig::Ftp { .. }));
+        assert!(matches!(&cfg.destination, StorageConfig::Local { .. }));
+        assert!(cfg.migration.require_translated_subtitle);
+        // 定版钉桩（站长 2026-11-11 两令同批入仓）：以下字段进 cache_key /
+        // acquisition_key，改动只许站长令，并须按「将来跑批真正使用的基准
+        // toml」现算重绑、禁抄旧值（团队口径 babf）——本单测红即有人漂字段。
+        assert_eq!(cfg.translation.model, "Qwen3.8-Flash-Next");
+        assert_eq!(
+            cfg.translation.alignment_model.as_deref(),
+            Some("Qwen3.8-Flash-Next")
+        );
+        assert_eq!(cfg.translation.max_output_tokens, 16_384);
+        assert_eq!(cfg.translation.alignment_max_output_tokens, 16_384);
+        assert!(cfg.translation.alignment_check);
+        assert!(cfg.translation.disable_thinking);
+    }
+
+    #[test]
     fn distributed_example_contains_no_deployment_identifiers_or_inline_password() {
         let example = include_str!("../config.example.toml");
         assert!(!example.contains("password ="));
