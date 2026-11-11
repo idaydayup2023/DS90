@@ -176,7 +176,10 @@ fn cache_key_covers_disable_thinking_and_absent_field_defaults_off() {
     // stays hash-neutral until someone flips the switch.
     let base = translation_config();
     let key = cache_key("source-hash", &base).unwrap();
-    assert!(!base.disable_thinking, "default must preserve current behavior");
+    assert!(
+        !base.disable_thinking,
+        "default must preserve current behavior"
+    );
 
     let mut flipped = translation_config();
     flipped.disable_thinking = true;

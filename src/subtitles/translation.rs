@@ -2320,7 +2320,13 @@ cache_dir = "{}"
             "the probe-verified vLLM/SGLang switch must be sent verbatim"
         );
         // Everything else the endpoint needs stays untouched by the switch.
-        for key in ["model", "messages", "temperature", "max_tokens", "response_format"] {
+        for key in [
+            "model",
+            "messages",
+            "temperature",
+            "max_tokens",
+            "response_format",
+        ] {
             assert_eq!(on[key], off[key], "{key} must not drift with the switch");
         }
     }
