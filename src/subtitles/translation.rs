@@ -653,6 +653,11 @@ fn retry<T>(max_retries: u32, mut operation: impl FnMut() -> Result<T>) -> Resul
         match operation() {
             Ok(value) => return Ok(value),
             Err(error) => {
+                // 确定性 4xx（鉴权／请求体被拒）重打一百遍也是同一个 400：当场交出错误，
+                // 不进退避重试（2026-11-14 E04 alignment 段：8 分钟 1539 发同形 400）。
+                if is_deterministic_rejection(&error) {
+                    return Err(error);
+                }
                 last_error = Some(error);
                 if attempt < max_retries {
                     std::thread::sleep(Duration::from_millis(
@@ -1171,6 +1176,14 @@ fn audit_alignment(
                     );
                 }
             }
+            // 确定性 4xx（鉴权／请求体被拒）：既不切批也不降级，当场把状态码与服务回包交出去。
+            // 2026-11-14 E04 案：key 不对时整窗 400，切批＋逐批重烧在 8 分钟里打出 1539 发
+            // 同形请求，而 keep_current_translation 把整段审校的空转盖成了"跑通了"。
+            Err(error) if is_deterministic_rejection(&error) => {
+                return Err(error.context(
+                    "alignment aborted: the review service rejected the request (deterministic client error, no retry)",
+                ));
+            }
             Err(_) if task.positions.len() > 1 => {
                 let midpoint = task.positions.len() / 2;
                 println!(
@@ -1632,6 +1645,47 @@ fn chat_completions_body(
     body
 }
 
+/// 模型服务对**这一发请求本身**的拒绝（HTTP 状态码 + 响应体头部）。
+///
+/// 两条用处：
+///   1. 诊断：状态码与服务回包的头部一起报出来，不再只剩引擎自己那句
+///      「rejected model」（任何非 2xx 都打同一句，把 litellm 的真实拒因整个丢掉）。
+///   2. 重试面分流：[`is_deterministic_rejection`] 认出的那一类（鉴权／请求体被拒）
+///      重打也是同一个结果，`retry` 与 `audit_alignment` 的切批/重问面一律绕行，当场报错。
+///      429 与 5xx 属可重试类（限流／服务抖动），不进这一类。
+#[derive(Debug)]
+struct ModelRequestRejected {
+    status: u16,
+    model: String,
+    base_url: String,
+    body: String,
+}
+
+impl std::fmt::Display for ModelRequestRejected {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "translation service answered HTTP {} for model {:?} at {}: {}",
+            self.status, self.model, self.base_url, self.body
+        )
+    }
+}
+
+impl std::error::Error for ModelRequestRejected {}
+
+/// 这一类 4xx 是**确定性的**：同一发请求重打只会得到同一个状态码（鉴权没通、模型名/请求体
+/// 不被接受、路径不存在）。站长 2026-11-14 批复③：不逐批重烧，fail-fast ＋ 当档显式报错。
+fn is_deterministic_rejection(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<ModelRequestRejected>()
+        .is_some_and(|rejection| {
+            matches!(
+                rejection.status,
+                400 | 401 | 403 | 404 | 405 | 406 | 415 | 422
+            )
+        })
+}
+
 fn request_model(
     client: &Client,
     engine: &Engine,
@@ -1673,13 +1727,22 @@ fn request_model(
                 "translation model request failed for model {model:?} at {}. Start/verify the configured service and model, check network/API-key settings, then run `subtrans doctor --config <CONFIG>`",
                 engine.base_url
             )
-        })?
-        .error_for_status()
-        .with_context(|| {
-            format!(
-                "translation service rejected model {model:?}. Verify the model is installed/enabled (for Ollama: `ollama pull {model}` and `ollama list`), then run `subtrans doctor --config <CONFIG>`"
-            )
         })?;
+    // 状态码自己判：`error_for_status()` 会把响应体丢掉，而 4xx 的真拒因只写在体里
+    // （2026-11-14 E04 alignment 案：litellm 回的是鉴权层的 `No connected db.`，
+    // 引擎当时只会打印 "translation service rejected model …" 这句自己的话）。
+    let status = response.status();
+    if !status.is_success() {
+        let mut head = Vec::new();
+        response.take(1_024).read_to_end(&mut head)?;
+        return Err(ModelRequestRejected {
+            status: status.as_u16(),
+            model: model.to_owned(),
+            base_url: engine.base_url.to_owned(),
+            body: ellipsis(&String::from_utf8_lossy(&head), 400),
+        }
+        .into());
+    }
     let mut bytes = Vec::new();
     response
         .take(engine.max_response_bytes as u64 + 1)
@@ -1943,8 +2006,10 @@ target_language_code = "zh-CN"
     /// Mock Ollama endpoint: every request body is recorded and answered by
     /// `responder`. The accept loop is intentionally unbounded and detached;
     /// the test process exits once assertions run.
-    fn llm_server(
-        responder: impl Fn(&Value) -> String + Send + 'static,
+    /// 可指定 HTTP 状态码的 mock 模型端点：`responder` 返回 `(status, 响应体)`。
+    /// 确定性 4xx 的 fail-fast 面只有在这里才测得到（`llm_server` 只会回 200）。
+    fn llm_server_http(
+        responder: impl Fn(&Value) -> (u16, String) + Send + 'static,
     ) -> (String, Arc<Mutex<Vec<Value>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -1972,9 +2037,10 @@ target_language_code = "zh-CN"
                 reader.read_exact(&mut body).unwrap();
                 let body: Value = serde_json::from_slice(&body).unwrap();
                 seen_thread.lock().unwrap().push(body.clone());
-                let reply = responder(&body);
+                let (status, reply) = responder(&body);
+                let reason = if status == 200 { "OK" } else { "REJECTED" };
                 let http = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     reply.len(),
                     reply
                 );
@@ -1983,6 +2049,113 @@ target_language_code = "zh-CN"
             }
         });
         (base_url, seen)
+    }
+
+    /// 既有用例的 200-only 包装。
+    fn llm_server(
+        responder: impl Fn(&Value) -> String + Send + 'static,
+    ) -> (String, Arc<Mutex<Vec<Value>>>) {
+        llm_server_http(move |body| (200, responder(body)))
+    }
+
+    // ----- 确定性 4xx fail-fast（站长 2026-11-14 批复③）-----
+
+    /// 鉴权／请求体被拒这一类 4xx：一发即止，不进 `max_retries` 退避重烧；错误里带上状态码与
+    /// 服务回包头部（litellm 当时回的是 `No connected db.`，老错误串里一个字都看不到）。
+    #[test]
+    fn deterministic_4xx_fails_fast_and_reports_the_service_body() {
+        let (base_url, seen) = llm_server_http(|_| {
+            (
+                400,
+                r#"{"error":{"message":"No connected db.","type":"no_db_connection"}}"#.to_owned(),
+            )
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 3;
+        cfg.alignment_check = false;
+        cfg.consistency_check = false;
+        let error = translate(&cues(1), &cfg)
+            .expect_err("确定性 400 必须报错，不得被 keep_current_translation 盖掉");
+        let message = format!("{error:#}");
+        assert!(message.contains("HTTP 400"), "{message}");
+        assert!(message.contains("No connected db."), "{message}");
+        assert!(
+            error.downcast_ref::<ModelRequestRejected>().is_some(),
+            "typed error 必须能被下钻出来：{message}"
+        );
+        // 3 发＝主腿 1 ＋ 宽窗救援 1 ＋ 审校腿 1，每腿都是**一发即止**；
+        // max_retries=3 若生效，单腿就该打出 4 发（对照下面 429 那一发）。
+        assert_eq!(seen.lock().unwrap().len(), 3);
+    }
+
+    /// 429 是限流不是确定性拒：重试面照旧保留（fail-fast 不许把该重烧的也掐掉）。
+    #[test]
+    fn rate_limited_429_is_still_retried() {
+        let (base_url, seen) = llm_server_http(|_| {
+            (
+                429,
+                r#"{"error":{"message":"Too Many Requests"}}"#.to_owned(),
+            )
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 2;
+        cfg.alignment_check = false;
+        cfg.consistency_check = false;
+        let error = translate(&cues(1), &cfg).expect_err("429 用尽重试预算后仍须报错");
+        let message = format!("{error:#}");
+        assert!(message.contains("HTTP 429"), "{message}");
+        assert!(
+            error.downcast_ref::<ModelRequestRejected>().is_some(),
+            "{message}"
+        );
+        // 同一套腿（主腿＋救援＋审校），429 把 max_retries=2 的预算烧完＝7 发；
+        // 这条与上一条成对，钉住"只放确定性 4xx 走 fail-fast"。
+        assert_eq!(seen.lock().unwrap().len(), 7);
+    }
+
+    /// 审校段被确定性 400 拒时**不得切批、不得逐批重烧**（11-14 案：切批×逐批重烧在 8 分钟里
+    /// 打出 1539 发同形 400，还把整段审校的空转掩盖成"跑通了"）。
+    #[test]
+    fn alignment_4xx_aborts_without_splitting_the_batch() {
+        let (base_url, seen) = llm_server_http(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                return (
+                    400,
+                    r#"{"error":{"message":"No connected db."}}"#.to_owned(),
+                );
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    json!({ "index": index, "text": format!("第{index}行。") })
+                })
+                .collect();
+            (200, ollama_reply(json!({ "translations": translations })))
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 2;
+        cfg.alignment_check = true;
+        cfg.consistency_check = false;
+        let error = translate(&cues(10), &cfg)
+            .expect_err("审校段被整窗 400 拒时必须当场报错，不得继续发布");
+        let message = error.to_string();
+        assert!(message.contains("alignment aborted"), "{message}");
+        let review_requests = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|body| body["prompt"].as_str().unwrap().contains("final-review"))
+            .count();
+        assert_eq!(review_requests, 1, "确定性 400 不得切批、不得逐批重烧");
     }
 
     #[test]
