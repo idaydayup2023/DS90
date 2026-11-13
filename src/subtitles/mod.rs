@@ -588,7 +588,14 @@ fn guard_existing_output(
     Ok(())
 }
 
-fn acquisition_key(video: &FileEntry, cfg: &Config) -> Result<String> {
+/// 键面三枚之一（另两枚 [`cache_key`] 与 [`artifact::video_identity`]）。
+///
+/// 它是 `process_video` 判 cached / cache_miss 的钥匙之一，绑错即重跑覆盖成品字幕；
+/// 值随 `video_identity` 与跑批 toml 变，故重绑必须按「将来跑批真正使用的基准 toml」
+/// 现算（团队口径 babf）。此前只有 [`cache_key`] 是 pub，acq 只能由工具面复刻件代算，
+/// 而复刻件重实现 serde 已实证字段面漂移，故把出值权收回引擎本体
+/// （站长 2026-11-14 令②）。公式与字段序一字未动，仅放开可见性。
+pub fn acquisition_key(video: &FileEntry, cfg: &Config) -> Result<String> {
     #[derive(Serialize)]
     struct Acquisition<'a> {
         schema: u32,
