@@ -182,6 +182,31 @@ fn is_cjk_han(ch: char) -> bool {
     matches!(ch as u32, 0x3400..=0x4DBF | 0x4E00..=0x9FFF)
 }
 
+/// 「退化修正文」形态（站长 2026-11-14 批复②）：审校腿交回来的东西**非空、但一个目标语种
+/// 字符都没有** —— `。`／`！` 这类单标点、纯标点串、以及剥离后什么都不剩的残留。汉字面与
+/// 占比闸共用 [`is_cjk_han`]，不扩面，也完全不碰 `min_target_script_ratio`（0.150 仍是 0.150）。
+///
+/// 零输出（空串／全空白）**不算退化**：那条走既有的 strict hard-fail 与 `unresolved_empty`
+/// 面（`partition_corrections` → 一轮重试 → 降级）。两条线在 `audit_alignment` 里分开判，
+/// 界分即此 PR 的生死线（见 `translation.rs` 的 degenerate 测试）。
+pub(crate) fn target_text_is_degenerate(target: &str, target_language: &str) -> bool {
+    let target = single_line(target);
+    if target.is_empty() {
+        return false;
+    }
+    if !target_language.to_ascii_lowercase().contains("chinese") {
+        return false;
+    }
+    !target.chars().any(is_cjk_han)
+}
+
+/// 占比闸那一条 concern 的形态判定（`target_chinese_script_ratio_0.000_below_0.150`）。
+/// 只用来把「占比这一条」与「其它判据（例如未译照抄源文 `source_text_repeated_unchanged`）」
+/// 分开处置：concern 里混进任何非占比条目都照旧硬判红。判据本身一字未动。
+pub(crate) fn is_target_script_ratio_concern(concern: &str) -> bool {
+    concern.starts_with("target_chinese_script_ratio_")
+}
+
 /// 剥掉 `<...>` 与 `{...}` 标签（HTML/ASS 排版标记），使标签字符不参与词形与占比统计。
 fn strip_tags(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -334,7 +359,48 @@ fn is_substantive_translatable_english(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_cjk_han, translation_concerns};
+    use super::{
+        is_cjk_han, is_target_script_ratio_concern, target_text_is_degenerate, translation_concerns,
+    };
+
+    /// 退化修正文的判据面（站长 2026-11-14 批复②的界分线之一）：非空、零汉字 ⇒ 退化；
+    /// 零输出（空串／全空白）**不算**退化，它走既有的 strict hard-fail／`unresolved_empty` 面；
+    /// 沾一个汉字就不算退化；目标语非中文一律不判退化。
+    #[test]
+    fn degenerate_target_text_covers_punctuation_only_corrections_only() {
+        for punctuation in ["。", "！", "……", "？！", ".-_", "」】"] {
+            assert!(
+                target_text_is_degenerate(punctuation, "Simplified Chinese"),
+                "{punctuation} 必须是退化修正文"
+            );
+        }
+        assert!(!target_text_is_degenerate("", "Simplified Chinese"));
+        assert!(!target_text_is_degenerate("   ", "Simplified Chinese"));
+        assert!(!target_text_is_degenerate(
+            "轴心猎鹰。",
+            "Simplified Chinese"
+        ));
+        assert!(!target_text_is_degenerate("。好", "Simplified Chinese"));
+        assert!(!target_text_is_degenerate("Hello there.", "English"));
+    }
+
+    /// 占比条的形态判定只认占比闸自己那条 concern，别的判据（未译照抄源文）不许混进退化面。
+    #[test]
+    fn ratio_concern_predicate_matches_only_the_script_ratio() {
+        assert!(is_target_script_ratio_concern(
+            "target_chinese_script_ratio_0.000_below_0.150"
+        ));
+        assert!(!is_target_script_ratio_concern(
+            "source_text_repeated_unchanged"
+        ));
+        assert!(!is_target_script_ratio_concern("empty_translation"));
+        // 判据名与阈值面一字未动：真打失照样打得出同一条。
+        assert!(
+            translation_concerns("in the press tomorrow.", "。", "Chinese", 0.15)
+                .iter()
+                .any(|concern| is_target_script_ratio_concern(concern))
+        );
+    }
 
     #[test]
     fn concerns_detect_untranslated_english_but_allow_short_identifiers() {
