@@ -4,17 +4,20 @@ use std::io::Read;
 use std::ops::Range;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use reqwest::blocking::Client;
-use serde::{Deserialize, Deserializer, Serialize, de};
-use serde_json::{Value, json};
+use serde::{de, Deserialize, Deserializer, Serialize};
+use serde_json::{json, Value};
 
 use crate::artifact::TranslationQualityRecord;
 use crate::config::{FallbackEngine, LlmProvider, TranslationConfig};
 
-use super::quality::{translation_concerns, validate_translation_quality};
-use super::resp_cache::{ResponseCache, summary_line};
-use super::srt::{Cue, single_line};
+use super::quality::{
+    is_target_script_ratio_concern, target_text_is_degenerate, translation_concerns,
+    validate_translation_quality,
+};
+use super::resp_cache::{summary_line, ResponseCache};
+use super::srt::{single_line, Cue};
 
 const PROMPT_VERSION: &str = "subtrans-translation-two-stage-review-json-v7";
 
@@ -230,6 +233,19 @@ where
 #[derive(Debug)]
 struct AlignmentTask {
     positions: Vec<usize>,
+    /// 本批是否已经为「退化修正文」重问过一轮。退化只给**一轮**机会
+    /// （站长 2026-11-14 批复②：重试一轮 → 仍退化则回退翻译腿初稿并标 review 待核），
+    /// 标志位就是这一轮的闸门，防重问无限循环。
+    degenerate_retried: bool,
+}
+
+/// 占比闸逮住、且形态属「退化修正文」的一条审校回包（判据见 `quality::target_text_is_degenerate`）。
+/// 带上 `position` 与退化文本本身：重问一轮仍退化时，才判得出「回退初稿」还是「真漏翻判红」。
+#[derive(Debug)]
+struct AlignmentDegenerate {
+    index: u32,
+    position: usize,
+    correction: String,
 }
 
 #[derive(Debug, Default)]
@@ -939,6 +955,7 @@ fn audit_alignment(
             .into_iter()
             .map(|range| AlignmentTask {
                 positions: range.collect(),
+                degenerate_retried: false,
             })
             .collect();
     while let Some(task) = pending.pop_front() {
@@ -1053,9 +1070,11 @@ fn audit_alignment(
                     );
                     pending.push_front(AlignmentTask {
                         positions: task.positions[midpoint..].to_vec(),
+                        degenerate_retried: task.degenerate_retried,
                     });
                     pending.push_front(AlignmentTask {
                         positions: task.positions[..midpoint].to_vec(),
+                        degenerate_retried: task.degenerate_retried,
                     });
                     continue;
                 }
@@ -1064,6 +1083,7 @@ fn audit_alignment(
                         "review model omitted mandatory correction for cue indices {missing_required:?}"
                     );
                 }
+                let mut degenerate: Vec<AlignmentDegenerate> = Vec::new();
                 for (index, correction) in corrections {
                     let position = cues
                         .iter()
@@ -1080,6 +1100,24 @@ fn audit_alignment(
                         cfg.min_target_script_ratio,
                     );
                     if !concerns.is_empty() {
+                        // 站长 2026-11-14 批复②：审校腿交回**退化修正文**（非空、但零目标语种
+                        // 字符，实测形态就是 `。`）时，不再让整片 rc=1，改走一轮重问 + 回退
+                        // 翻译腿初稿并标 review 待核。界分线（本 PR 生死线）：
+                        //   · concerns 只有占比闸这一条 **且** 修正文零汉字 ⇒ 退化，进重问/降级面；
+                        //   · concerns 混有其它判据，或占比落在 0 < ratio < 0.150（真·低质译文形态）
+                        //     ⇒ 判据一字未动，照旧当场判红。
+                        if concerns
+                            .iter()
+                            .all(|concern| is_target_script_ratio_concern(concern))
+                            && target_text_is_degenerate(&correction, &cfg.target_language)
+                        {
+                            degenerate.push(AlignmentDegenerate {
+                                index,
+                                position,
+                                correction: correction.clone(),
+                            });
+                            continue;
+                        }
                         // 取证上下文（2026-11-14 Zero.Day E04 c365 案）：占比闸只报比值，
                         // 分不出「修正文真不合格」与「审校回包 index 与文本错位」。
                         // 引擎实测同形两案：c365 的修正文 `轴心猎鹰，LD，Alpha India November。`
@@ -1170,6 +1208,83 @@ fn audit_alignment(
                         "translation review_check unresolved_index={index} action=keep_current_translation reason={downgrade_reason}"
                     );
                 }
+                // 退化修正文（站长 2026-11-14 批复②）：先给**一轮**重问。这一问必须真问到模型
+                // ——含退化修正文的审校回包不入缓存（见 `audit_response_is_cachable`），否则
+                // 重问只会把同一发 `。` 从缓存里再取一次，等于没重问。
+                if !degenerate.is_empty() && !task.degenerate_retried {
+                    let indices: Vec<u32> = degenerate.iter().map(|item| item.index).collect();
+                    eprintln!(
+                        "translation review_check degenerate_correction_retry=true indices={indices:?} action=reask_same_prompt reason=review_degenerate_correction"
+                    );
+                    pending.push_front(AlignmentTask {
+                        positions: task.positions.clone(),
+                        degenerate_retried: true,
+                    });
+                    continue;
+                }
+                // 重问一轮仍退化 ⇒ 回退翻译腿初稿并标 review 待核（quality_log 落痕）。
+                // 但初稿自己也是零目标语种字符（真漏翻形态）时不放行：退化面不得给真漏翻洗白，
+                // 照旧当场判红 —— 这条界线是本 PR 的生死线，测试 `degenerate_*` 两组钉住。
+                for item in degenerate {
+                    let AlignmentDegenerate {
+                        index,
+                        position,
+                        correction,
+                    } = item;
+                    let current = translations
+                        .get(&index)
+                        .cloned()
+                        .unwrap_or_else(|| single_line(&cues[position].text));
+                    let kept_concerns = translation_concerns(
+                        &cues[position].text,
+                        &current,
+                        &cfg.target_language,
+                        cfg.min_target_script_ratio,
+                    );
+                    let kept_is_untranslated =
+                        target_text_is_degenerate(&current, &cfg.target_language)
+                            || kept_concerns.iter().any(|concern| {
+                                concern == "empty_translation"
+                                    || is_target_script_ratio_concern(concern)
+                            });
+                    if kept_is_untranslated {
+                        bail!(
+                            "review model returned a degenerate final correction for cue {index} \
+                             (correction={} kept_translation={}) and the translation leg left the cue untranslated: {}",
+                            ellipsis(&correction, 60),
+                            ellipsis(&current, 60),
+                            kept_concerns.join(",")
+                        );
+                    }
+                    outcome.unresolved = outcome.unresolved.saturating_add(1);
+                    let trigger = pending_review.remove(&index);
+                    let candidate_before_review = trigger
+                        .as_ref()
+                        .map(|value| value.candidate.clone())
+                        .unwrap_or_else(|| current.clone());
+                    let primary_error = trigger
+                        .as_ref()
+                        .and_then(|value| value.primary_error.clone());
+                    let mut reasons: Vec<String> = trigger
+                        .as_ref()
+                        .map(|value| value.reasons.iter().cloned().collect())
+                        .unwrap_or_else(|| vec!["review_model_quality_correction".to_owned()]);
+                    reasons.push("review_degenerate_correction_unresolved".to_owned());
+                    outcome.quality_log.push(TranslationQualityRecord {
+                        cue_index: index,
+                        source: single_line(&cues[position].text),
+                        candidate_before_review,
+                        reviewed_translation: current,
+                        reasons,
+                        primary_error,
+                        translation_model: cfg.model.clone(),
+                        review_model: model.to_owned(),
+                    });
+                    eprintln!(
+                        "translation review_check unresolved_index={index} action=keep_current_translation reason=review_degenerate_correction_unresolved degenerate_correction={}",
+                        ellipsis(&correction, 60)
+                    );
+                }
             }
             Err(_) if task.positions.len() > 1 => {
                 let midpoint = task.positions.len() / 2;
@@ -1179,9 +1294,11 @@ fn audit_alignment(
                 );
                 pending.push_front(AlignmentTask {
                     positions: task.positions[midpoint..].to_vec(),
+                    degenerate_retried: task.degenerate_retried,
                 });
                 pending.push_front(AlignmentTask {
                     positions: task.positions[..midpoint].to_vec(),
+                    degenerate_retried: task.degenerate_retried,
                 });
             }
             Err(error) => {
@@ -1366,6 +1483,7 @@ fn audit_response_is_cachable(
     expected: &BTreeSet<u32>,
     mandatory: &BTreeSet<u32>,
     max_corrections: usize,
+    target_language: &str,
 ) -> bool {
     let Ok(envelope) = parse_consistency_envelope(response) else {
         return false;
@@ -1374,9 +1492,20 @@ fn audit_response_is_cachable(
         return false;
     }
     match validate_corrections(envelope, expected, max_corrections) {
-        Ok(corrections) => mandatory
-            .iter()
-            .all(|index| corrections.contains_key(index)),
+        Ok(corrections) => {
+            // 退化修正文（`。` 这类零目标语种字符的回包）与空修正文同性质：**一次失败的回合
+            // 不得冻进缓存**，否则 `audit_alignment` 为它安排的那一轮重问只会把同一发退化
+            // 回包再取一次（2026-11-14 E04 c628 案）。
+            if corrections
+                .values()
+                .any(|text| target_text_is_degenerate(text, target_language))
+            {
+                return false;
+            }
+            mandatory
+                .iter()
+                .all(|index| corrections.contains_key(index))
+        }
         Err(_) => false,
     }
 }
@@ -1412,7 +1541,13 @@ fn request_audit_corrections(
     // missing a mandatory correction) into a deterministic death across
     // burns; those rounds always re-ask the model for real.
     let accepts = |response: &str| -> bool {
-        audit_response_is_cachable(response, expected, mandatory, max_corrections)
+        audit_response_is_cachable(
+            response,
+            expected,
+            mandatory,
+            max_corrections,
+            &cfg.target_language,
+        )
     };
     // The review legs always run on the primary engine (station 2026-11-10
     // landing order: the second-opinion surface stays untouched); they only
@@ -2097,24 +2232,130 @@ target_language_code = "zh-CN"
         assert_eq!(record.cue_index, 1);
         assert_eq!(record.reviewed_translation, "Line 1");
         assert_eq!(record.candidate_before_review, "Line 1");
-        assert!(
-            record
-                .reasons
+        assert!(record
+            .reasons
+            .iter()
+            .any(|reason| reason == "primary_translation_failed"));
+        assert!(record
+            .reasons
+            .iter()
+            .any(|reason| reason == "review_empty_correction_unresolved"));
+        assert!(record
+            .primary_error
+            .as_deref()
+            .is_some_and(|error| error.contains("rescue:")));
+    }
+
+    // ----- 退化修正文（站长 2026-11-14 批复②）：两组负控钉住界分线 -----
+
+    /// 界分组之一（放行面）：审校腿交回 `。` 这种**退化修正文**——非空、但一个目标语种字符
+    /// 都没有——不再让整片 rc=1：重问一轮，仍退化则回退翻译腿初稿并在 quality_log 标 review 待核。
+    #[test]
+    fn degenerate_review_correction_retries_then_keeps_the_draft() {
+        let degenerate_rounds = Arc::new(AtomicUsize::new(0));
+        let degenerate_seen = Arc::clone(&degenerate_rounds);
+        let (base_url, _seen) = llm_server(move |body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                let reviews_cue_one = prompt_items(prompt).iter().any(|item| {
+                    item["review"] == Value::Bool(true) && item["index"].as_u64() == Some(1)
+                });
+                if reviews_cue_one {
+                    degenerate_seen.fetch_add(1, Ordering::SeqCst);
+                    return ollama_reply(json!({ "corrections": [{ "index": 1, "text": "。" }] }));
+                }
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
                 .iter()
-                .any(|reason| reason == "primary_translation_failed")
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    if index == 1 {
+                        json!({ "index": 1, "text": "报告明天之前一定做完。" })
+                    } else {
+                        json!({ "index": index, "text": format!("第{index}行。") })
+                    }
+                })
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        // 占比闸按全站基准口径开起来（`config()` 的测试默认是 0.0＝闸关），
+        // 退化修正文正是被这一条逮住的形态。
+        cfg.min_target_script_ratio = 0.15;
+        // 源文必须是真的可译句（`Line 1` 会被专名豁免面放过，逮不到占比闸）。
+        let mut batch = cues(10);
+        batch[0].text = "We must finish the report tomorrow.".to_owned();
+        let outcome = translate(&batch, &cfg).expect(
+            "a degenerate correction must not abort the video (station 2026-11-14, item 2)",
         );
-        assert!(
-            record
-                .reasons
+        // 退化修正文既没顶掉初稿，也没炸片。
+        assert_eq!(
+            outcome.cues[0].text,
+            "报告明天之前一定做完。\nWe must finish the report tomorrow."
+        );
+        // 只给**一轮**重问：同一批最多再问一次。
+        assert_eq!(degenerate_rounds.load(Ordering::SeqCst), 2);
+        let record = outcome
+            .quality_log
+            .iter()
+            .find(|record| record.cue_index == 1)
+            .expect("the degenerate correction must leave a review trail");
+        assert_eq!(record.reviewed_translation, "报告明天之前一定做完。");
+        assert!(record
+            .reasons
+            .iter()
+            .any(|reason| reason == "review_degenerate_correction_unresolved"));
+    }
+
+    /// 界分组之二（判红面）：同一条 `。` 回包，若**翻译腿初稿本身就没翻**（零目标语种字符），
+    /// 退化面不得给真漏翻洗白 —— 照旧当场判红。占比闸 0.150 一字未动。
+    #[test]
+    fn degenerate_review_correction_still_bails_when_the_draft_is_untranslated() {
+        let (base_url, _seen) = llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                let reviews_cue_one = prompt_items(prompt).iter().any(|item| {
+                    item["review"] == Value::Bool(true) && item["index"].as_u64() == Some(1)
+                });
+                if reviews_cue_one {
+                    return ollama_reply(json!({ "corrections": [{ "index": 1, "text": "。" }] }));
+                }
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
                 .iter()
-                .any(|reason| reason == "review_empty_correction_unresolved")
-        );
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    if index == 1 {
+                        json!({ "index": 1, "text": "。" })
+                    } else {
+                        json!({ "index": index, "text": format!("第{index}行。") })
+                    }
+                })
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        cfg.min_target_script_ratio = 0.15;
+        let mut batch = cues(10);
+        batch[0].text = "We must finish the report tomorrow.".to_owned();
+        let error = translate(&batch, &cfg)
+            .expect_err("a degenerate correction over an untranslated draft must stay red");
+        let message = error.to_string();
         assert!(
-            record
-                .primary_error
-                .as_deref()
-                .is_some_and(|error| error.contains("rescue:"))
+            message.contains("degenerate final correction for cue 1"),
+            "{message}"
         );
+        assert!(message.contains("left the cue untranslated"), "{message}");
     }
 
     #[test]
@@ -2435,11 +2676,11 @@ cache_dir = "{}"
         let mandatory = BTreeSet::from([1]);
         for shell in [r#"{"corrections":[]}"#, "[]", "{}"] {
             assert!(
-                !audit_response_is_cachable(shell, &expected, &mandatory, 2),
+                !audit_response_is_cachable(shell, &expected, &mandatory, 2, "Chinese"),
                 "{shell} must never be cached"
             );
             assert!(
-                !audit_response_is_cachable(shell, &expected, &BTreeSet::new(), 2),
+                !audit_response_is_cachable(shell, &expected, &BTreeSet::new(), 2, "Chinese"),
                 "{shell} must never be cached without mandatory cues either"
             );
         }
@@ -2448,7 +2689,8 @@ cache_dir = "{}"
             r#"{"corrections":[{"index":1,"text":"  "}]}"#,
             &expected,
             &mandatory,
-            2
+            2,
+            "Chinese"
         ));
     }
 
@@ -2461,7 +2703,8 @@ cache_dir = "{}"
             r#"{"corrections":[{"index":1,"text":"甲"}]}"#,
             &expected,
             &mandatory,
-            2
+            2,
+            "Chinese"
         ));
         // Omits the mandatory index: `audit_alignment` would re-split this
         // and eventually bail, so freezing it is exactly the deterministic
@@ -2470,7 +2713,8 @@ cache_dir = "{}"
             r#"{"corrections":[{"index":2,"text":"乙"}]}"#,
             &expected,
             &mandatory,
-            2
+            2,
+            "Chinese"
         ));
         // Without mandatory cues, any strict-valid corrections envelope is
         // the answer the caller would have accepted, cache included.
@@ -2478,20 +2722,23 @@ cache_dir = "{}"
             r#"{"corrections":[{"index":2,"text":"乙"}]}"#,
             &expected,
             &BTreeSet::new(),
-            2
+            2,
+            "Chinese"
         ));
         // The strict checks keep their veto as well.
         assert!(!audit_response_is_cachable(
             r#"{"corrections":[{"index":7,"text":"庚"}]}"#,
             &expected,
             &mandatory,
-            2
+            2,
+            "Chinese"
         ));
         assert!(!audit_response_is_cachable(
             r#"{"corrections":[{"index":1,"text":"甲"},{"index":2,"text":"乙"}]}"#,
             &expected,
             &mandatory,
-            1
+            1,
+            "Chinese"
         ));
     }
 
