@@ -114,6 +114,16 @@ struct RequestCtx<'a> {
     fallback: Option<(&'a FallbackEngine, &'a FallbackRoute)>,
 }
 
+/// 日志用的短引用：按**字符**截断（CJK 一字一 char，不会像字节截断那样劈开多字节字符），
+/// 超长补 `…`。只服务诊断输出，不参与任何判据。
+fn ellipsis(text: &str, max_chars: usize) -> String {
+    let mut out: String = text.chars().take(max_chars).collect();
+    if text.chars().count() > max_chars {
+        out.push('…');
+    }
+    out
+}
+
 /// Pure-rule pre-check for the stubborn empty-response profile (station
 /// 2026-11-10 death-case family: Qwen answers these with a reasoning loop
 /// that burns the whole token window, while translategemma:4b answers 3/3
@@ -1070,9 +1080,25 @@ fn audit_alignment(
                         cfg.min_target_script_ratio,
                     );
                     if !concerns.is_empty() {
+                        // 取证上下文（2026-11-14 Zero.Day E04 c365 案）：占比闸只报比值，
+                        // 分不出「修正文真不合格」与「审校回包 index 与文本错位」。
+                        // 引擎实测同形两案：c365 的修正文 `轴心猎鹰，LD，Alpha India November。`
+                        // 按本 cue 源文判 concerns 为空（PR #27 的豁免生效），按**相邻 cue 源文**
+                        // 判恰好打出同一条 `target_chinese_script_ratio_0.148_below_0.150`。
+                        // 故把闸**实际看到的**源文与修正文一并落日志，一次跑批即可定性。
+                        // 纯诊断输出：判据、阈值、豁免面一字未动。
+                        let neighbours: Vec<String> = [position.saturating_sub(1), position + 1]
+                            .into_iter()
+                            .filter(|&p| p < cues.len())
+                            .map(|p| format!("{}:{}", cues[p].index, ellipsis(&cues[p].text, 60)))
+                            .collect();
                         bail!(
-                            "review model returned a questionable final correction for cue {index}: {}",
-                            concerns.join(",")
+                            "review model returned a questionable final correction for cue {index}: {} \
+                             judged_source={} correction={} neighbours={}",
+                            concerns.join(","),
+                            ellipsis(&cues[position].text, 120),
+                            ellipsis(&correction, 120),
+                            neighbours.join(" | ")
                         );
                     }
                     let trigger = pending_review.remove(&index);
