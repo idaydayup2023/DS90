@@ -4,10 +4,10 @@ use std::io::Read;
 use std::ops::Range;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use reqwest::blocking::Client;
-use serde::{de, Deserialize, Deserializer, Serialize};
-use serde_json::{json, Value};
+use serde::{Deserialize, Deserializer, Serialize, de};
+use serde_json::{Value, json};
 
 use crate::artifact::TranslationQualityRecord;
 use crate::config::{FallbackEngine, LlmProvider, TranslationConfig};
@@ -16,8 +16,8 @@ use super::quality::{
     is_target_script_ratio_concern, target_text_is_degenerate, translation_concerns,
     validate_translation_quality,
 };
-use super::resp_cache::{summary_line, ResponseCache};
-use super::srt::{single_line, Cue};
+use super::resp_cache::{ResponseCache, summary_line};
+use super::srt::{Cue, single_line};
 
 const PROMPT_VERSION: &str = "subtrans-translation-two-stage-review-json-v7";
 
@@ -2232,18 +2232,24 @@ target_language_code = "zh-CN"
         assert_eq!(record.cue_index, 1);
         assert_eq!(record.reviewed_translation, "Line 1");
         assert_eq!(record.candidate_before_review, "Line 1");
-        assert!(record
-            .reasons
-            .iter()
-            .any(|reason| reason == "primary_translation_failed"));
-        assert!(record
-            .reasons
-            .iter()
-            .any(|reason| reason == "review_empty_correction_unresolved"));
-        assert!(record
-            .primary_error
-            .as_deref()
-            .is_some_and(|error| error.contains("rescue:")));
+        assert!(
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason == "primary_translation_failed")
+        );
+        assert!(
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason == "review_empty_correction_unresolved")
+        );
+        assert!(
+            record
+                .primary_error
+                .as_deref()
+                .is_some_and(|error| error.contains("rescue:"))
+        );
     }
 
     // ----- 退化修正文（站长 2026-11-14 批复②）：两组负控钉住界分线 -----
@@ -2306,10 +2312,12 @@ target_language_code = "zh-CN"
             .find(|record| record.cue_index == 1)
             .expect("the degenerate correction must leave a review trail");
         assert_eq!(record.reviewed_translation, "报告明天之前一定做完。");
-        assert!(record
-            .reasons
-            .iter()
-            .any(|reason| reason == "review_degenerate_correction_unresolved"));
+        assert!(
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason == "review_degenerate_correction_unresolved")
+        );
     }
 
     /// 界分组之二（判红面）：同一条 `。` 回包，若**翻译腿初稿本身就没翻**（零目标语种字符），
