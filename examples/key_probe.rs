@@ -3,13 +3,15 @@
 //! 工具面与引擎面任何漂移当场可见（团队钉过的 babf 坑）。
 //! 用法: cargo run --example key_probe -- <config.toml> <source_sha256>...
 
+use anyhow::Result;
 use subtrans::config::Config;
 use subtrans::subtitles::cache_key;
-use anyhow::Result;
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
-    let config_path = args.next().expect("usage: <config.toml> <source_sha256>...");
+    let config_path = args
+        .next()
+        .expect("usage: <config.toml> <source_sha256>...");
     let cfg = Config::load(&config_path)?;
     println!("config = {}", config_path);
     println!("cache_key(schema={})", subtrans::artifact::ARTIFACT_SCHEMA);
