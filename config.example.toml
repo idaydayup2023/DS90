@@ -137,6 +137,14 @@ alignment_check = true
 alignment_batch_size = 8
 alignment_context_cues = 6
 alignment_max_corrections = 8
+# 显式点名复核（站长 2026-11-14 批③，Zero.Day E05 c255 案）：把点名的 cue 送进审校的
+# 「必须修正」名单，即使质量闸对它沉默。用途：`Delta 3-5-1.` 这类专名＋数字呼号在中文
+# 占比闸的专名分支下不报 concern ⇒ 审校对它没有修正义务 ⇒ 终稿会带着零汉字出厂；点名后
+# 审校必须回它一枚修正文，回的是退化修正文（如 `。`）时由定向重问（单 cue＋禁合并约束，
+# 约束只进重问窗）接住，中文一律模型自产、不许人工补字。
+# 默认空＝行为与没有这个字段时逐字节等；该字段 **不参与 cache_key**（skip_serializing），
+# 改它不会让全库 cache miss、不会触发重译。
+# force_review_indices = [255]
 # 审校模型直接给出最终中文；正式字幕不加问题标签，所有失败或存疑信息
 # 只在字幕 manifest 中保留质量现场记录。
 alignment_max_output_tokens = 4096

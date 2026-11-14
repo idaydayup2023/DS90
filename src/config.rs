@@ -344,6 +344,19 @@ pub struct TranslationConfig {
     pub consistency_max_output_tokens: u32,
     #[serde(default = "default_true")]
     pub alignment_check: bool,
+    /// 站长 2026-11-14（E05 c255 案）批的显式点名复核面：这些 cue 无论有没有被质量闸
+    /// 逮住，都进审校的**必须修正**名单（`must_correct`）。用途：`Delta 3-5-1.` 这类
+    /// 专名＋数字呼号在中文占比闸的专名分支下不报 concern ⇒ 永远进不了 `pending_review`
+    /// ⇒ 审校对它没有修正义务 ⇒ 定向重问（PR#33）根本无从触发，终稿只能带着零目标语种
+    /// 字符出厂。
+    ///
+    /// **`skip_serializing` 是红线**：`cache_key` 把整个 `[translation]` 表序列化进哈希
+    /// （`subtitles/mod.rs:cache_key`），所以这个字段**绝不能进序列化面** —— 一个多出来的
+    /// JSON 键就是全库 cache 全体 miss 的重译灾难。测试
+    /// `force_review_indices_never_move_the_serialized_config_face` 钉住这条。
+    /// 默认空＝行为与加这个字段之前逐字节等。
+    #[serde(default, skip_serializing)]
+    pub force_review_indices: Vec<u32>,
     #[serde(default = "default_alignment_batch_size")]
     pub alignment_batch_size: usize,
     #[serde(default = "default_alignment_context_cues")]

@@ -43,6 +43,7 @@ fn translation_config() -> TranslationConfig {
         consistency_max_corrections: 64,
         consistency_max_output_tokens: 4_096,
         alignment_check: false,
+        force_review_indices: Vec::new(),
         alignment_batch_size: 32,
         alignment_context_cues: 6,
         alignment_max_corrections: 32,
