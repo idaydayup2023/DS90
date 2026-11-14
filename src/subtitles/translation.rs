@@ -319,6 +319,7 @@ pub fn translate(cues: &[Cue], cfg: &TranslationConfig) -> Result<TranslationOut
         );
     }
     queue_quality_concerns(cues, &translated, cfg, &mut pending_review);
+    queue_forced_review(cues, &translated, cfg, &mut pending_review);
     let mut quality_log = Vec::new();
     if cfg.alignment_check || cfg.consistency_check || !pending_review.is_empty() {
         println!("translation review_check cues={}", cues.len());
@@ -716,6 +717,57 @@ fn queue_mandatory_review(
     queue_review_candidate(pending, cue, &single_line(&cue.text), reason, primary_error);
 }
 
+/// 显式点名复核面（站长 2026-11-14 批③，E05 c255 案）。
+///
+/// 病灶：`Delta 3-5-1.` 这类**专名＋数字呼号**在中文占比闸的专名分支下不报 concern
+/// （`source_translatable_letters`＝0 且译文没夹带源文之外的英文）⇒ 进不了
+/// `pending_review` ⇒ 审校对它没有 `must_correct` 义务、多半直接放过 ⇒
+/// 「退化修正文 → 定向重问」那条路永远不触发，终稿就带着零目标语种字符出厂。
+///
+/// 这一面把配置里点名的 index seed 进 `pending_review`（reason
+/// `forced_review_by_config`），审校因此**必须**回它一枚修正文；回退化修正文时
+/// PR#33 的定向重问（单 cue＋禁合并约束，约束只进重问窗）才接得住。
+///
+/// 配置面是 `#[serde(skip_serializing)]` 的 ⇒ 不进 `cache_key` 输入面，
+/// 默认空列表时本函数直接返回，行为与加字段之前逐字节等。
+/// `pending_review` 里点名进来那一枚的 reason（站长 2026-11-14 批③）。
+const FORCED_REVIEW_REASON: &str = "forced_review_by_config";
+
+/// 目标语种（中文）汉字面是否存在。这里**不看占比**、也不走占比闸的专名豁免分支：
+/// 只回答"这一枚到底有没有落出一个汉字"。供点名面使用。
+fn has_target_script(text: &str) -> bool {
+    text.chars()
+        .any(|ch| matches!(ch as u32, 0x3400..=0x4DBF | 0x4E00..=0x9FFF))
+}
+
+fn queue_forced_review(
+    cues: &[Cue],
+    translations: &BTreeMap<u32, String>,
+    cfg: &TranslationConfig,
+    pending: &mut BTreeMap<u32, PendingReview>,
+) {
+    if cfg.force_review_indices.is_empty() {
+        return;
+    }
+    let mut queued = Vec::new();
+    let mut unknown = Vec::new();
+    for index in &cfg.force_review_indices {
+        let Some(cue) = cues.iter().find(|cue| cue.index == *index) else {
+            unknown.push(*index);
+            continue;
+        };
+        let candidate = translations
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| single_line(&cue.text));
+        queue_review_candidate(pending, cue, &candidate, FORCED_REVIEW_REASON, None);
+        queued.push(*index);
+    }
+    eprintln!(
+        "translation review_required forced_indices={queued:?} unknown_indices={unknown:?} action=must_correct reason={FORCED_REVIEW_REASON}"
+    );
+}
+
 fn queue_review_candidate(
     pending: &mut BTreeMap<u32, PendingReview>,
     cue: &Cue,
@@ -1104,6 +1156,24 @@ fn audit_alignment(
                         &cfg.target_language,
                         cfg.min_target_script_ratio,
                     );
+                    if concerns.is_empty()
+                        && pending_review
+                            .get(&index)
+                            .is_some_and(|trigger| trigger.reasons.contains(FORCED_REVIEW_REASON))
+                        && target_text_is_degenerate(&correction, &cfg.target_language)
+                    {
+                        // 点名面（站长 2026-11-14 批③，c255 案）：这枚是配置里显式点名的，
+                        // 占比闸在专名分支下对它沉默（源文本身不要求产出中文），但审校回来的
+                        // 修正文**一个汉字都没有** ⇒ 同样按退化修正文处理，进重问一轮 → 定向重问。
+                        // 判据面没扩：这条只对点过名的 index 生效，0.150 与专名豁免面一字未动，
+                        // 没点名的 cue 走的还是上面那条原路。
+                        degenerate.push(AlignmentDegenerate {
+                            index,
+                            position,
+                            correction: correction.clone(),
+                        });
+                        continue;
+                    }
                     if !concerns.is_empty() {
                         // 站长 2026-11-14 批复②：审校腿交回**退化修正文**（非空、但零目标语种
                         // 字符，实测形态就是 `。`）时，不再让整片 rc=1，改走一轮重问 + 回退
@@ -1246,12 +1316,19 @@ fn audit_alignment(
                         &cfg.target_language,
                         cfg.min_target_script_ratio,
                     );
-                    let kept_is_untranslated =
-                        target_text_is_degenerate(&current, &cfg.target_language)
+                    let kept_is_untranslated = target_text_is_degenerate(&current, &cfg.target_language)
                             || kept_concerns.iter().any(|concern| {
                                 concern == "empty_translation"
                                     || is_target_script_ratio_concern(concern)
-                            });
+                            })
+                            // 点名面（站长 2026-11-14 批③）：配置里显式点名的那一枚，
+                            // 审校既然必须回它、回完还是**一个汉字都没有**，就按未译处理，
+                            // 交给下面的定向重问。占比闸 0.150 一字未动、专名豁免也没扩面：
+                            // 这条只对**人工点过名**的 index 生效。
+                            || (pending_review.get(&index).is_some_and(|trigger| {
+                                trigger.reasons.contains(FORCED_REVIEW_REASON)
+                            }) && cfg.target_language.to_ascii_lowercase().contains("chinese")
+                                && !has_target_script(&current));
                     if kept_is_untranslated {
                         // 双腿同退化 ⇒ 先做**一次定向重问**（单 cue＋禁合并约束，站长 2026-11-14 批②）。
                         // 重问仍拿不到目标语种文本才判红：真漏翻的生死线一个字都不放宽。
@@ -2853,6 +2930,224 @@ target_language_code = "zh-CN"
         let main_prompt = build_prompt(&batch, 0..6, &cfg).unwrap();
         assert!(constraint.len() > 40);
         assert!(!main_prompt.contains(&constraint[..40]));
+    }
+
+    // ----- 显式点名复核面（站长 2026-11-14 批③，E05 c255 案）-----
+
+    /// 从审校请求里取某一枚 cue 那一行的读数（`review` / `must_correct` / `concerns`）。
+    fn review_line(bodies: &[Value], index: u64) -> Option<Value> {
+        for body in bodies {
+            let Some(prompt) = body["prompt"].as_str() else {
+                continue;
+            };
+            if !prompt.contains("final-review") {
+                continue;
+            }
+            if let Some(item) = prompt_items(prompt).iter().find(|item| {
+                item["index"].as_u64() == Some(index)
+                    && item.get("review") == Some(&Value::Bool(true))
+            }) {
+                return Some(item.clone());
+            }
+        }
+        None
+    }
+
+    /// 安静 cue 的 mock：c1 是 `Delta 3-5-1.` 这种专名＋数字呼号，翻译腿原样带出，
+    /// 占比闸在专名分支下不报 concern ⇒ 没有点名机制时审校对它毫无修正义务。
+    fn quiet_callsign_server() -> (String, Arc<Mutex<Vec<Value>>>) {
+        llm_server(|body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                let must_answer_one = prompt_items(prompt).iter().any(|item| {
+                    item["review"] == Value::Bool(true)
+                        && item["must_correct"] == Value::Bool(true)
+                        && item["index"].as_u64() == Some(1)
+                });
+                if must_answer_one {
+                    // must_correct 的枚必须回修正文，否则是 omitted mandatory correction（另一条硬规）
+                    return ollama_reply(json!({
+                        "corrections": [{ "index": 1, "text": "德尔塔3-5-1呼叫。" }]
+                    }));
+                }
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    if index == 1 {
+                        json!({ "index": 1, "text": "Delta 3-5-1。" })
+                    } else {
+                        json!({ "index": index, "text": format!("第{index}行。") })
+                    }
+                })
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        })
+    }
+
+    fn quiet_callsign_batch() -> Vec<Cue> {
+        let mut batch = cues(10);
+        batch[0].text = "Delta 3-5-1.".to_owned();
+        batch
+    }
+
+    /// 放行面：点名之后那一枚必须被审校当"必须修正"对待；不点名则照旧安静（零行为变化）。
+    #[test]
+    fn force_review_indices_send_a_quiet_cue_as_must_correct() {
+        let mut cfg = config();
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        cfg.min_target_script_ratio = 0.15;
+        let batch = quiet_callsign_batch();
+
+        // 对照组：不点名 ⇒ 该枚 review=true 但 must_correct=false、concerns 空
+        let (base_url, seen) = quiet_callsign_server();
+        cfg.base_url = base_url.clone();
+        translate(&batch, &cfg).expect("安静 cue 不点名时照旧放行（本 PR 前行为）");
+        let baseline = review_line(&seen.lock().unwrap(), 1).expect("审校请求里该有 cue 1 那一行");
+        assert_eq!(baseline["review"], Value::Bool(true));
+        assert_eq!(
+            baseline["must_correct"],
+            Value::Bool(false),
+            "不点名却 must_correct=true ⇒ 对照组失效：{baseline}"
+        );
+        assert!(
+            baseline["concerns"].as_array().is_none_or(Vec::is_empty),
+            "占比闸专名分支该放过这枚：{baseline}"
+        );
+
+        // 实验组：点名 ⇒ must_correct=true，审校因此必须回它一枚修正文
+        let mut forced = cfg.clone();
+        forced.force_review_indices = vec![1];
+        let (base_url, seen) = quiet_callsign_server();
+        forced.base_url = base_url;
+        translate(&batch, &forced).expect("点名不得弄坏整片");
+        let line = review_line(&seen.lock().unwrap(), 1).expect("审校请求里该有 cue 1 那一行");
+        assert_eq!(
+            line["must_correct"],
+            Value::Bool(true),
+            "点名的这一枚必须进 must_correct 名单：{line}"
+        );
+    }
+
+    /// 全链路（c255 案本体）：点名 ⇒ 审校必须回它 ⇒ 回的是退化修正文 `。` ⇒
+    /// PR#33 的定向重问（禁合并约束）接住 ⇒ 模型自产 `德尔塔3-5-1。`，整片 rc=0。
+    /// 全程零人工补字、0.150 一字未动、约束只出现在重问那一发里。
+    #[test]
+    fn force_review_indices_drive_the_targeted_reask_for_a_callsign_cue() {
+        let reasks = Arc::new(AtomicUsize::new(0));
+        let reasks_seen = Arc::clone(&reasks);
+        let (base_url, seen) = llm_server(move |body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                let reviewing_one = prompt_items(prompt).iter().any(|item| {
+                    item["review"] == Value::Bool(true) && item["index"].as_u64() == Some(1)
+                });
+                if reviewing_one {
+                    return ollama_reply(json!({ "corrections": [{ "index": 1, "text": "。" }] }));
+                }
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            if prompt.contains(TARGETED_REASK_CONSTRAINT.trim_start()) {
+                reasks_seen.fetch_add(1, Ordering::SeqCst);
+                return ollama_reply(json!({
+                    "translations": [{ "index": 1, "text": "德尔塔3-5-1。" }]
+                }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    if index == 1 {
+                        json!({ "index": 1, "text": "Delta 3-5-1。" })
+                    } else {
+                        json!({ "index": index, "text": format!("第{index}行。") })
+                    }
+                })
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        cfg.min_target_script_ratio = 0.15;
+        cfg.force_review_indices = vec![1];
+        let outcome = translate(&quiet_callsign_batch(), &cfg)
+            .expect("点名＋定向重问必须把这枚救回来，不许炸片");
+        assert_eq!(reasks.load(Ordering::SeqCst), 1, "定向重问恰一问");
+        assert_eq!(
+            outcome.cues[0].text, "德尔塔3-5-1。\nDelta 3-5-1.",
+            "终稿必须是模型自产的中文，不是人工补字"
+        );
+        let record = outcome
+            .quality_log
+            .iter()
+            .find(|record| record.cue_index == 1)
+            .expect("必须留 review 痕迹");
+        assert_eq!(record.reviewed_translation, "德尔塔3-5-1。");
+        assert!(
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason == "review_degenerate_correction_retranslated"),
+            "{:?}",
+            record.reasons
+        );
+        let bodies = seen.lock().unwrap();
+        let constrained = bodies
+            .iter()
+            .filter(|body| {
+                body["prompt"]
+                    .as_str()
+                    .is_some_and(|prompt| prompt.contains(TARGETED_REASK_CONSTRAINT.trim_start()))
+            })
+            .count();
+        assert_eq!(constrained, 1, "约束串只准出现在重问那一发");
+    }
+
+    /// 红线（站长 09:3x 批③钉的"默认空＝cache_key 零变化"）：这个字段**绝不进序列化面**。
+    /// `cache_key` 把整个 `[translation]` 序列化进哈希（`subtitles/mod.rs:cache_key`），
+    /// 多一个 JSON 键＝全库 cache 全体 miss＝重译灾难。
+    #[test]
+    fn force_review_indices_never_move_the_serialized_config_face() {
+        let baseline = config();
+        let mut forced = config();
+        forced.force_review_indices = vec![1, 255, 628];
+        let baseline_json = serde_json::to_vec(&baseline).unwrap();
+        let forced_json = serde_json::to_vec(&forced).unwrap();
+        assert_eq!(
+            baseline_json, forced_json,
+            "force_review_indices 漏进序列化面 ⇒ cache_key 全体漂移"
+        );
+        assert!(
+            !String::from_utf8_lossy(&baseline_json).contains("force_review_indices"),
+            "序列化面里不得出现这个键"
+        );
+        assert_eq!(
+            crate::subtitles::cache_key("aa", &baseline).unwrap(),
+            crate::subtitles::cache_key("aa", &forced).unwrap(),
+            "点名与否不得改变 cache_key"
+        );
+        // 配置面仍然能写进 toml（否则这功能没法用），且不认识的键照旧被 deny_unknown_fields 拒掉
+        let parsed: TranslationConfig = toml::from_str(
+            r#"
+provider = "ollama"
+base_url = "http://127.0.0.1:11434"
+model = "translategemma:4b"
+source_language = "English"
+source_language_code = "en"
+target_language = "Simplified Chinese"
+target_language_code = "zh-CN"
+force_review_indices = [255]
+"#,
+        )
+        .expect("toml 必须能写这个字段");
+        assert_eq!(parsed.force_review_indices, vec![255]);
     }
 
     #[test]
