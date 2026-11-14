@@ -1253,13 +1253,70 @@ fn audit_alignment(
                                     || is_target_script_ratio_concern(concern)
                             });
                     if kept_is_untranslated {
-                        bail!(
-                            "review model returned a degenerate final correction for cue {index} \
-                             (correction={} kept_translation={}) and the translation leg left the cue untranslated: {}",
-                            ellipsis(&correction, 60),
-                            ellipsis(&current, 60),
-                            kept_concerns.join(",")
-                        );
+                        // 双腿同退化 ⇒ 先做**一次定向重问**（单 cue＋禁合并约束，站长 2026-11-14 批②）。
+                        // 重问仍拿不到目标语种文本才判红：真漏翻的生死线一个字都不放宽。
+                        match targeted_reask_single_cue(client, cfg, api_key, cues, position) {
+                            Ok(reasked)
+                                if !target_text_is_degenerate(&reasked, &cfg.target_language)
+                                    && translation_concerns(
+                                        &cues[position].text,
+                                        &reasked,
+                                        &cfg.target_language,
+                                        cfg.min_target_script_ratio,
+                                    )
+                                    .is_empty() =>
+                            {
+                                eprintln!(
+                                    "translation review_check retranslated_index={index} action=targeted_single_cue_reask constraint=no_merge reason=review_degenerate_correction result=ok"
+                                );
+                                translations.insert(index, reasked.clone());
+                                let trigger = pending_review.remove(&index);
+                                let candidate_before_review = trigger
+                                    .as_ref()
+                                    .map(|value| value.candidate.clone())
+                                    .unwrap_or_else(|| current.clone());
+                                let primary_error = trigger
+                                    .as_ref()
+                                    .and_then(|value| value.primary_error.clone());
+                                let mut reasons: Vec<String> = trigger
+                                    .as_ref()
+                                    .map(|value| value.reasons.iter().cloned().collect())
+                                    .unwrap_or_else(|| {
+                                        vec!["review_model_quality_correction".to_owned()]
+                                    });
+                                reasons
+                                    .push("review_degenerate_correction_retranslated".to_owned());
+                                outcome.quality_log.push(TranslationQualityRecord {
+                                    cue_index: index,
+                                    source: single_line(&cues[position].text),
+                                    candidate_before_review,
+                                    reviewed_translation: reasked,
+                                    reasons,
+                                    primary_error,
+                                    translation_model: cfg.model.clone(),
+                                    review_model: model.to_owned(),
+                                });
+                                // 重问救回来＝这一枚既不是回退初稿也不算 unresolved，
+                                // 直接进下一条，别落到下面的 unresolved 记账面。
+                                continue;
+                            }
+                            Ok(reasked) => bail!(
+                                "review model returned a degenerate final correction for cue {index} \
+                                 (correction={} kept_translation={}) and the translation leg left the cue untranslated: {}; \
+                                 targeted re-ask left cue {index} untranslated: reask_text={}",
+                                ellipsis(&correction, 60),
+                                ellipsis(&current, 60),
+                                kept_concerns.join(","),
+                                ellipsis(&reasked, 60)
+                            ),
+                            Err(reask_error) => bail!(
+                                "review model returned a degenerate final correction for cue {index} \
+                                 (correction={} kept_translation={}) and the translation leg left the cue untranslated: {}; targeted re-ask failed: {reask_error:#}",
+                                ellipsis(&correction, 60),
+                                ellipsis(&current, 60),
+                                kept_concerns.join(",")
+                            ),
+                        }
                     }
                     outcome.unresolved = outcome.unresolved.saturating_add(1);
                     let trigger = pending_review.remove(&index);
@@ -1712,6 +1769,71 @@ fn normalize_known_json_keys(response: &str) -> Cow<'_, str> {
 /// truncated, or hand-edited file from pinning a batch to a bad answer, and it
 /// means a cache hit never skips the parse a live response would have had to
 /// survive.
+/// 定向重问窗专用的「逐 cue 对齐、禁止合并」约束（站长 2026-11-14 批②）。
+///
+/// 病灶：从句续行形态的 cue（源文无句末标点、或从介词/连词起）被模型并进前一 cue，
+/// 自己只剩一个孤立句号 `。`（E04 c628 与同形 c292 两枚，宽窗救援腿也照犯）。
+///
+/// **红线（站长钉死）**：这段文字只准出现在定向重问的请求里，严禁进主腿
+/// `[translation]` 的 prompt —— 那是 cache_key 的输入面，动一下就是全片重译灾难。
+/// 测试 `targeted_reask_constraint_never_reaches_the_main_leg_prompt` 钉住这条。
+const TARGETED_REASK_CONSTRAINT: &str = "\n\nTranslate each requested cue on its own. \
+Never merge a cue into a neighbouring cue: even when a cue is only a continuation clause of \
+the previous one, it must receive its own complete translation instead of punctuation. \
+Never answer a cue with punctuation or whitespace only.";
+
+/// 定向重问一枚可疑 cue：单 cue 批 ＋ [`TARGETED_REASK_CONSTRAINT`]。
+///
+/// 只在「审校修正文退化 且 翻译腿初稿也退化」这一条路上走到这里。prompt 与主腿不同形
+/// ⇒ 缓存 key 天然不同 ⇒ 老的坏 cache 复用不了，也不需要去改主腿 prompt。
+/// 回包仍退化时**不入缓存**（`accept` 面拦掉），免得把 `。` 再钉一层。
+fn targeted_reask_single_cue(
+    client: &Client,
+    cfg: &TranslationConfig,
+    api_key: Option<&str>,
+    cues: &[Cue],
+    position: usize,
+) -> Result<String> {
+    let cue = &cues[position];
+    let mut prompt = build_prompt(cues, position..position + 1, cfg)?;
+    // 约束插在 cue 列表（`\n\n` 之后的 JSON 体）**之前**：模型先读到规则再看到要译的那一枚，
+    // 而所有按「最后一个 `\n\n` 之后＝JSON 体」解析请求的工具面（含本模块测试的 `prompt_items`）
+    // 照旧能用。
+    match prompt.rfind("\n\n") {
+        Some(at) => prompt.insert_str(at, TARGETED_REASK_CONSTRAINT),
+        None => prompt.push_str(TARGETED_REASK_CONSTRAINT),
+    }
+    let engine = Engine::primary(cfg, api_key);
+    let cache = ResponseCache::new(cfg);
+    let expected = std::slice::from_ref(cue);
+    let ignored: BTreeSet<u32> = BTreeSet::new();
+    let target_language = cfg.target_language.clone();
+    let index = cue.index;
+    let accept = |response: &str| -> bool {
+        parse_valid_indices(response, expected, &ignored)
+            .map(|values| {
+                values
+                    .get(&index)
+                    .is_some_and(|text| !target_text_is_degenerate(text, &target_language))
+            })
+            .unwrap_or(false)
+    };
+    let response = request(
+        client,
+        &cache,
+        &engine,
+        &prompt,
+        cfg.max_output_tokens,
+        &accept,
+    )?;
+    let values = parse_valid_indices(&response, expected, &ignored)
+        .with_context(|| format!("raw_model_response={}", log_preview(&response)))?;
+    let Some((_index, text)) = values.into_iter().next() else {
+        bail!("targeted re-ask omitted cue {index}");
+    };
+    Ok(text)
+}
+
 fn request(
     client: &Client,
     cache: &ResponseCache,
@@ -2537,6 +2659,200 @@ target_language_code = "zh-CN"
             "{message}"
         );
         assert!(message.contains("left the cue untranslated"), "{message}");
+    }
+
+    /// 双腿同退化的第三条路（站长 2026-11-14 批②）：审校回 `。`、翻译腿初稿也是 `。`
+    /// ⇒ 先做**一次定向重问**（单 cue＋禁合并约束）；重问拿到真译文就收，整片 rc=0。
+    /// 同时钉两条形状：重问那一发**只问这一枚**（禁合并＝不许把邻句一起问），
+    /// 而主腿那一发**不带约束串**（cache_key 输入面一字不动）。
+    #[test]
+    fn degenerate_review_correction_reasks_the_single_cue_without_merging() {
+        let reasks = Arc::new(AtomicUsize::new(0));
+        let reasks_seen = Arc::clone(&reasks);
+        let (base_url, seen) = llm_server(move |body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                let reviews_cue_one = prompt_items(prompt).iter().any(|item| {
+                    item["review"] == Value::Bool(true) && item["index"].as_u64() == Some(1)
+                });
+                if reviews_cue_one {
+                    return ollama_reply(json!({ "corrections": [{ "index": 1, "text": "。" }] }));
+                }
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            if prompt.contains(TARGETED_REASK_CONSTRAINT.trim_start()) {
+                reasks_seen.fetch_add(1, Ordering::SeqCst);
+                return ollama_reply(json!({
+                    "translations": [{ "index": 1, "text": "明天媒体上会披露一些关于我的事。" }]
+                }));
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    if index == 1 {
+                        // 翻译腿初稿同形退化（E04 c628 案：从句续行被并进前一 cue，自己只剩孤句号）
+                        json!({ "index": 1, "text": "。" })
+                    } else {
+                        json!({ "index": index, "text": format!("第{index}行。") })
+                    }
+                })
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        cfg.min_target_script_ratio = 0.15;
+        let mut batch = cues(10);
+        batch[0].text = "We must finish the report tomorrow.".to_owned();
+        let outcome = translate(&batch, &cfg).expect("定向重问救回来的那一枚不得让整片 rc=1");
+        assert_eq!(
+            reasks.load(Ordering::SeqCst),
+            1,
+            "双腿退化只许问一发定向重问"
+        );
+        assert_eq!(
+            outcome.cues[0].text,
+            "明天媒体上会披露一些关于我的事。\nWe must finish the report tomorrow."
+        );
+        let record = outcome
+            .quality_log
+            .iter()
+            .find(|record| record.cue_index == 1)
+            .expect("重问救回来也要留 review 痕迹");
+        assert_eq!(
+            record.reviewed_translation,
+            "明天媒体上会披露一些关于我的事。"
+        );
+        assert!(
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason == "review_degenerate_correction_retranslated"),
+            "{:?}",
+            record.reasons
+        );
+        assert!(
+            !record
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("unresolved")),
+            "重问成功的这一枚不算回退初稿、也不算 unresolved：{:?}",
+            record.reasons
+        );
+
+        let bodies = seen.lock().unwrap();
+        let reask_prompts: Vec<&str> = bodies
+            .iter()
+            .filter(|body| {
+                body["prompt"]
+                    .as_str()
+                    .is_some_and(|prompt| prompt.contains(TARGETED_REASK_CONSTRAINT.trim_start()))
+            })
+            .map(|body| body["prompt"].as_str().unwrap())
+            .collect();
+        assert_eq!(reask_prompts.len(), 1, "带约束的请求只准出现在重问窗");
+        let requested: Vec<u64> = prompt_items(reask_prompts[0])
+            .iter()
+            .filter(|item| item["translate"] == Value::Bool(true))
+            .map(|item| item["index"].as_u64().unwrap())
+            .collect();
+        assert_eq!(
+            requested,
+            vec![1],
+            "定向重问是单 cue 批，禁合并＝不许捎上邻句"
+        );
+        let main_legs = bodies
+            .iter()
+            .filter(|body| {
+                let prompt = body["prompt"].as_str().unwrap();
+                !prompt.contains("final-review")
+                    && !prompt.contains(TARGETED_REASK_CONSTRAINT.trim_start())
+            })
+            .count();
+        assert!(main_legs >= 1, "主腿请求必须还在（未被重问窗顶掉）");
+    }
+
+    /// 生死线另一侧：定向重问**仍**只拿回 `。` ⇒ 照旧当场判红，不许借"重问过"洗白真漏翻。
+    /// 错误串保留老文案（`degenerate final correction` ＋ `left the cue untranslated`），
+    /// 另加一段重问读数，方便日后按枚取证。
+    #[test]
+    fn degenerate_review_correction_bails_when_the_targeted_reask_is_also_degenerate() {
+        let reasks = Arc::new(AtomicUsize::new(0));
+        let reasks_seen = Arc::clone(&reasks);
+        let (base_url, _seen) = llm_server(move |body| {
+            let prompt = body["prompt"].as_str().unwrap();
+            if prompt.contains("final-review") {
+                let reviews_cue_one = prompt_items(prompt).iter().any(|item| {
+                    item["review"] == Value::Bool(true) && item["index"].as_u64() == Some(1)
+                });
+                if reviews_cue_one {
+                    return ollama_reply(json!({ "corrections": [{ "index": 1, "text": "。" }] }));
+                }
+                return ollama_reply(json!({ "corrections": [] }));
+            }
+            if prompt.contains(TARGETED_REASK_CONSTRAINT.trim_start()) {
+                reasks_seen.fetch_add(1, Ordering::SeqCst);
+            }
+            let translations: Vec<Value> = prompt_items(prompt)
+                .iter()
+                .filter(|item| item["translate"] == Value::Bool(true))
+                .map(|item| {
+                    let index = item["index"].as_u64().unwrap();
+                    if index == 1 {
+                        json!({ "index": 1, "text": "。" })
+                    } else {
+                        json!({ "index": index, "text": format!("第{index}行。") })
+                    }
+                })
+                .collect();
+            ollama_reply(json!({ "translations": translations }))
+        });
+        let mut cfg = config();
+        cfg.base_url = base_url;
+        cfg.timeout_seconds = 10;
+        cfg.max_retries = 1;
+        cfg.min_target_script_ratio = 0.15;
+        let mut batch = cues(10);
+        batch[0].text = "We must finish the report tomorrow.".to_owned();
+        let error = translate(&batch, &cfg).expect_err("重问仍退化＝真漏翻，照旧判红");
+        let message = error.to_string();
+        assert!(
+            message.contains("degenerate final correction for cue 1"),
+            "{message}"
+        );
+        assert!(message.contains("left the cue untranslated"), "{message}");
+        assert!(
+            message.contains("targeted re-ask left cue 1 untranslated"),
+            "{message}"
+        );
+        assert_eq!(reasks.load(Ordering::SeqCst), 1);
+    }
+
+    /// 红线（站长 2026-11-14 批②钉死）：禁合并约束串只准进重问窗，
+    /// **严禁进主腿 `[translation]` 的 prompt** —— 那是 cache_key 的输入面，
+    /// 动一下就是全片重译灾难（老 cache 全体 miss）。
+    #[test]
+    fn targeted_reask_constraint_never_reaches_the_main_leg_prompt() {
+        let batch = cues(6);
+        let cfg = config();
+        let constraint = TARGETED_REASK_CONSTRAINT.trim_start();
+        assert!(!constraint.is_empty());
+        for range in [0..6, 2..3, 5..6] {
+            let prompt = build_prompt(&batch, range, &cfg).unwrap();
+            assert!(
+                !prompt.contains(constraint),
+                "主腿 prompt 被重问约束污染了（cache_key 会全体漂移）：{prompt}"
+            );
+        }
+        // 约束是**附加**的独立指令串：主腿模板里找不到它的一个字，
+        // 也就是说把主腿 prompt 原样拿来也不会带上重问规则（反向确认没被写进模板）。
+        let main_prompt = build_prompt(&batch, 0..6, &cfg).unwrap();
+        assert!(constraint.len() > 40);
+        assert!(!main_prompt.contains(&constraint[..40]));
     }
 
     #[test]
