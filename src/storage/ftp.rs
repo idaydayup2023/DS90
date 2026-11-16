@@ -514,10 +514,10 @@ impl Storage for FtpStorage {
             // into a value that no longer describes the file. Both cases take
             // the same fallback: `SIZE` plus the parent-directory listing.
             mlst => {
-                let mlst_error = match mlst {
-                    Ok(_) => None,
-                    Err(error) => Some(error),
-                };
+                // `Ok(_)` here means "answered, but carried no facts"; both
+                // cases reach this arm, and only the rejected one has an error
+                // to keep for the missing-path decision below.
+                let mlst_error = mlst.err();
                 // Synology may reject MLST for valid file names containing
                 // square brackets. SIZE still addresses those files exactly;
                 // retain a listing timestamp when available, but do not let a
