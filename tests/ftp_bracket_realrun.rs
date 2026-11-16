@@ -24,10 +24,14 @@ const HOST: &str = "172.19.60.90";
 const PORT: u16 = 10021;
 
 /// Directory, and the number of entries a correct listing returns for it.
-/// Pinned from the 2026-10-27 probe; they only grow when content is added.
+/// Pinned from the 2026-10-27 probe and re-probed on 2026-11-17 (`/TV/[A.B.C]`
+/// had since lost one entry to library housekeeping; the other two are stable).
+/// They grow and shrink with the library, so a failure here means "re-probe the
+/// NAS and refresh the pin", not "the defect is back" — the defect itself is
+/// pinned by the two tests above it.
 const SAMPLES: &[(&str, usize)] = &[
     ("/TV/[ChineseTVs]", 21),
-    ("/TV/[A.B.C]", 80),
+    ("/TV/[A.B.C]", 79),
     ("/TV/[G.H.I.J.K]", 52),
 ];
 
@@ -114,6 +118,66 @@ fn storage_lists_every_bracketed_sample_non_empty() {
         assert!(
             !entries.is_empty(),
             "{path}: storage listed nothing; the CWD fallback regressed"
+        );
+    }
+}
+
+/// One file inside a bracketed directory plus its exact size as reported by
+/// `SIZE` (pinned 2026-11-17 against the production NAS, alongside the Pierre
+/// `.ai` release).
+const METADATA_SAMPLES: &[(&str, u64)] = &[(
+    "/TV/[O.P.Q.R]/Pierre.2026.S01.1080p.BluRay.HEVC.x265.5.1.BONE/Pierre.2026.S01E01.1080p.BluRay.HEVC.x265.5.1-BONE.mkv",
+    812_598_025,
+)];
+
+/// The metadata half of the defect: unlike a missing file, `MLST <bracketed
+/// path>` does not fail — it answers `250` with no fact line, and parsing that
+/// empty reply is what used to hand callers `size = 0` / `modified = UNIX_EPOCH`
+/// for a file that really exists.
+#[test]
+#[ignore = "needs the real NAS"]
+fn raw_mlst_of_a_bracketed_file_carries_no_facts() {
+    for (path, _) in METADATA_SAMPLES {
+        let mut ftp = connect();
+        let reply = ftp.mlst(Some(path));
+        let _ = ftp.quit();
+        match reply {
+            Ok(line) => assert!(
+                !(line.contains("type=") || line.contains("size=") || line.contains("modify=")),
+                "{path}: MLST unexpectedly returned facts: {line:?}"
+            ),
+            Err(error) => println!("mlst(path) {path} -> rejected as expected: {error}"),
+        }
+    }
+}
+
+/// The fix: `Storage::metadata` must treat a factless `MLST` reply like a
+/// rejected one and fall back to `SIZE` plus the parent-directory listing, so a
+/// bracketed file reports its real size and a real modification time instead of
+/// `0` / the UNIX epoch (which made `video_identity` content-blind).
+#[test]
+#[ignore = "needs the real NAS"]
+fn storage_metadata_of_bracketed_files_is_not_degenerate() {
+    for (path, size) in METADATA_SAMPLES {
+        let entry = storage("/")
+            .metadata(path.trim_start_matches('/'))
+            .expect("metadata")
+            .unwrap_or_else(|| panic!("{path}: metadata reported the file as missing"));
+        println!(
+            "metadata {path} -> size {} modified {:?}",
+            entry.size, entry.modified
+        );
+        assert_eq!(
+            entry.size, *size,
+            "{path}: size must come from SIZE or the parent listing, not the defaults"
+        );
+        let modified = entry
+            .modified
+            .unwrap_or_else(|| panic!("{path}: no modification time reported"));
+        assert_ne!(
+            modified,
+            std::time::UNIX_EPOCH,
+            "{path}: modification time degraded to the UNIX epoch; the factless-MLST fallback regressed"
         );
     }
 }
