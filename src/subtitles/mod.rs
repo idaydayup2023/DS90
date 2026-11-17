@@ -1399,6 +1399,12 @@ fn source_rank(path: &str, video_stem: &str) -> Option<(u32, &'static str)> {
     None
 }
 
+/// 收编器具（`examples/manifest_new_probe`）只读入口：`source_kind` 一律由引擎 rank 词表现给，
+/// 词表推不出＝`None`（器具据此冻结该枚）。仅可见性暴露，零行为改动。
+pub fn source_kind_for(path: &str, video_stem: &str) -> Option<&'static str> {
+    source_rank(path, video_stem).map(|(_, kind)| kind)
+}
+
 fn subtitle_job_id(video: &FileEntry, acquisition_key: &str) -> String {
     sha256_bytes(format!("subtitle-v2\0{}\0{acquisition_key}", video.path).as_bytes())
 }
