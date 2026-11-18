@@ -181,3 +181,110 @@ fn storage_metadata_of_bracketed_files_is_not_degenerate() {
         );
     }
 }
+
+/// A bracketed file whose `MLST` is not merely factless but **rejected with
+/// `550`**, pinned 2026-11-18 against the production NAS. This is the worse of
+/// the two bracket behaviours and the one that produced 58 false `NO_VIDEO`
+/// verdicts during the unmanaged-`.ai` collection run: the rejected reply also
+/// leaves the control connection out of step, so the `SIZE` and `MLSD` issued
+/// afterwards in that same session fail or come back empty, and the old
+/// fallback — `MLST` first, then `SIZE` plus parent listing — had nothing left
+/// to stand on and reported a real 1.9 GB video as missing.
+///
+/// Sizes here are re-downloaded occasionally: a size mismatch means "re-probe
+/// the NAS and refresh the pin", not "the defect is back". The defect itself is
+/// pinned by the test below it, which does not depend on the exact byte count.
+const REJECTED_MLST_SAMPLES: &[(&str, u64)] = &[(
+    "/X-Movie/2000s/Poseidon.2006.1080p.BluRay.5.1.YTS.MX/Poseidon.2006.1080p.BluRay.x264.AAC5.1-[YTS.MX].mp4",
+    1_944_996_054,
+)];
+
+/// What the server does to a session that asks it for `MLST` on such a path:
+/// the command is rejected, and the legs the old fallback then relied on are
+/// already damaged in that session. Printed rather than asserted, because it is
+/// server behaviour; the contract we care about is the next test.
+#[test]
+#[ignore = "needs the real NAS"]
+fn asking_mlst_for_a_rejected_bracketed_file_leaves_the_session_degraded() {
+    for (path, _) in REJECTED_MLST_SAMPLES {
+        let mut ftp = connect();
+        let mlst = ftp.mlst(Some(path));
+        let size_after = ftp.size(path);
+        let parent = path.rsplit_once('/').expect("path").0;
+        let listing_after = ftp
+            .cwd(parent)
+            .and_then(|()| ftp.mlsd(None))
+            .map(|lines| lines.len());
+        let _ = ftp.quit();
+        println!(
+            "mlst {path} -> {:?}; SIZE in the same session afterwards -> {:?}; MLSD afterwards -> {:?}",
+            mlst.as_ref().map(|line| line.len()),
+            size_after,
+            listing_after
+        );
+        assert!(
+            mlst.is_err(),
+            "{path}: expected this sample to have MLST rejected; re-probe the NAS before updating the pin"
+        );
+    }
+}
+
+/// The fix: `Storage::metadata` must not ask `MLST` about a bracketed path at
+/// all, so the session stays healthy and `SIZE` plus the parent listing answer
+/// the question exactly — a bracketed video reports its real size and a real
+/// modification time, and `exists()` agrees.
+#[test]
+#[ignore = "needs the real NAS"]
+fn storage_metadata_of_files_whose_mlst_is_rejected_still_finds_them() {
+    for (path, size) in REJECTED_MLST_SAMPLES {
+        let relative = path.trim_start_matches('/');
+        let entry = storage("/")
+            .metadata(relative)
+            .expect("metadata")
+            .unwrap_or_else(|| {
+                panic!("{path}: metadata claimed a real video is missing (false NO_VIDEO)")
+            });
+        println!(
+            "metadata {path} -> size {} is_dir={} modified {:?}",
+            entry.size, entry.is_dir, entry.modified
+        );
+        assert!(
+            !entry.is_dir,
+            "{path}: a video file must not be reported as a directory"
+        );
+        assert_eq!(
+            entry.size, *size,
+            "{path}: size must come from SIZE or the parent listing, not the defaults"
+        );
+        let modified = entry
+            .modified
+            .unwrap_or_else(|| panic!("{path}: no modification time reported"));
+        assert_ne!(
+            modified,
+            std::time::UNIX_EPOCH,
+            "{path}: modification time degraded to the UNIX epoch"
+        );
+        assert!(
+            storage("/").exists(relative).expect("exists"),
+            "{path}: exists() disagrees with metadata()"
+        );
+    }
+}
+
+/// The same path must stay an honest "missing" when the file really is not
+/// there — skipping `MLST` may not turn absence into presence.
+#[test]
+#[ignore = "needs the real NAS"]
+fn storage_metadata_of_an_absent_bracketed_file_is_none() {
+    for (path, _) in REJECTED_MLST_SAMPLES {
+        let missing = format!("{path}.definitely-not-there");
+        let entry = storage("/")
+            .metadata(missing.trim_start_matches('/'))
+            .expect("metadata");
+        println!("metadata {missing} -> {entry:?}");
+        assert!(
+            entry.is_none(),
+            "{missing}: a missing path must report None"
+        );
+    }
+}
