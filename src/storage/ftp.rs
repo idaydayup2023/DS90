@@ -379,6 +379,62 @@ impl FtpStorage {
         Ok(case_insensitive_match)
     }
 
+    /// The `MLST`-independent way to answer "what is this path?": `SIZE` for the
+    /// exact byte count, plus the parent-directory listing for the timestamp.
+    ///
+    /// Two callers, both about `MLST` being unusable on this server:
+    ///
+    /// * `MLST` was rejected, or answered `Ok` while carrying no facts at all —
+    ///   see [`mlst_reply_has_facts`];
+    /// * the path contains `[` or `]`, where `MLST` is not even attempted, see
+    ///   [`should_query_mlst`].
+    ///
+    /// `mlst_error` carries the rejected reply, if there was one, purely so that
+    /// a `550` there can be recognised as an ordinary missing path when both
+    /// fallback legs also say "not there".
+    fn metadata_from_size_and_listing(
+        &self,
+        ftp: &mut FtpStream,
+        normalized: &str,
+        remote: &str,
+        mlst_error: Option<FtpError>,
+    ) -> Result<Option<FileEntry>> {
+        // Synology may reject MLST for valid file names containing square
+        // brackets. SIZE still addresses those files exactly; retain a listing
+        // timestamp when available, but do not let a listing-name quirk turn a
+        // proven file into a false negative.
+        if let Ok(size) = ftp.size(remote) {
+            let modified = self
+                .metadata_from_listing(ftp, normalized)
+                .ok()
+                .flatten()
+                .and_then(|entry| entry.modified);
+            return Ok(Some(FileEntry {
+                path: normalized.to_owned(),
+                size: size as u64,
+                is_dir: false,
+                modified,
+            }));
+        }
+        match self.metadata_from_listing(ftp, normalized) {
+            Ok(value) => Ok(value),
+            Err(list_error) => match mlst_error {
+                Some(error) if Self::is_not_found(&error) => Ok(None),
+                Some(error) => Err(error).with_context(|| {
+                    format!(
+                        "failed to inspect FTP path {remote}; directory-list fallback also failed: {list_error:#}"
+                    )
+                }),
+                // The server refused to report any facts and the parent listing
+                // also says the entry is not there: that is an ordinary missing
+                // path, not a file.
+                None if Self::is_not_found_wrapped(&list_error) => Ok(None),
+                None => Err(list_error)
+                    .with_context(|| format!("failed to inspect FTP path {remote}")),
+            },
+        }
+    }
+
     fn is_not_found(error: &FtpError) -> bool {
         matches!(error, FtpError::UnexpectedResponse(response) if response.status.code() == 550)
     }
@@ -421,6 +477,34 @@ impl FtpStorage {
 /// tests below pin the routing rule itself.
 fn needs_directory_listing(remote: &str) -> bool {
     remote.contains('[') || remote.contains(']')
+}
+
+/// Whether `metadata()` may issue `MLST` for this relative path at all.
+///
+/// Bracketed paths must **not** be sent to `MLST` — not merely "have their reply
+/// distrusted". Measured on the production NAS (2026-11-18, one file, one
+/// session, commands in this order):
+///
+/// ```text
+/// SIZE /X-Movie/2000s/Poseidon.2006…/Poseidon…AAC5.1-[YTS.MX].mp4   -> Ok(1944996054)
+/// MLST /X-Movie/2000s/Poseidon.2006…/Poseidon…AAC5.1-[YTS.MX].mp4   -> Err(550 "…: No such file or directory")
+/// SIZE (same path, same session, after the failed MLST)              -> Err
+/// MLSD (parent directory of the same session, after the failed MLST) -> Ok(<empty>)
+/// ```
+///
+/// So the rejected reply leaves the control connection out of step: every later
+/// command in that session fails or comes back empty. Asking `MLST` first and
+/// then falling back was therefore not enough — both fallback legs were already
+/// dead, and `metadata()` reported a real 1.9 GB video as `None`, which the
+/// new-artifact gate surfaced as 58 false `NO_VIDEO` verdicts (all of them
+/// bracketed video names). Skipping `MLST` for these paths keeps the session
+/// clean, and `SIZE` plus the parent listing answer the question exactly.
+///
+/// Regression coverage: `tests/ftp_bracket_realrun.rs` (`#[ignore]`d, live NAS)
+/// pins `metadata()` on a bracketed file against the raw `SIZE`, and the unit
+/// tests below pin this routing rule.
+fn should_query_mlst(relative: &str) -> bool {
+    !needs_directory_listing(relative)
 }
 
 /// Whether an `MLST` reply actually carries facts.
@@ -492,69 +576,39 @@ impl Storage for FtpStorage {
         let normalized = validate_relative_path(relative)?;
         let remote = self.remote_path(&normalized)?;
         let mut ftp = self.connect()?;
-        let result = match ftp.mlst(Some(&remote)) {
-            Ok(line) if mlst_reply_has_facts(&line) => {
-                let file = RemoteFile::try_from(line)
-                    .with_context(|| format!("failed to parse FTP metadata for {remote}"))?;
-                if file.is_symlink() {
-                    bail!("FTP symbolic links are not supported: {remote}");
-                }
-                Ok(Some(FileEntry {
-                    path: normalized,
-                    size: file.size() as u64,
-                    is_dir: file.is_directory(),
-                    modified: Some(file.modified()),
-                }))
-            }
-            // Either MLST was rejected, or it answered successfully while
-            // carrying no facts at all. The second case is what this server
-            // does for every path containing `[` or `]`, and parsing that
-            // empty answer would report a real file as `size = 0` with
-            // `modified = UNIX_EPOCH`, which silently turns `video_identity`
-            // into a value that no longer describes the file. Both cases take
-            // the same fallback: `SIZE` plus the parent-directory listing.
-            mlst => {
-                // `Ok(_)` here means "answered, but carried no facts"; both
-                // cases reach this arm, and only the rejected one has an error
-                // to keep for the missing-path decision below.
-                let mlst_error = mlst.err();
-                // Synology may reject MLST for valid file names containing
-                // square brackets. SIZE still addresses those files exactly;
-                // retain a listing timestamp when available, but do not let a
-                // listing-name quirk turn a proven file into a false negative.
-                if let Ok(size) = ftp.size(&remote) {
-                    let modified = self
-                        .metadata_from_listing(&mut ftp, &normalized)
-                        .ok()
-                        .flatten()
-                        .and_then(|entry| entry.modified);
+        let result = if should_query_mlst(&normalized) {
+            match ftp.mlst(Some(&remote)) {
+                Ok(line) if mlst_reply_has_facts(&line) => {
+                    let file = RemoteFile::try_from(line)
+                        .with_context(|| format!("failed to parse FTP metadata for {remote}"))?;
+                    if file.is_symlink() {
+                        bail!("FTP symbolic links are not supported: {remote}");
+                    }
                     Ok(Some(FileEntry {
                         path: normalized,
-                        size: size as u64,
-                        is_dir: false,
-                        modified,
+                        size: file.size() as u64,
+                        is_dir: file.is_directory(),
+                        modified: Some(file.modified()),
                     }))
-                } else {
-                    match self.metadata_from_listing(&mut ftp, &normalized) {
-                        Ok(value) => Ok(value),
-                        Err(list_error) => match mlst_error {
-                            Some(error) if Self::is_not_found(&error) => Ok(None),
-                            Some(error) => Err(error).with_context(|| {
-                                format!(
-                                    "failed to inspect FTP path {remote}; directory-list fallback also failed: {list_error:#}"
-                                )
-                            }),
-                            // The server refused to report any facts and the
-                            // parent listing also says the entry is not there:
-                            // that is an ordinary missing path, not a file.
-                            None if Self::is_not_found_wrapped(&list_error) => Ok(None),
-                            None => Err(list_error).with_context(|| {
-                                format!("failed to inspect FTP path {remote}")
-                            }),
-                        },
-                    }
+                }
+                // Either `MLST` was rejected, or it answered successfully while
+                // carrying no facts at all (see [`mlst_reply_has_facts`]). Both
+                // cases take the same fallback: `SIZE` plus the parent-directory
+                // listing. Bracketed paths never reach this arm — they skip
+                // `MLST` entirely, see [`should_query_mlst`].
+                mlst => {
+                    // `Ok(_)` here means "answered, but carried no facts"; both
+                    // cases reach this arm, and only the rejected one has an error
+                    // to keep for the missing-path decision below.
+                    self.metadata_from_size_and_listing(&mut ftp, &normalized, &remote, mlst.err())
                 }
             }
+        } else {
+            // Bracketed path: `MLST` is never attempted. Its rejected reply
+            // leaves the session out of step, which used to take both fallback
+            // legs down with it and report a real file as missing — see
+            // `should_query_mlst`.
+            self.metadata_from_size_and_listing(&mut ftp, &normalized, &remote, None)
         };
         let _ = ftp.quit();
         result
@@ -733,7 +787,33 @@ impl Storage for FtpStorage {
 
 #[cfg(test)]
 mod tests {
-    use super::{mlst_reply_has_facts, needs_directory_listing};
+    use super::{mlst_reply_has_facts, needs_directory_listing, should_query_mlst};
+
+    /// The false-`NO_VIDEO` defect of 2026-11-18: a bracketed path must never be
+    /// offered to `MLST` in the first place, because the rejected `550` reply
+    /// leaves the session out of step and the `SIZE` plus parent-listing legs
+    /// then fail as well — turning a real 1.9 GB video into `metadata() = None`.
+    /// Bracketed names are common in this library (`…-[YTS.MX].mp4`): 58 of them
+    /// were wrongly declared missing before this rule existed.
+    #[test]
+    fn bracketed_paths_never_reach_mlst() {
+        assert!(!should_query_mlst(
+            "X-Movie/2000s/Poseidon.2006.1080p.BluRay.5.1.YTS.MX/Poseidon.2006.1080p.BluRay.x264.AAC5.1-[YTS.MX].mp4"
+        ));
+        assert!(!should_query_mlst("TV/[A.B.C]/Show/S01/Show.S01E01.mkv"));
+        assert!(!should_query_mlst("TV/Show/S01/partial]name.mkv"));
+    }
+
+    /// Plain paths keep the fast single-round-trip `MLST` path; this change must
+    /// not cost every other file in the library an extra command.
+    #[test]
+    fn plain_paths_still_ask_mlst_first() {
+        assert!(should_query_mlst(
+            "X-Movie/2000s/Show.2024.1080p.WEBRip.mp4"
+        ));
+        assert!(should_query_mlst("TV/Show/S01/Show S01E01.mkv"));
+        assert!(should_query_mlst("MOVIE/2026/Show.2026 (2160p)/Show.mkv"));
+    }
 
     #[test]
     fn bracketed_paths_are_listed_from_inside_the_directory() {
