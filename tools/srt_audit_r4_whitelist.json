@@ -1,0 +1,12 @@
+{
+ "_doc": "R4 残留英文白名单（站长 2026-11-21 令：可配置＋按片登记）。global=全站专名；works=按片词条（键为片名子串，命中文件名即剥离再计词）。按令范围：登记歌曲名/歌手名（♪ 行保留原文必撞词）；对白专名残留属 warn 逐条结论面，不入白名单、留痕不消。",
+ "global": ["CERN", "Velocity", "Polaris", "The Home"],
+ "works": {
+  "MobLand.S02E10": [
+   "Starburster", "Fontaines D.C.",
+   "The Blower's Daughter", "Damien Rice",
+   "God's Gonna Cut You Down", "Johnny Cash",
+   "Grian Chatten", "Finn Chatten"
+  ]
+ }
+}
