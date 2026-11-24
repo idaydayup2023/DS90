@@ -30,6 +30,13 @@ CUES = [
      '\u266a "God\u2019s Gonna Cut You Down" by Johnny Cash \u266a', 'R4', 'warn', 'music_line归warn'),
     ('\u8fd9\u91cc Alpha Beta Gamma Delta Epsilon \u6dfb\u4e86\u5927\u6bb5\u82f1\u6587', 'pure zh line', 'R4', 'error', '非music大段残留-仍error'),
     ('\u4e13\u5458\u53d1\u73b0 Starburster Fontaines \u540d\u5355', 'x',      'R4', None,  '按片白名单-不报'),
+    # —— 型6 头衔缩写语境豁免（站长 2026-11-23 单·WAR 2026 S01E04 cue205 案）——
+    ('Nicholas \u4e0d\u6562\u76f4\u89c6 St. John\uff0c\u56e0\u4e3a Singer \u90a3\u6863\u5b50\u4e8b\u3002', "Nicholas can't look St. John in the face\\nbecause of the Singer situation.", 'R4', 'warn', 'E04\u5b9e\u6848-St.\u5934\u8854+\u4e13\u540d-\u964dwarn\u4e0derror'),
+    ('\u7267\u5e08\u8bf4 St. John \u548c Nicholas Singer \u90fd\u5728\u573a', 'x', 'R4', 'warn', 'St.\u5265\u540e3\u8bcd-\u4e0d\u5347error'),
+    ('\u8b66\u957f\u53bb\u627e St John \u4e0e Nicholas Singer', 'x', 'R4', 'warn', '\u65e0\u70b9St\u5934\u8854\u540c\u6837\u8c41\u514d'),
+    ('\u4ed6\u628a St \u548c John \u4e0e Nicholas Singer \u90fd\u5199\u4e86', 'x', 'R4', 'error', '\u8d1f\u4f8b-\u5149\u6746St\u4ecd\u8ba1-\u4ecderror'),
+    ('John Nicholas Singer \u843d\u6b3e St.', 'x', 'R4', 'error', '\u8d1f\u4f8b-\u884c\u5c3eSt.\u65e0\u540e\u7eed\u4e13\u540d-\u4ecderror'),
+    ('\u6587\u4ef6\u540d\u53eb St mary \u4e0e John Nicholas Singer', 'x', 'R4', 'error', '\u8d1f\u4f8b-St\u540e\u5c0f\u5199-\u4e0d\u8c41\u514d\u4ecderror'),
 ]
 
 
