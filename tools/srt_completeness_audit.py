@@ -23,25 +23,33 @@
   R2 断尾      : 中文以「，、；：」或省略号结尾，而英文以 . ! ? **整句**收尾
                   （英文以「...」收尾 ⇒ 不算整句收尾，不判尾）
   R3 串行      : 中文里出现了下一条英文的实义词（审校把下一句的译文挪上来）—— warn
-  R4 残留英文  : 中文行里出现拉丁单词；>=2 词 warn，**>=4 词（大段）error**；
-                  专名保留英文在白名单内不算残留。
-                  白名单（站长 2026-11-21 令）：由硬编码改**可配置 + 按片登记**——
-                  `--r4-whitelist <json>`，格式 {"global": [...], "works": {"<片名>": [...]}}；
-                  内置默认仍含旧硬编码词（不带参数零回归）。
-                  **♪ 音乐/歌曲行归 warn**（行内歌曲名/歌手名按令保留原文，
-                  必撞「单行拉丁≥4」，不判 error；detail 标 music_line）。
-                  **头衔缩写语境豁免**（站长 2026-11-23 单·WAR 2026 S01E04 cue205 案）：
-                  `St.`／`St` 其后紧跟拉丁专名（`St. <Latin>` 形制）时按专名整体剥离计数，
-                  不再拆成光杆 `St`＋`John` 两词；**光杆 `St` 不成豁免**（其后无专名照旧计数，防误放）。
+  R4 残留英文  : 中文行里出现拉丁单词；>=2 词 warn，**去重后 >=4 词（大段）error**
+                   （2026-11-23 型5：error 档改去重计数，绰号重复不升档，`Kev, Dog. Dog, … Kev` 判 warn；
+                   warn 档维持原计数——只增豁免不收紧）；
+                   专名保留英文在白名单内不算残留。
+                   白名单（站长 2026-11-21 令）：由硬编码改**可配置 + 按片登记**——
+                   `--r4-whitelist <json>`，格式 {"global": [...], "works": {"<片名>": [...]}}；
+                   内置默认仍含旧硬编码词（不带参数零回归）。
+                   **♪ 音乐/歌曲行归 warn**（行内歌曲名/歌手名按令保留原文，
+                   必撞「单行拉丁≥4」，不判 error；detail 标 music_line）。
+                   **头衔缩写语境豁免**（站长 2026-11-23 单·WAR 2026 S01E04 cue205 案）：
+                   `St.`／`St` 其后紧跟拉丁专名（`St. <Latin>` 形制）时按专名整体剥离计数，
+                   不再拆成光杆 `St`＋`John` 两词；**光杆 `St` 不成豁免**（其后无专名照旧计数，防误放）。
   R5 孤儿符号  : 中文行出现落单的闭合符—— error
-  R6 无中文    : 该 cue 完全没有中文行—— error；但两类**豁免归 warn**
-                  （站长 2026-11-21 令，对齐 11-18 Rolling Loud 34 枚纯艺名行先例 /
-                  MobLand S02E10 案）：
-                    · 呼号/艺名行：剥标签与对话破折号后仅 1~2 个拉丁词（如 `Harry.` /
-                      `<i>Kat.</i>` / `Kev?` / `- Harry. - Conrad.`）——硬造中文即加译；
-                    · 片尾 credit / 音乐署名行：en 行含 ♪（如 `♪ "Starburster" by … ♪`）。
-                  豁免只降 level、finding 留痕（detail 注明 exempt 理由）；
-                  **零拉丁词的纯符号/数字行不豁免**（可能是真漏翻，仍 error）。
+  R6 无中文    : 该 cue 完全没有中文行—— error；但以下族**豁免归 warn**
+                   （站长 2026-11-21 令，对齐 11-18 Rolling Loud 34 枚纯艺名行先例 /
+                   MobLand S02E10 案；2026-11-23 五型扩展单＝站长令「只增豁免不收紧」）：
+                     · 呼号/艺名行：剥标签与对话破折号后仅 1~2 个**空格块**（如 `Harry.` /
+                       `<i>Kat.</i>` / `Kev?` / `- Harry. - Conrad.` / `- Kevin-ator. - Paul.`
+                       ——2026-11-23 型4：计数改按空格分块，连字符戏称 Kevin-ator＝1 块）——硬造中文即加译；
+                     · 片尾 credit / 音乐署名行：en 行含 ♪（如 `♪ "Starburster" by … ♪`）；
+                     · 纯字母行（型1，WAR 2026 拼字比赛）：内容块全为单字母可夹数字
+                       （`<i>- N - N!</i>` / `<i>N</i>` / `M-A-N!`）——旧 LATIN_WORD≥2 字故漏判；
+                     · 口播号码行（型2）：内容块全为数字或数词（`Six-six-six-two-seven-one.` / `666271`）；
+                     · 连续点名列举行（型3）：≥3 空格块全为专名形首字母大写、无普通小写词
+                       （`Patrick Doyle, Bobby Cranes,`）。
+                   豁免只降 level、finding 留痕（detail 注明 exempt 理由）；
+                   **零内容块的纯符号行不豁免**（可能是真漏翻，仍 error）。
 
   **error 只保留机械级**：R2 真断尾 / R4 大段残留英文（非 ♪ 行）/ R5 孤儿符号 / R6 无中文行（非豁免两类）。
   新关卡口径：入库前 error 级 = 0（机械级）＋ R1 warn 逐条有结论（修 or 豁免并写明理由）。
@@ -125,18 +133,50 @@ def r4_probe_re(extra_words=()):
     return re.compile('|'.join(pats), re.I)
 
 
+NUM_WORD = re.compile(
+    r'^(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|'
+    r'fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|'
+    r'sixty|seventy|eighty|ninety|hundred|thousand|million|billion|point|and|double|'
+    r'triple|dash|oh)$', re.I)                                   # 口播号码词表（2026-11-23）
+PROPER_BLOCK = re.compile(r"^[A-Z][A-Za-z'’\-]*$")               # 专名块（点名行用）
+
+
+def _probe_pieces(probe):
+    """内容块切分：非字母数字为界（保留连字符内块与数字块），空串剔除。"""
+    return [p for p in re.split(r"[^0-9A-Za-z']+", probe) if p]
+
+
 def r6_exempt_reason(en_text):
-    """R6 豁免判定（站长 2026-11-21 令）：返回豁免理由串，不豁免返 None。
-    判据宁严勿宽——只认两类：♪ 署名行 / 剥尽标签与对话记号后 1~2 个拉丁词的呼号行。"""
+    """R6 豁免判定（站长 2026-11-21 令＋2026-11-23 五型扩展单）：返回豁免理由串，不豁免返 None。
+    判据宁严勿宽——只认：♪ 署名行 / 剥尽标签与对话记号后 ≤2 空格块呼号行（连字符戏称按空格分块，
+    型4）/ 纯单字母拼写行（型1）/ 口播号码行·数字或数词（型2）/ 连续专名点名列举行（型3）。
+    只增豁免不收紧（在途批行为兼容，站长 2026-11-23 约束）。"""
     if '\u266a' in en_text:                                    # ♪ 片尾 credit / 音乐署名行
         return 'credit/music line (exempt per 2026-11-21)'
     probe = re.sub(r'<[^>]*>|\{\\[^}]*\}', ' ', en_text)       # 剥 HTML/ASS 标签
     probe = re.sub(r'^\s*[-—–]\s*', ' ', probe)                # 对话破折号（行首）
+    pieces = _probe_pieces(probe)
+    # 型2 口播号码行：内容块全为数字或数词（Six-six-…／666271）
+    if pieces and all(p.isdigit() or NUM_WORD.match(p) for p in pieces):
+        return 'spoken number line (exempt per 2026-11-23)'
+    # 型1 纯字母行：内容块全为单字母（可夹数字块）——LATIN_WORD≥2 字故旧版漏判
+    letters = [p for p in pieces if re.match(r'^[A-Za-z]$', p)]
+    if letters and len(letters) + sum(1 for p in pieces if p.isdigit()) == len(pieces):
+        return 'spelling/single-letter line (exempt per 2026-11-23)'
     words = LATIN_WORD.findall(probe)
+    blocks = [b for b in probe.split() if LATIN_WORD.search(b) or re.search(r'[A-Za-z0-9]', b)]
     if not words:
-        return None                                             # 零拉丁词＝纯符号/数字，可能是真漏翻
-    if len(words) <= 2 and len(re.sub(r'\s+', '', probe)) <= 40:
-        return 'name/call line (exempt per 2026-11-21)'         # 呼号/艺名行
+        if not pieces:
+            return None                                         # 零内容块＝纯符号，可能是真漏翻
+    # 型3 连续点名列举行：≥3 空格块全为专名形（首字母大写），无普通小写词
+    if len(blocks) >= 3 and len(blocks) <= 12 \
+            and all(PROPER_BLOCK.match(b.strip('.,;:!?')) for b in blocks) \
+            and len(re.sub(r'\s+', '', probe)) <= 120:
+        return 'name list line (exempt per 2026-11-23)'
+    # 型4 呼号/艺名行（2026-11-21 原版≤2拉丁词 → 2026-11-23 改按空格分块：Kevin-ator＝1 块）
+    if len(blocks) <= 2 and len(re.sub(r'\s+', '', probe)) <= 40 and (words or pieces):
+        if not (blocks and not words):                          # 纯数字块已在型2处理
+            return 'name/call line (exempt per 2026-11-21)'
     return None
 
 
@@ -250,15 +290,16 @@ def audit(zh_path, en_path, r1_mode=None, r4_extra_words=None):
             probe = r4_re.sub(' ', probe)                      # 白名单剥离（global + 按片，2026-11-21 可配置化）
             probe = R4_TITLE_ABBR.sub(' ', probe)                # 型6（2026-11-23 E04 案）：St. 头衔缩写＋专名整体剥离
             words = LATIN_WORD.findall(probe)
+            uniq = {w.lower() for w in words}                   # 型5（2026-11-23）：绰号重复不计入档，去重后计数
             music = '\u266a' in ln                             # ♪ 音乐/歌曲行：歌名/歌手名按令保留原文
-            if len(words) >= 4:
+            if len(uniq) >= 4:
                 findings.append({'cue': k, 'rule': 'R4',
                                  'level': 'warn' if music else 'error',
                                  'detail': '中文行大段残留英文%s：%s' % (
                                      '（music_line）' if music else '', ' '.join(words)),
                                  'en': et[:200], 'zh': ln[:200]})
                 break
-            if len(words) >= 2:
+            if len(words) >= 2:                                 # warn 行维持原计数（站长单只改 error 档）
                 findings.append({'cue': k, 'rule': 'R4', 'level': 'warn',
                                  'detail': '中文行残留英文：%s' % ' '.join(words),
                                  'en': et[:200], 'zh': ln[:200]})
