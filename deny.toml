@@ -1,0 +1,11 @@
+# cargo-audit 忽略表（闸门四件·第4件 chrono A 案——用户 11-25 12:23 飞书拍板，总务决策回投① seq 2026）
+#
+# 复审条件（满足任一即移除对应 ignore 行并撤本注）：
+#   1) chrono 出现维护版（RUSTSEC-2026-0543 unmaintained 通告解除）；
+#   2) 全仓从 chrono 迁移至维护中的时间库。
+# 复审责任：字幕工具线随季度巡检核 chrono 发布页；条件达成报站长另单移除。
+# 除本列 id 外，deny warnings 全量生效（其余漏洞/警告照红）。
+[advisories]
+ignore = [
+  "RUSTSEC-2026-0543", # chrono 0.4.45 unmaintained：无修复版（0.4.45 即最新），升级无解，A 案忽略＋复审注
+]
