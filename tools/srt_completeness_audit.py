@@ -32,6 +32,9 @@
                    内置默认仍含旧硬编码词（不带参数零回归）。
                    **♪ 音乐/歌曲行归 warn**（行内歌曲名/歌手名按令保留原文，
                    必撞「单行拉丁≥4」，不判 error；detail 标 music_line）。
+                   **头衔缩写语境豁免**（站长 2026-11-23 单·WAR 2026 S01E04 cue205 案）：
+                   `St.`／`St` 其后紧跟拉丁专名（`St. <Latin>` 形制）时按专名整体剥离计数，
+                   不再拆成光杆 `St`＋`John` 两词；**光杆 `St` 不成豁免**（其后无专名照旧计数，防误放）。
   R5 孤儿符号  : 中文行出现落单的闭合符—— error
   R6 无中文    : 该 cue 完全没有中文行—— error；但以下族**豁免归 warn**
                    （站长 2026-11-21 令，对齐 11-18 Rolling Loud 34 枚纯艺名行先例 /
@@ -95,6 +98,12 @@ R4_WHITELIST_WORDS = {
     'works': {},
 }
 R4_WHITELIST = re.compile(r'CERN|Velocity|Polaris|The\s+Home', re.I)   # 兼容旧引用名
+
+                  # R4 头衔缩写语境豁免（站长 2026-11-23 闸门单·WAR 2026 S01E04 cue205 案）：
+#   `St.`／`St` 作头衔且其后紧跟拉丁专名（`St. John`／`St John`／`St. Mary`）→ 随专名整体剥离，
+#   避免光杆 `St` 被单独计入残留英文（真缺陷＝整段没翻的中文行不受影响，其后无大写专名照旧计数）。
+#   形制裁 2026-11-23 R6/R4 五型扩展：只增豁免不收紧。
+R4_TITLE_ABBR = re.compile(r"(?<![0-9A-Za-z])St\.?[ \t]+(?=[A-Z][A-Za-z'’\-])")
 
 
 def load_r4_whitelist(path):
@@ -279,6 +288,7 @@ def audit(zh_path, en_path, r1_mode=None, r4_extra_words=None):
         for ln in z['cn']:
             probe = re.sub(r'<[^>]*>|\{\\[^}]*\}', ' ', ln)   # 去掉 HTML/ASS 标签（样式属性不是残留英文）
             probe = r4_re.sub(' ', probe)                      # 白名单剥离（global + 按片，2026-11-21 可配置化）
+            probe = R4_TITLE_ABBR.sub(' ', probe)                # 型6（2026-11-23 E04 案）：St. 头衔缩写＋专名整体剥离
             words = LATIN_WORD.findall(probe)
             uniq = {w.lower() for w in words}                   # 型5（2026-11-23）：绰号重复不计入档，去重后计数
             music = '\u266a' in ln                             # ♪ 音乐/歌曲行：歌名/歌手名按令保留原文
