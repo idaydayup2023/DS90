@@ -1,0 +1,30 @@
+# cargo-audit 忽略表 —— 闸门四件·第 4 件 chrono A 案的**生效面补正**
+#
+# 令据与出处：用户 2026-11-25 12:23 飞书拍板（总务决策回投① seq 2026 四件之④），
+#   经 PR #44 落仓（commit bff12d9）。该次把 ignore 表写在了 `deny.toml`——
+#   `deny.toml` 是 **cargo-deny** 的配置文件，而 CI 的 audit 腿跑的是
+#   `cargo audit --deny warnings`（cargo-audit 0.22.2，见 .github/workflows/ci.yml:32-33），
+#   两者互不读取。cargo-audit 0.22.2 的配置加载路径只有两条（源码实证）：
+#     src/commands.rs:23   pub const CONFIG_FILE: &str = "audit.toml";
+#     src/commands.rs:54-75 config_path() → 先 `./.cargo/audit.toml`，
+#                                    再 `$CARGO_HOME/audit.toml`（CI 里＝/home/runner/.cargo，非仓内）
+#   即：仓根 `./audit.toml` 与 `deny.toml` 均不被读取 ⇒ 已批准的 A 案 ignore 自始未生效。
+#   后果（基线红，非任何 PR 之因）：RUSTSEC-2026-0543（chrono 0.4.45 unmaintained，
+#   通告日 2026-09-14）自进入 advisory-db 起持续把 audit 腿压红；同点红读数见
+#   run 44042998707（version3 tip 4b64dbbf，11-17）与 run 45567673424（version3 tip 902008d，
+#   即 PR #44 自身合并件），三步均为 test(ubuntu)/test(macos) success、audit 于
+#   "Run cargo audit --deny warnings" 一步 failure。
+#
+# 范围（不扩面）：与已批准 A 案逐字同集——只 1 枚 id；其余 advisories 与 yanked 检查、
+#   `--deny warnings` 全量生效，`.github/workflows/ci.yml` 一字未动。
+#   本文件不新增任何放宽项，仅把既有批复落到 cargo-audit 真读的文件上。
+#
+# 复审条件（满足任一即移除对应 ignore 行并撤本注）：
+#   1) chrono 出现维护版（RUSTSEC-2026-0543 unmaintained 通告解除）；
+#   2) 全仓从 chrono 迁移至维护中的时间库。
+# 复审责任：字幕工具线随季度巡检核 chrono 发布页；条件达成报站长另单移除。
+# 除本列 id 外，deny warnings 全量生效（其余漏洞/警告照红）。
+[advisories]
+ignore = [
+  "RUSTSEC-2026-0543", # chrono 0.4.45 unmaintained：无修复版（0.4.45 即最新），升级无解，A 案忽略＋复审注
+]
