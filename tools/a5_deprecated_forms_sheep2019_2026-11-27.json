@@ -1,0 +1,167 @@
+{
+  "schema": "ds90.a5_deprecated_forms/v1",
+  "case": "sheep2019_2019_predefect8",
+  "title": "《误杀》(2019) BONE · .ai.srt 预存八枚的 11 个专名误形 —— A5 名册废形表补表",
+  "as_of": "2026-11-27",
+  "authority": {
+    "order": "站长 2026-11-27 13:27 亲令（补 11 误形入 A5 名册废形表＋加阳性对照，闸门归系统运维／9bed）",
+    "ledger": "logs/返修账_预存瑕疵_2026-11-27.md §一「闸面盲区」",
+    "scan_evidence": "logs/返修清单_预存八枚_2026-11-27/用词扫描.json",
+    "why": "该 11 形此前全部未入 A5 词表，闸面 A5 报「专名废形 0」＝弱零值（无阳性对照），闸对它们盲。"
+  },
+  "subject_object": {
+    "file": "/X-Movie/2010s/Sheep.Without.A.Shepherd.2019.720p.Chinese.BluRay.H264.BONE/Sheep Without A Shepherd 2019 720p Chinese BluRay H264 BONE.ai.srt",
+    "base_sha256": "bf29b5581cfbc818c9daee253663c990c330bf876852273c27829bb9123f17d7",
+    "base_bytes": 124308,
+    "base_cues": 1488,
+    "cues_before_fix_note": "cues_in_base 一律为该形在底件 bf29b558 中的实际命中枚号（全片扫描非抽样）"
+  },
+  "final_forms": {
+    "佛统": "Lua Pathom",
+    "桑昆": "Sangkun",
+    "维杰": "Li Weijie",
+    "素察": "Suchat",
+    "残搬": "Chanban"
+  },
+  "final_form_counts": {
+    "note": "底件全片命中 → 六枚返修后期望（作者卷 §三取形读数）",
+    "佛统": { "base": 27, "after_fix": 29 },
+    "桑昆": { "base": 9, "after_fix": 11 },
+    "维杰": { "base": 24, "after_fix": 25 },
+    "素察": { "base": 22, "after_fix": 23 },
+    "残搬": { "base": 11, "after_fix": 11 }
+  },
+  "strength_rule": {
+    "hard": "expected_present 之外命中 → RED（阻闸，报站长）",
+    "weak": "expected_present 之外命中 → WARN（不阻闸，读数随卷报站长候裁）；weak＝日常词同形（劳动/上课/素材/车轮），禁全局替换、只准 cue 级"
+  },
+  "disposition_rule": {
+    "fixed_v6": "六枚返修应已清零的枚号；终件仍命中＝RED（未落刀或回归）",
+    "true_line": "真台词同形，永久允许（cue 级白名单）",
+    "known_remaining_pending_retranslation": "站长令面 417/1020 两枚须模型重译、本轮未动；允许在载枚号命中，多一枚即 RED"
+  },
+  "forms": [
+    {
+      "form": "劳动府",
+      "family": "佛统",
+      "final_form": "佛统",
+      "strength": "hard",
+      "cues_in_base": [59],
+      "disposition": "fixed_v6",
+      "expect_zh": "那个佛统府 那个警察局长",
+      "evidence": "en=the police chief in Lua Pathom；全片 佛统27／劳动府1",
+      "note": "「佛统府」沿用现文已有「府」字的新形，候复核（该目录无官方 zho 轨＝降级基准）"
+    },
+    {
+      "form": "劳动",
+      "family": "佛统",
+      "final_form": "佛统",
+      "strength": "weak",
+      "cues_in_base": [59],
+      "disposition": "fixed_v6",
+      "expect_zh": "那个佛统府 那个警察局长",
+      "evidence": "底件唯一命中即 cue 59（「劳动府」子串），修后全片应为 0；日常词同形故列 weak，禁全局替换"
+    },
+    {
+      "form": "是她吗",
+      "family": "残搬",
+      "final_form": "残搬",
+      "strength": "hard",
+      "cues_in_base": [417],
+      "disposition": "known_remaining_pending_retranslation",
+      "evidence": "en=Going to Chanban；漏译·错位，须模型重译（站长令面未动，候 8888 窗）",
+      "note": "名册建议列「长板」全片命中 0，不可取形"
+    },
+    {
+      "form": "上棍",
+      "family": "桑昆",
+      "final_form": "桑昆",
+      "strength": "hard",
+      "cues_in_base": [718],
+      "disposition": "fixed_v6",
+      "expect_zh": "好了 桑昆",
+      "evidence": "en=That's enough, Sangkun；全片 桑昆9／上棍1"
+    },
+    {
+      "form": "上课",
+      "family": "桑昆",
+      "final_form": "桑昆",
+      "strength": "weak",
+      "cues_in_base": [491, 801],
+      "disposition": "fixed_v6",
+      "expect_zh": "桑昆也说",
+      "true_line": [491],
+      "evidence": "cue 801 en=and Sangkun says 系误形；cue 491「他没有上课的话」en=If he doesn't go to school 系真台词，永久白名单",
+      "note": "同形真台词，禁全局字符串替换，必须 cue 级行替换"
+    },
+    {
+      "form": "李薇姐",
+      "family": "维杰",
+      "final_form": "维杰",
+      "strength": "hard",
+      "cues_in_base": [858],
+      "disposition": "fixed_v6",
+      "expect_zh": "要是真查出是李维杰",
+      "evidence": "en=if it turns out to be Li Weijie；全片 维杰24（李维杰19）／李薇姐1"
+    },
+    {
+      "form": "素材和",
+      "family": "素察",
+      "final_form": "素察",
+      "strength": "hard",
+      "cues_in_base": [876],
+      "disposition": "fixed_v6",
+      "expect_zh": "找到了不属于 素察的头发",
+      "evidence": "en=We found hair that does not match Suchat's；全片 素察22／素材和1",
+      "note": "行内多余空格属形制项，超本令范围候裁"
+    },
+    {
+      "form": "素材",
+      "family": "素察",
+      "final_form": "素察",
+      "strength": "weak",
+      "cues_in_base": [876, 1203],
+      "disposition": "fixed_v6",
+      "expect_zh": "找到了不属于 素察的头发",
+      "true_line": [1203],
+      "evidence": "cue 876 系误形；cue 1203「为后来的蒙太奇做了素材」en=as material for his montage later 系真台词，永久白名单",
+      "note": "同形真台词，禁全局替换，必须 cue 级行替换"
+    },
+    {
+      "form": "车轮",
+      "family": "佛统",
+      "final_form": "佛统",
+      "strength": "weak",
+      "cues_in_base": [1020],
+      "disposition": "known_remaining_pending_retranslation",
+      "evidence": "cue 1020「那天早上 他把车轮到我那边」en=They took my bus to Lua Pathom in the morning；漏译·错位，须模型重译",
+      "note": "「车轮」为日常词同形，故 weak；判定以同枚「轮到我」为准"
+    },
+    {
+      "form": "轮到我",
+      "family": "佛统",
+      "final_form": "佛统",
+      "strength": "hard",
+      "cues_in_base": [1020],
+      "disposition": "known_remaining_pending_retranslation",
+      "evidence": "同 cue 1020 错位串（「他把车轮到我那边」），须模型重译，候 8888 窗"
+    },
+    {
+      "form": "国土",
+      "family": "佛统",
+      "final_form": "佛统",
+      "strength": "hard",
+      "cues_in_base": [1194],
+      "disposition": "fixed_v6",
+      "expect_zh": "她的确带家人去了佛统",
+      "evidence": "en=He did take his family to Lua Pathom；全片 佛统27／国土1",
+      "note": "代词「她」→「他」属语义项，超本令候裁，故 expect_zh 保留作者取形原样"
+    }
+  ],
+  "pending_not_in_scope": [
+    "cue 876 中文行内多余空格（形制项，候裁）",
+    "cue 1194 代词「她」（en 作 He，语义项，可分第二刀候裁）",
+    "行序 en 先 zh 后（底件即如此 1214/1214，重排＝动 1214 cue，候裁）",
+    "外扩疑点 cue 418/419 同簇串位、「残搬证」×2（cue 961/973）候裁"
+  ]
+}
