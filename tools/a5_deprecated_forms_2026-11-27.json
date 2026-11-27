@@ -1,0 +1,494 @@
+{
+  "schema": "a5_deprecated_forms/1",
+  "generated_at": "2026-11-27T22:33:23+08:00",
+  "film": {
+    "title": "Sheep Without A Shepherd (2019)",
+    "stem_glob": "Sheep Without A Shepherd 2019*",
+    "base_sha256": "bf29b5581cfbc818c9daee253663c990c330bf876852273c27829bb9123f17d7",
+    "n_cues": 1488
+  },
+  "provenance": {
+    "order": "站长 2026-11-27 13:27 派单（闸面盲区）＋21:1x 裁二（准新建入仓）",
+    "ledger": "logs/返修账_预存瑕疵_2026-11-27.md §一／§三",
+    "roster_path": "logs/人工对照_误杀zh腿_2026-11-26/人名总表v2_恰图查版_2026-11-26.txt",
+    "roster_sha256": "b978c322f34ade5609b722ff616ea05f52511c0cb7955f93b4e72b6f8b28ed3a",
+    "roster_n_families": 10,
+    "roster_missing_family_艾克帕拉": true,
+    "derived_by": "tools/a5_wordlist_gen_20261127.py（计数一律现读底件，禁手抄）",
+    "gate_owner": "系统运维（闸门治理 9bed：被闸的人不许改闸）"
+  },
+  "scan_rules": {
+    "zh_only": true,
+    "gate_en_semantics": "gate_en 非空＝同枚 en 腿须含其中任一 token 才计（防真台词同形误伤）；空＝全局扫",
+    "positive_control_required": true,
+    "empty_wordlist_is_red": true
+  },
+  "families": [
+    {
+      "final": "桑昆",
+      "token": "Sangkun",
+      "count_in_base": 9,
+      "deprecated": [
+        {
+          "form": "三块",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "山哥",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "桑坤",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "尚坤",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "Sangkun",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "上棍",
+          "source": "ledger_20261127",
+          "gate_en": [
+            "Sangkun"
+          ],
+          "count_in_base": 1,
+          "evidence": {
+            "cue": 718,
+            "zh": "好了 上棍",
+            "en": "That's enough, Sangkun"
+          }
+        },
+        {
+          "form": "上课",
+          "source": "ledger_20261127",
+          "gate_en": [
+            "Sangkun"
+          ],
+          "count_in_base": 2,
+          "evidence": {
+            "cue": 801,
+            "zh": "他上课也说",
+            "en": "and Sangkun says"
+          }
+        }
+      ]
+    },
+    {
+      "final": "维杰",
+      "token": "Weijie",
+      "count_in_base": 24,
+      "deprecated": [
+        {
+          "form": "李慧姐",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "伟杰",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "明慧",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "慧姐",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "威杰",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "Weijie",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "李薇姐",
+          "source": "ledger_20261127",
+          "gate_en": [
+            "Weijie"
+          ],
+          "count_in_base": 1,
+          "evidence": {
+            "cue": 858,
+            "zh": "要是真查出是李薇姐",
+            "en": "if it turns out to be Li Weijie"
+          }
+        }
+      ]
+    },
+    {
+      "final": "帕颂",
+      "token": "Prasong",
+      "count_in_base": 2,
+      "deprecated": [
+        {
+          "form": "爸送",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "Prasong",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        }
+      ]
+    },
+    {
+      "final": "恩叔",
+      "token": "Uncle En",
+      "count_in_base": 1,
+      "deprecated": [
+        {
+          "form": "韩叔",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "Uncle En",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        }
+      ]
+    },
+    {
+      "final": "佛统",
+      "token": "Lua Pathom",
+      "count_in_base": 27,
+      "deprecated": [
+        {
+          "form": "罗同",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "锣筒",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "楼桶",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "罗勇",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "Lua Pathom",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "劳动府",
+          "source": "ledger_20261127",
+          "gate_en": [
+            "Lua Pathom"
+          ],
+          "count_in_base": 1,
+          "evidence": {
+            "cue": 59,
+            "zh": "那个劳动府 那个警察局长",
+            "en": "the police chief in Lua Pathom"
+          }
+        },
+        {
+          "form": "劳动",
+          "source": "ledger_20261127",
+          "gate_en": [
+            "Lua Pathom"
+          ],
+          "count_in_base": 1,
+          "evidence": {
+            "cue": 59,
+            "zh": "那个劳动府 那个警察局长",
+            "en": "the police chief in Lua Pathom"
+          }
+        },
+        {
+          "form": "车轮",
+          "source": "ledger_20261127",
+          "gate_en": [
+            "Lua Pathom"
+          ],
+          "count_in_base": 1,
+          "evidence": {
+            "cue": 1020,
+            "zh": "那天早上 他把车轮到我那边",
+            "en": "They took my bus to Lua Pathom in the morning"
+          }
+        },
+        {
+          "form": "轮到我",
+          "source": "ledger_20261127",
+          "gate_en": [
+            "Lua Pathom"
+          ],
+          "count_in_base": 1,
+          "evidence": {
+            "cue": 1020,
+            "zh": "那天早上 他把车轮到我那边",
+            "en": "They took my bus to Lua Pathom in the morning"
+          }
+        },
+        {
+          "form": "国土",
+          "source": "ledger_20261127",
+          "gate_en": [
+            "Lua Pathom"
+          ],
+          "count_in_base": 1,
+          "evidence": {
+            "cue": 1194,
+            "zh": "她的确带家人去了国土",
+            "en": "He did take his family to Lua Pathom"
+          }
+        }
+      ]
+    },
+    {
+      "final": "残搬",
+      "token": "Chanban",
+      "count_in_base": 11,
+      "deprecated": [
+        {
+          "form": "长板",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "Chanban",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "是她吗",
+          "source": "ledger_20261127",
+          "gate_en": [
+            "Chanban"
+          ],
+          "count_in_base": 1,
+          "evidence": {
+            "cue": 417,
+            "zh": "是她吗",
+            "en": "Going to Chanban"
+          }
+        }
+      ]
+    },
+    {
+      "final": "素察",
+      "token": "Suchat",
+      "count_in_base": 22,
+      "deprecated": [
+        {
+          "form": "素茶",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "苏查",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "素查",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "Suchat",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "素材和",
+          "source": "ledger_20261127",
+          "gate_en": [
+            "Suchat"
+          ],
+          "count_in_base": 1,
+          "evidence": {
+            "cue": 876,
+            "zh": "找到了不属于 素材和头发",
+            "en": "We found hair that does not match Suchat's"
+          }
+        },
+        {
+          "form": "素材",
+          "source": "ledger_20261127",
+          "gate_en": [
+            "Suchat"
+          ],
+          "count_in_base": 2,
+          "evidence": {
+            "cue": 876,
+            "zh": "找到了不属于 素材和头发",
+            "en": "We found hair that does not match Suchat's"
+          }
+        }
+      ]
+    },
+    {
+      "final": "拉温",
+      "token": "Laoorn",
+      "count_in_base": 5,
+      "deprecated": [
+        {
+          "form": "老温",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "Laoorn",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        }
+      ]
+    },
+    {
+      "final": "恰图查",
+      "token": "Chatuchak",
+      "count_in_base": 5,
+      "deprecated": [
+        {
+          "form": "查图查",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "茶肚茶",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "茶都茶",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        },
+        {
+          "form": "Chatuchak",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        }
+      ]
+    },
+    {
+      "final": "佩拉",
+      "token": "Pela",
+      "count_in_base": 1,
+      "deprecated": [
+        {
+          "form": "Pela",
+          "source": "roster",
+          "gate_en": [],
+          "count_in_base": 0
+        }
+      ]
+    }
+  ],
+  "negative_fixtures": [
+    {
+      "form": "上课",
+      "family": "桑昆",
+      "cue": 491,
+      "zh": "他没有上课的话",
+      "en": "If he doesn't go to school",
+      "expect": "no_hit"
+    },
+    {
+      "form": "素材",
+      "family": "素察",
+      "cue": 1203,
+      "zh": "为后来的蒙太奇做了素材",
+      "en": "as material for his montage later",
+      "expect": "no_hit"
+    }
+  ],
+  "deferred_known_hits": [
+    {
+      "cue": 417,
+      "form": "是她吗",
+      "family": "残搬",
+      "why": "漏译·错位，须模型重译，候 8888 检修窗口（返修账 §三「候窗口」）"
+    },
+    {
+      "cue": 1020,
+      "form": "车轮／轮到我",
+      "family": "佛统",
+      "why": "漏译·错位，须模型重译，候 8888 检修窗口（返修账 §三「候窗口」）"
+    }
+  ],
+  "expect_counts": {
+    "劳动府": 1,
+    "劳动": 1,
+    "是她吗": 1,
+    "上棍": 1,
+    "上课": 2,
+    "李薇姐": 1,
+    "素材和": 1,
+    "素材": 2,
+    "车轮": 1,
+    "轮到我": 1,
+    "国土": 1,
+    "佛统": 27,
+    "佩拉": 1,
+    "帕颂": 2,
+    "恩叔": 1,
+    "恰图查": 5,
+    "拉温": 5,
+    "桑昆": 9,
+    "残搬": 11,
+    "素察": 22,
+    "维杰": 24
+  }
+}
